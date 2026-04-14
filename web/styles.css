@@ -1,0 +1,74 @@
+:root {
+  color-scheme: dark;
+  --bg-0: #000000;
+  --gold: #dfb16a;
+  --ink: #f4e8cf;
+  --mono:
+    "IBM Plex Mono",
+    "JetBrains Mono",
+    "Cascadia Mono",
+    "Fira Code",
+    "Liberation Mono",
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  background: var(--bg-0);
+  color: var(--ink);
+  font-family: var(--mono);
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  overflow: hidden;
+  position: fixed;
+  inset: 0;
+}
+
+#game {
+  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+  background: #000000;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html:focus,
+html:focus-visible,
+body:focus,
+body:focus-visible,
+#game:focus,
+#game:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+*:focus,
+*:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+@media (max-width: 820px) {
+  #game {
+    width: 100%;
+    height: 100%;
+  }
+}

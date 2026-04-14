@@ -1,0 +1,9 @@
+/target
+/web/mazocarta.wasm
+/web/.debug-mode.json
+/web/apple-touch-icon.png
+/web/icons/
+*.swp
+*.swo
+*~
+.DS_Store
