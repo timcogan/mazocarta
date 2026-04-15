@@ -9,6 +9,7 @@ use crate::content::event_for_level;
 use crate::content::localized_text;
 use crate::content::starter_deck;
 use crate::content::upgraded_card;
+use crate::rng::XorShift64;
 use std::collections::{BTreeMap, BTreeSet};
 
 const START_HP: i32 = DEFAULT_PLAYER_HP;
@@ -674,7 +675,7 @@ impl DungeonRun {
             return primary_profile;
         }
 
-        let mut rng = MapRng::new(
+        let mut rng = XorShift64::new(
             level_seed(self.seed, self.current_level)
                 ^ (node.id as u64 + 1).wrapping_mul(0xD2B7_4407_B1CE_6E93)
                 ^ (node.depth as u64 + 1).wrapping_mul(0x94D0_49BB_1331_11EB)
@@ -699,7 +700,7 @@ impl DungeonRun {
                 let unlocked_count = (1 + node.depth.saturating_sub(profile.safe_combat_depths))
                     .min(profile.combat_enemy_table.len())
                     .max(1);
-                let mut rng = MapRng::new(
+                let mut rng = XorShift64::new(
                     level_seed(self.seed, self.current_level)
                         ^ (node.id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15)
                         ^ (node.depth as u64 + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9)
@@ -708,7 +709,7 @@ impl DungeonRun {
                 profile.combat_enemy_table[rng.next_index(unlocked_count)]
             }
             RoomKind::Elite => {
-                let mut rng = MapRng::new(
+                let mut rng = XorShift64::new(
                     level_seed(self.seed, self.current_level)
                         ^ (node.id as u64 + 1).wrapping_mul(0x517C_C1B7_2722_0A95)
                         ^ (node.depth as u64 + 1).wrapping_mul(0x94D0_49BB_1331_11EB)
@@ -818,7 +819,7 @@ fn generate_nodes(seed: u64, level: usize) -> Vec<DungeonNode> {
     let profile = level_profile(level);
     let start_lane = MAP_COLUMNS / 2;
     let boss_depth = MAP_REGULAR_DEPTHS + 1;
-    let mut rng = MapRng::new(seed ^ 0x5A17_5A17_12D0_4E55);
+    let mut rng = XorShift64::new(seed ^ 0x5A17_5A17_12D0_4E55);
     let path_count = profile.path_count_min
         + rng.next_index(
             profile
@@ -912,7 +913,7 @@ fn generate_nodes(seed: u64, level: usize) -> Vec<DungeonNode> {
 fn assign_room_kinds(
     nodes: &mut [DungeonNode],
     parents: &[Vec<usize>],
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
     profile: LevelProfile,
 ) {
     let boss_depth = nodes.iter().map(|node| node.depth).max().unwrap_or(0);
@@ -992,7 +993,7 @@ fn ensure_kind_present(
     desired: RoomKind,
     min_depth: usize,
     max_depth: usize,
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
 ) {
     if nodes
         .iter()
@@ -1022,7 +1023,7 @@ fn ensure_shop_present(
     nodes: &mut [DungeonNode],
     min_depth: usize,
     max_depth: usize,
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
 ) {
     if nodes.iter().any(|node| {
         node.kind == RoomKind::Shop && node.depth >= min_depth && node.depth <= max_depth
@@ -1052,7 +1053,7 @@ fn ensure_event_present(
     nodes: &mut [DungeonNode],
     min_depth: usize,
     max_depth: usize,
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
 ) {
     if nodes.iter().any(|node| node.kind == RoomKind::Event) {
         return;
@@ -1091,7 +1092,7 @@ fn ensure_event_present(
 }
 
 fn choose_next_lane(
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
     current_lane: usize,
     existing_edges: &[(usize, usize)],
     path_index: usize,
@@ -1149,7 +1150,7 @@ fn edges_cross(from_a: usize, to_a: usize, from_b: usize, to_b: usize) -> bool {
 }
 
 fn distinct_lanes(
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
     lane_count: usize,
     count: usize,
     start_lane_window: usize,
@@ -1173,7 +1174,7 @@ fn distinct_lanes(
 fn bridge_edges(
     positions: &BTreeSet<(usize, usize)>,
     raw_edges: &mut BTreeSet<(usize, usize, usize, usize)>,
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
 ) {
     let mut lanes_by_depth: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for &(depth, lane) in positions {
@@ -1244,7 +1245,7 @@ fn bridge_edges(
 }
 
 fn choose_best_lane(
-    rng: &mut MapRng,
+    rng: &mut XorShift64,
     current_lane: usize,
     existing_edges: &[(usize, usize)],
     candidates: &[usize],
@@ -1396,39 +1397,6 @@ fn bridge_candidates(
 
     candidates.sort_by_key(|candidate| candidate.score);
     candidates
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MapRng {
-    state: u64,
-}
-
-impl MapRng {
-    fn new(seed: u64) -> Self {
-        let state = if seed == 0 {
-            0x9E37_79B9_7F4A_7C15
-        } else {
-            seed
-        };
-        Self { state }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        x
-    }
-
-    fn next_index(&mut self, upper_bound: usize) -> usize {
-        if upper_bound <= 1 {
-            0
-        } else {
-            (self.next_u64() % upper_bound as u64) as usize
-        }
-    }
 }
 
 #[cfg(test)]

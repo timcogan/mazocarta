@@ -1,4 +1,8 @@
-.PHONY: test build build-wasm serve debug publish-check
+.DEFAULT_GOAL := all
+
+.PHONY: all clean test build build-wasm serve debug publish-check
+
+all: build
 
 test:
 	cargo test
@@ -20,3 +24,6 @@ debug: build
 
 publish-check:
 	./scripts/publish-check.sh
+
+clean:
+	rm -rf target web/mazocarta.wasm web/.debug-mode.json web/icons web/apple-touch-icon.png

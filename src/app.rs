@@ -3079,13 +3079,9 @@ impl App {
         }
     }
 
-    fn module_select_options_for_context(
-        &self,
-        context: ModuleSelectContext,
-        seed: u64,
-    ) -> Vec<ModuleId> {
+    fn module_select_options_for_context(&self, context: ModuleSelectContext) -> Vec<ModuleId> {
         match context {
-            ModuleSelectContext::Starter => starter_module_choices(seed),
+            ModuleSelectContext::Starter => starter_module_choices(),
             ModuleSelectContext::BossReward { boss_level } => boss_module_choices(boss_level),
         }
     }
@@ -3119,7 +3115,7 @@ impl App {
     ) -> Result<ModuleSelectState, String> {
         let context = self.restore_saved_module_select_context_fallback(saved);
         Ok(ModuleSelectState {
-            options: self.module_select_options_for_context(context, saved.seed),
+            options: self.module_select_options_for_context(context),
             seed: saved.seed,
             context,
         })
@@ -3388,7 +3384,7 @@ impl App {
         self.seed_entropy = scramble_seed(seed ^ 0x94D0_49BB_1331_11EB);
         self.dungeon = Some(DungeonRun::new(seed));
         self.module_select = Some(ModuleSelectState {
-            options: starter_module_choices(seed),
+            options: starter_module_choices(),
             seed,
             context: ModuleSelectContext::Starter,
         });
@@ -11952,9 +11948,8 @@ mod tests {
     }
 
     #[test]
-    fn module_select_fallback_recomputes_options_from_seed() {
+    fn module_select_fallback_recomputes_options() {
         let app = active_module_select_fixture();
-        let seed = app.module_select.as_ref().unwrap().seed;
         let mut envelope = parse_run_save(&app.serialize_current_run().unwrap()).unwrap();
         if let SavedRunState::ModuleSelect { module_select, .. } = &mut envelope.active_state {
             module_select.options[0] = "removed_module".to_string();
@@ -11967,7 +11962,7 @@ mod tests {
         assert!(matches!(restored.screen, AppScreen::ModuleSelect));
         assert_eq!(
             restored.module_select.as_ref().unwrap().options,
-            starter_module_choices(seed)
+            starter_module_choices()
         );
     }
 

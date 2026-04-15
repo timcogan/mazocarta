@@ -7,6 +7,8 @@ mod content;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod dungeon;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+mod rng;
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod save;
 
 #[cfg(target_arch = "wasm32")]

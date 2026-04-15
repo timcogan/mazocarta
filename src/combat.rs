@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use crate::content::{
     CardId, CardTarget, EnemyIntent, EnemyProfileId, card_def, enemy_intent, starter_deck,
 };
+use crate::rng::XorShift64;
 
 pub(crate) const DEFAULT_PLAYER_HP: i32 = 32;
 pub(crate) const MAX_ENEMIES_PER_ENCOUNTER: usize = 2;
@@ -230,48 +231,6 @@ pub(crate) struct CombatState {
     rng: XorShift64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct XorShift64 {
-    state: u64,
-}
-
-impl XorShift64 {
-    fn new(seed: u64) -> Self {
-        let state = if seed == 0 {
-            0x9E37_79B9_7F4A_7C15
-        } else {
-            seed
-        };
-        Self { state }
-    }
-
-    fn from_state(state: u64) -> Self {
-        Self {
-            state: if state == 0 {
-                0x9E37_79B9_7F4A_7C15
-            } else {
-                state
-            },
-        }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        x
-    }
-
-    fn next_index(&mut self, upper_bound: usize) -> usize {
-        if upper_bound <= 1 {
-            return 0;
-        }
-        (self.next_u64() % upper_bound as u64) as usize
-    }
-}
-
 impl CombatState {
     pub(crate) fn new(seed: u64) -> (Self, Vec<CombatEvent>) {
         Self::new_with_setup(seed, EncounterSetup::default())
@@ -445,7 +404,7 @@ impl CombatState {
             phase,
             turn,
             announced_enemy_defeats,
-            rng: XorShift64::from_state(rng_state),
+            rng: XorShift64::new(rng_state),
         }
     }
 

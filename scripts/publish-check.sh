@@ -15,20 +15,36 @@ scan_tracked() {
   local label="$1"
   local pattern="$2"
   local failure_message="$3"
+  local allow_pattern="${4:-}"
 
   echo "==> ${label}"
 
-  local status=0
-  rg -n --hidden -S "$pattern" -- "${tracked_files[@]}" || status=$?
+  local matches=""
+  if matches="$(rg -n --hidden -S "$pattern" -- "${tracked_files[@]}")"; then
+    if [ -n "$allow_pattern" ]; then
+      local filtered_matches=""
+      if filtered_matches="$(printf '%s\n' "$matches" | rg -n -v -S "$allow_pattern")"; then
+        printf '%s\n' "$filtered_matches"
+        echo "$failure_message" >&2
+        exit 1
+      fi
+      local filtered_status=$?
+      if [ "$filtered_status" -eq 1 ]; then
+        return
+      fi
+      echo "Scan failed while checking tracked files for ${label}." >&2
+      exit 1
+    fi
 
-  if [ "$status" -eq 0 ]; then
+    printf '%s\n' "$matches"
     echo "$failure_message" >&2
     exit 1
-  fi
-
-  if [ "$status" -ne 1 ]; then
-    echo "Scan failed while checking tracked files for ${label}." >&2
-    exit 1
+  else
+    local status=$?
+    if [ "$status" -ne 1 ]; then
+      echo "Scan failed while checking tracked files for ${label}." >&2
+      exit 1
+    fi
   fi
 }
 
@@ -66,7 +82,8 @@ scan_tracked \
 scan_tracked \
   "scan tracked files for email addresses" \
   "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}" \
-  "Found email-like content in tracked files."
+  "Found email-like content in tracked files." \
+  "@(example\\.com|example\\.org|example\\.net|localhost)\\b"
 
 echo "==> build web bundle"
 ./scripts/build-web.sh

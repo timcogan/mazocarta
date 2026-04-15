@@ -1,5 +1,11 @@
 const canvas = document.getElementById("game");
+if (!(canvas instanceof HTMLCanvasElement)) {
+  throw new Error("Canvas element `#game` not found");
+}
 const ctx = canvas.getContext("2d");
+if (!ctx) {
+  throw new Error("2D canvas context unavailable.");
+}
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const blurCanvas = document.createElement("canvas");
@@ -864,7 +870,7 @@ function downloadBlob(blob, fileName) {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
 }
 
 async function flushLegacyShareRequest(text) {

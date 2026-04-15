@@ -647,7 +647,7 @@ pub(crate) fn default_starter_module() -> ModuleId {
     ModuleId::AegisDrive
 }
 
-pub(crate) fn starter_module_choices(_seed: u64) -> Vec<ModuleId> {
+pub(crate) fn starter_module_choices() -> Vec<ModuleId> {
     vec![
         ModuleId::Nanoforge,
         ModuleId::AegisDrive,
@@ -673,7 +673,7 @@ pub(crate) fn boss_module_choices(boss_level: usize) -> Vec<ModuleId> {
 pub(crate) fn reward_choices(seed: u64, tier: RewardTier, level: usize) -> Vec<CardId> {
     let mut cards = reward_pool(tier, level).to_vec();
     cards.sort_by_key(|card| reward_roll_key(seed, *card));
-    cards.truncate(cards.len().min(3));
+    cards.truncate(3);
     cards
 }
 
@@ -2372,7 +2372,6 @@ mod tests {
 
     const TEST_PRIMARY_SEED: u64 = 0x0BAD_5EED;
     const TEST_ALT_SEED: u64 = 0xDEAD_BEEF;
-    const TEST_MODULE_SEED: u64 = 0xC0DE_CAFE;
     const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
     const TEST_ELITE_REWARD_SEED: u64 = 0xFACE_FEED;
     const TEST_SHOP_SEED: u64 = 0xD15C_A11C;
@@ -2422,7 +2421,7 @@ mod tests {
 
     #[test]
     fn starter_module_choices_always_include_all_three_modules() {
-        let choices = starter_module_choices(TEST_MODULE_SEED);
+        let choices = starter_module_choices();
         let mut sorted = choices.clone();
         sorted.sort_by_key(|module| *module as u8);
         sorted.dedup();
@@ -2436,8 +2435,8 @@ mod tests {
 
     #[test]
     fn starter_module_choice_order_is_fixed() {
-        let a = starter_module_choices(TEST_PRIMARY_SEED);
-        let b = starter_module_choices(TEST_ALT_SEED);
+        let a = starter_module_choices();
+        let b = starter_module_choices();
 
         assert_eq!(
             a,
