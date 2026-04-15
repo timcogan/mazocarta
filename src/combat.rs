@@ -885,6 +885,10 @@ impl CombatState {
                 }
             }
 
+            if self.player.fighter.hp <= 0 {
+                break;
+            }
+
             if intent.gain_block > 0 {
                 self.gain_block(enemy_actor, intent.gain_block, events);
             }
@@ -1691,6 +1695,25 @@ mod tests {
 
         assert_eq!(state.player.fighter.hp, 35);
         assert_eq!(state.player.fighter.statuses.weak, 1);
+    }
+
+    #[test]
+    fn lethal_multi_hit_intent_stops_before_follow_up_effects() {
+        let mut state = blank_state();
+        state.player.fighter.hp = 6;
+        set_primary_enemy_intent(&mut state, EnemyProfileId::ShardWeaver, 1);
+
+        let mut events = Vec::new();
+        state.resolve_enemy_intent(&mut events);
+
+        assert_eq!(state.player.fighter.hp, 0);
+        assert_eq!(primary_enemy(&state).fighter.block, 0);
+        assert_eq!(primary_enemy(&state).intent_index, 1);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, CombatEvent::IntentAdvanced { enemy_index: 0, .. }))
+        );
     }
 
     #[test]

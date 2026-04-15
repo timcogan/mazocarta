@@ -1202,52 +1202,45 @@ pub(crate) fn localized_module_name(id: ModuleId, language: Language) -> &'stati
 }
 
 pub(crate) fn localized_module_description(id: ModuleId, language: Language) -> &'static str {
+    let english = module_def(id).description;
     match id {
-        ModuleId::AegisDrive => localized_text(
-            language,
-            "Start each combat with 5 Shield.",
-            "Comienzas cada combate con 5 de Escudo.",
-        ),
+        ModuleId::AegisDrive => {
+            localized_text(language, english, "Comienzas cada combate con 5 de Escudo.")
+        }
         ModuleId::TargetingRelay => localized_text(
             language,
-            "Start each combat by applying Vulnerable 1 to the first enemy.",
+            english,
             "Al comienzo de cada combate, aplica Vulnerable 1 al primer enemigo.",
         ),
-        ModuleId::Nanoforge => localized_text(
-            language,
-            "After each victory, recover 3 HP.",
-            "Tras cada victoria, recupera 3 HP.",
-        ),
-        ModuleId::CapacitorBank => localized_text(
-            language,
-            "Start each combat with Strength 1.",
-            "Comienzas cada combate con Fuerza 1.",
-        ),
+        ModuleId::Nanoforge => {
+            localized_text(language, english, "Tras cada victoria, recupera 3 HP.")
+        }
+        ModuleId::CapacitorBank => {
+            localized_text(language, english, "Comienzas cada combate con Fuerza 1.")
+        }
         ModuleId::PrismScope => localized_text(
             language,
-            "Start each combat by applying Vulnerable 1 to all enemies.",
+            english,
             "Al comienzo de cada combate, aplica Vulnerable 1 a todos los enemigos.",
         ),
         ModuleId::SalvageLedger => localized_text(
             language,
-            "After each victory, gain 4 additional Credits.",
+            english,
             "Tras cada victoria, gana 4 Créditos adicionales.",
         ),
         ModuleId::OverclockCore => localized_text(
             language,
-            "Start each combat with 1 extra Energy.",
+            english,
             "Comienzas cada combate con 1 de Energía extra.",
         ),
         ModuleId::SuppressionField => localized_text(
             language,
-            "Start each combat by applying Weak 1 to all enemies.",
+            english,
             "Al comienzo de cada combate, aplica Débil 1 a todos los enemigos.",
         ),
-        ModuleId::RecoveryMatrix => localized_text(
-            language,
-            "After each victory, recover 5 HP.",
-            "Tras cada victoria, recupera 5 HP.",
-        ),
+        ModuleId::RecoveryMatrix => {
+            localized_text(language, english, "Tras cada victoria, recupera 5 HP.")
+        }
     }
 }
 
