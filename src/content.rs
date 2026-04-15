@@ -584,6 +584,37 @@ pub(crate) fn upgraded_card(id: CardId) -> Option<CardId> {
     }
 }
 
+const BASE_CARD_CATALOG: &[CardId] = &[
+    CardId::FlareSlash,
+    CardId::GuardStep,
+    CardId::Slipstream,
+    CardId::QuickStrike,
+    CardId::PinpointJab,
+    CardId::SignalTap,
+    CardId::Reinforce,
+    CardId::PressurePoint,
+    CardId::BurstArray,
+    CardId::CoverPulse,
+    CardId::SunderingArc,
+    CardId::TwinStrike,
+    CardId::BarrierField,
+    CardId::TacticalBurst,
+    CardId::RazorNet,
+    CardId::FracturePulse,
+    CardId::VectorLock,
+    CardId::BreachSignal,
+    CardId::AnchorLoop,
+    CardId::ExecutionBeam,
+    CardId::ChainBarrage,
+    CardId::FortressMatrix,
+    CardId::OverwatchGrid,
+    CardId::ZeroPoint,
+];
+
+pub(crate) fn all_base_cards() -> &'static [CardId] {
+    BASE_CARD_CATALOG
+}
+
 pub(crate) fn starter_deck() -> Vec<CardId> {
     let mut cards = Vec::with_capacity(12);
     cards.extend(std::iter::repeat_n(CardId::FlareSlash, 5));
@@ -2593,6 +2624,24 @@ mod tests {
         assert_eq!(upgraded_card(CardId::FlareSlashPlus), None);
         assert_eq!(upgraded_card(CardId::ZeroPointPlus), None);
         assert_eq!(upgraded_card(CardId::OverwatchGridPlus), None);
+    }
+
+    #[test]
+    fn all_base_cards_are_unique_and_exclude_upgraded_variants() {
+        let cards = all_base_cards();
+        let mut unique_cards = cards.to_vec();
+        unique_cards.sort_by_key(|card| *card as u8);
+        unique_cards.dedup();
+
+        assert_eq!(cards.len(), 24);
+        assert_eq!(unique_cards.len(), cards.len());
+        assert!(cards.iter().all(|card| upgraded_card(*card).is_some()));
+        assert!(
+            cards
+                .iter()
+                .filter_map(|card| upgraded_card(*card))
+                .all(|card| !cards.contains(&card))
+        );
     }
 
     #[test]
