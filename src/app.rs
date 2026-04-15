@@ -7,8 +7,8 @@ use crate::combat::{
 };
 use crate::content::{
     CardDef, CardId, EnemyIntent, EventId, Language, ModuleDef, ModuleId, RewardTier, ShopOffer,
-    boss_module_choices, default_starter_module, localized_card_def, localized_card_name,
-    localized_enemy_intent, localized_enemy_name, localized_event_choice_body,
+    all_base_cards, boss_module_choices, default_starter_module, localized_card_def,
+    localized_card_name, localized_enemy_intent, localized_enemy_name, localized_event_choice_body,
     localized_event_choice_title, localized_event_def, localized_module_def, localized_text,
     reward_choices, shop_offers, starter_module_choices, upgraded_card,
 };
@@ -132,6 +132,7 @@ const BOOT_RESTART_CONFIRM_CANCEL_LABEL: &str = "Cancel";
 const REWARD_SKIP_LABEL: &str = "Skip";
 const SHOP_LEAVE_LABEL: &str = "Leave";
 const MAP_INFO_LABEL: &str = "Info";
+const MAP_DEBUG_FILL_DECK_LABEL: &str = "Fill Deck";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppScreen {
@@ -180,6 +181,7 @@ enum HitTarget {
     InstallHelpClose,
     DebugLevelDown,
     DebugLevelUp,
+    DebugFillDeck,
     Share,
     Restart,
     Menu,
@@ -190,6 +192,8 @@ enum HitTarget {
     RestHeal,
     RestCard(usize),
     RestConfirm,
+    RestPagePrev,
+    RestPageNext,
     ShopCard(usize),
     ShopLeave,
     EventChoice(usize),
@@ -218,6 +222,7 @@ enum RestSelection {
 struct UiState {
     selected_card: Option<usize>,
     rest_selection: Option<RestSelection>,
+    rest_page: usize,
     hover: Option<HitTarget>,
     legend_open: bool,
     legend_progress: f32,
@@ -360,6 +365,7 @@ struct MapLayout {
     debug_level_down_button: Option<Rect>,
     debug_level_up_button: Option<Rect>,
     debug_level_text_position: Option<(f32, f32)>,
+    debug_fill_deck_button: Option<Rect>,
     nodes: Vec<MapNodeLayout>,
     edges: Vec<MapEdgeLayout>,
 }
@@ -415,6 +421,15 @@ struct ResultButtons {
 struct RestLayout {
     heal_rect: Rect,
     card_rects: Vec<Rect>,
+    visible_upgrade_indices: Vec<usize>,
+    prev_button: Option<FittedPrimaryButton>,
+    next_button: Option<FittedPrimaryButton>,
+    page_status_label: Option<String>,
+    page_status_x: Option<f32>,
+    page_status_y: Option<f32>,
+    page_status_size: Option<f32>,
+    current_page: usize,
+    page_count: usize,
     confirm_rect: Rect,
 }
 
@@ -622,6 +637,14 @@ struct DefeatSummary {
 struct RestState {
     heal_amount: i32,
     upgrade_options: Vec<usize>,
+}
+
+#[derive(Clone, Debug)]
+struct RestPageInfo {
+    current_page: usize,
+    page_count: usize,
+    columns: usize,
+    visible_upgrade_indices: Vec<usize>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1692,6 +1715,9 @@ impl App {
     pub(crate) fn resize(&mut self, width: f32, height: f32) {
         self.viewport.width = width.max(1.0);
         self.viewport.height = height.max(1.0);
+        if matches!(self.screen, AppScreen::Rest) {
+            self.sync_rest_page_state();
+        }
         self.pointer_pos = None;
         self.ui.hover = None;
         self.layout_transition = None;
@@ -1995,16 +2021,23 @@ impl App {
                         self.dirty = true;
                     }
                 }
+                37 => self.set_rest_page(self.ui.rest_page.saturating_sub(1)),
+                39 => self.set_rest_page(self.ui.rest_page.saturating_add(1)),
                 49..=57 => {
+                    let Some(layout) = self.rest_layout() else {
+                        return;
+                    };
                     let index = (key_code - 49) as usize;
                     if self.rest_heal_actionable() {
                         if index == 0 {
                             self.select_rest_option(RestSelection::Heal);
-                        } else {
-                            self.select_rest_option(RestSelection::Upgrade(index - 1));
+                        } else if let Some(&option_index) =
+                            layout.visible_upgrade_indices.get(index - 1)
+                        {
+                            self.select_rest_option(RestSelection::Upgrade(option_index));
                         }
-                    } else {
-                        self.select_rest_option(RestSelection::Upgrade(index));
+                    } else if let Some(&option_index) = layout.visible_upgrade_indices.get(index) {
+                        self.select_rest_option(RestSelection::Upgrade(option_index));
                     }
                 }
                 _ => {}
@@ -3549,6 +3582,7 @@ impl App {
             HitTarget::RunInfoPanel => {}
             HitTarget::DebugLevelDown => self.adjust_debug_level(-1),
             HitTarget::DebugLevelUp => self.adjust_debug_level(1),
+            HitTarget::DebugFillDeck => self.debug_fill_deck(),
             HitTarget::MapNode(node_id) => self.select_map_node(node_id),
             HitTarget::Start
             | HitTarget::Continue
@@ -3557,6 +3591,8 @@ impl App {
             | HitTarget::RestHeal
             | HitTarget::RestCard(_)
             | HitTarget::RestConfirm
+            | HitTarget::RestPagePrev
+            | HitTarget::RestPageNext
             | HitTarget::ShopCard(_)
             | HitTarget::ShopLeave
             | HitTarget::EventChoice(_)
@@ -3600,6 +3636,42 @@ impl App {
             self.refresh_run_save_snapshot();
             self.dirty = true;
         }
+    }
+
+    fn debug_fill_deck(&mut self) {
+        if !self.debug_mode || !matches!(self.screen, AppScreen::Map) {
+            return;
+        }
+
+        let added = {
+            let Some(dungeon) = self.dungeon.as_mut() else {
+                return;
+            };
+            let mut added = 0usize;
+            for &card in all_base_cards() {
+                if !dungeon.deck.contains(&card) {
+                    dungeon.add_card(card);
+                    added += 1;
+                }
+            }
+            added
+        };
+
+        if added > 0 {
+            self.push_log(match self.language {
+                Language::English => format!("Filled deck with {added} cards."),
+                Language::Spanish => format!("Se llenó el mazo con {added} cartas."),
+            });
+        } else {
+            self.push_log(self.tr(
+                "Deck already contains all base cards.",
+                "El mazo ya contiene todas las cartas base.",
+            ));
+        }
+
+        self.refresh_hover();
+        self.refresh_run_save_snapshot();
+        self.dirty = true;
     }
 
     fn handle_reward_pointer(&mut self, x: f32, y: f32) {
@@ -3651,6 +3723,8 @@ impl App {
             HitTarget::RestHeal => self.select_rest_option(RestSelection::Heal),
             HitTarget::RestCard(index) => self.select_rest_option(RestSelection::Upgrade(index)),
             HitTarget::RestConfirm => self.confirm_rest_selection(),
+            HitTarget::RestPagePrev => self.set_rest_page(self.ui.rest_page.saturating_sub(1)),
+            HitTarget::RestPageNext => self.set_rest_page(self.ui.rest_page.saturating_add(1)),
             _ => {}
         }
     }
@@ -3659,6 +3733,79 @@ impl App {
         self.rest
             .as_ref()
             .is_some_and(|rest| rest.heal_amount > 0 || rest.upgrade_options.is_empty())
+    }
+
+    fn rest_page_info(&self, requested_page: usize) -> Option<RestPageInfo> {
+        let rest = self.rest.as_ref()?;
+        let upgrade_count = rest.upgrade_options.len();
+        let logical_width = self.logical_width();
+        let logical_height = self.logical_height();
+        let gap = HAND_MIN_GAP * 1.3;
+        let preferred_columns = if logical_width < 540.0 {
+            upgrade_count.min(2).max(1)
+        } else if upgrade_count >= 9 {
+            5
+        } else if upgrade_count >= 6 {
+            4
+        } else if upgrade_count >= 3 {
+            3
+        } else {
+            upgrade_count.max(1)
+        };
+        let max_columns_for_width =
+            (((logical_width - gap).max(0.0)) / (136.0 + gap)).floor() as usize;
+        let columns = preferred_columns
+            .min(max_columns_for_width.max(1))
+            .min(upgrade_count.max(1));
+        let rows_per_page = if logical_height < 640.0 { 2 } else { 3 };
+        let page_size = (columns * rows_per_page).max(1);
+        let page_count = if upgrade_count == 0 {
+            0
+        } else {
+            (upgrade_count + page_size - 1) / page_size
+        };
+        let current_page = if page_count == 0 {
+            0
+        } else {
+            requested_page.min(page_count - 1)
+        };
+        let visible_upgrade_indices = if page_count == 0 {
+            Vec::new()
+        } else {
+            let start = current_page * page_size;
+            let end = (start + page_size).min(upgrade_count);
+            (start..end).collect()
+        };
+
+        Some(RestPageInfo {
+            current_page,
+            page_count,
+            columns,
+            visible_upgrade_indices,
+        })
+    }
+
+    fn sync_rest_page_state(&mut self) {
+        let Some(page_info) = self.rest_page_info(self.ui.rest_page) else {
+            return;
+        };
+        self.ui.rest_page = page_info.current_page;
+        if let Some(RestSelection::Upgrade(index)) = self.ui.rest_selection {
+            if !page_info.visible_upgrade_indices.contains(&index) {
+                self.ui.rest_selection = None;
+            }
+        }
+    }
+
+    fn set_rest_page(&mut self, requested_page: usize) {
+        let previous_page = self.ui.rest_page;
+        let previous_selection = self.ui.rest_selection;
+        self.ui.rest_page = requested_page;
+        self.sync_rest_page_state();
+        if self.ui.rest_page != previous_page || self.ui.rest_selection != previous_selection {
+            self.refresh_hover();
+            self.dirty = true;
+        }
     }
 
     fn select_rest_option(&mut self, selection: RestSelection) {
@@ -4261,11 +4408,14 @@ impl App {
             | HitTarget::Continue
             | HitTarget::DebugLevelDown
             | HitTarget::DebugLevelUp
+            | HitTarget::DebugFillDeck
             | HitTarget::Share
             | HitTarget::Restart
             | HitTarget::RestHeal
             | HitTarget::RestCard(_)
             | HitTarget::RestConfirm
+            | HitTarget::RestPagePrev
+            | HitTarget::RestPageNext
             | HitTarget::ShopCard(_)
             | HitTarget::ShopLeave
             | HitTarget::EventChoice(_)
@@ -5576,7 +5726,11 @@ impl App {
             tile_insets.pad_x,
             tile_insets.top_pad,
         );
-        let debug_group = self.debug_mode.then(|| {
+        let top_group_w = menu_w + HAND_MIN_GAP + info_w + HAND_MIN_GAP + legend_w;
+        let top_group_x = (logical_width - top_group_w) * 0.5;
+        let top_bar_h = menu_h.max(info_h).max(legend_h);
+        let top_bar_center_y = top_row_y + top_bar_h * 0.5;
+        let debug_controls = self.debug_mode.then(|| {
             let (button_w, button_h) = button_size(
                 "<",
                 MAP_DEBUG_BUTTON_FONT_SIZE,
@@ -5588,12 +5742,44 @@ impl App {
                 MAP_DEBUG_SEED_SIZE,
             );
             let group_w = label_w + MAP_DEBUG_BUTTON_GAP + button_w * 2.0 + MAP_DEBUG_BUTTON_GAP;
-            (button_w, button_h, label_w, group_w)
+            let debug_row_y = top_row_y + top_bar_h + HAND_MIN_GAP;
+            let debug_center_y = debug_row_y + button_h * 0.5;
+            let group_x = (logical_width - group_w) * 0.5;
+            let debug_text_x = group_x + button_w + MAP_DEBUG_BUTTON_GAP + label_w * 0.5;
+            let down_button = Rect {
+                x: group_x,
+                y: debug_row_y,
+                w: button_w,
+                h: button_h,
+            };
+            let up_button = Rect {
+                x: group_x + button_w + MAP_DEBUG_BUTTON_GAP + label_w + MAP_DEBUG_BUTTON_GAP,
+                y: debug_row_y,
+                w: button_w,
+                h: button_h,
+            };
+            let fill_label = self.tr(MAP_DEBUG_FILL_DECK_LABEL, "Llenar mazo");
+            let (fill_button_w, fill_button_h) = button_size(
+                fill_label,
+                MAP_DEBUG_BUTTON_FONT_SIZE,
+                MAP_DEBUG_BUTTON_PAD_X,
+                MAP_DEBUG_BUTTON_PAD_Y,
+            );
+            let fill_button = Rect {
+                x: (logical_width - fill_button_w) * 0.5,
+                y: debug_row_y + button_h + HAND_MIN_GAP,
+                w: fill_button_w,
+                h: fill_button_h,
+            };
+            let group_h = button_h + HAND_MIN_GAP + fill_button_h;
+            (
+                down_button,
+                up_button,
+                (debug_text_x, debug_center_y),
+                fill_button,
+                group_h,
+            )
         });
-        let top_group_w = menu_w + HAND_MIN_GAP + info_w + HAND_MIN_GAP + legend_w;
-        let top_group_x = (logical_width - top_group_w) * 0.5;
-        let top_bar_h = menu_h.max(info_h).max(legend_h);
-        let top_bar_center_y = top_row_y + top_bar_h * 0.5;
         let menu_button = Rect {
             x: top_group_x,
             y: top_bar_center_y - menu_h * 0.5,
@@ -5612,28 +5798,9 @@ impl App {
             w: legend_w,
             h: legend_h,
         };
-        let debug_controls = debug_group.map(|(button_w, button_h, label_w, group_w)| {
-            let debug_row_y = top_row_y + top_bar_h + HAND_MIN_GAP;
-            let debug_center_y = debug_row_y + button_h * 0.5;
-            let group_x = (logical_width - group_w) * 0.5;
-            let debug_text_x = group_x + button_w + MAP_DEBUG_BUTTON_GAP + label_w * 0.5;
-            let down_button = Rect {
-                x: group_x,
-                y: debug_row_y,
-                w: button_w,
-                h: button_h,
-            };
-            let up_button = Rect {
-                x: group_x + button_w + MAP_DEBUG_BUTTON_GAP + label_w + MAP_DEBUG_BUTTON_GAP,
-                y: debug_row_y,
-                w: button_w,
-                h: button_h,
-            };
-            (down_button, up_button, (debug_text_x, debug_center_y))
-        });
         let top_block_h = top_bar_h
-            + debug_group
-                .map(|(_, button_h, _, _)| HAND_MIN_GAP + button_h)
+            + debug_controls
+                .map(|(_, _, _, _, group_h)| HAND_MIN_GAP + group_h)
                 .unwrap_or(0.0);
         let map_top = top_row_y + top_block_h + 48.0;
         let map_bottom = logical_height - HAND_MIN_GAP - MAP_NODE_RADIUS;
@@ -5753,9 +5920,10 @@ impl App {
             info_button,
             legend_button,
             legend_modal,
-            debug_level_down_button: debug_controls.map(|(down, _, _)| down),
-            debug_level_up_button: debug_controls.map(|(_, up, _)| up),
-            debug_level_text_position: debug_controls.map(|(_, _, text)| text),
+            debug_level_down_button: debug_controls.map(|(down, _, _, _, _)| down),
+            debug_level_up_button: debug_controls.map(|(_, up, _, _, _)| up),
+            debug_level_text_position: debug_controls.map(|(_, _, text, _, _)| text),
+            debug_fill_deck_button: debug_controls.map(|(_, _, _, fill_button, _)| fill_button),
             nodes,
             edges,
         })
@@ -6412,10 +6580,11 @@ impl App {
 
     fn rest_layout(&self) -> Option<RestLayout> {
         let rest = self.rest.as_ref()?;
+        let page_info = self.rest_page_info(self.ui.rest_page)?;
         let logical_width = self.logical_width();
         let logical_height = self.logical_height();
         let gap = HAND_MIN_GAP * 1.3;
-        let (button_pad_x, _) = boot_button_tile_padding();
+        let (button_pad_x, button_pad_y) = boot_button_tile_padding();
         let heal_label = if rest.heal_amount > 0 {
             match self.language {
                 Language::English => format!("Recover {} HP", rest.heal_amount),
@@ -6459,18 +6628,8 @@ impl App {
         )
         .max(12.0);
         let title_block_h = title_size + subtitle_size + 34.0;
+        let columns = page_info.columns;
         let upgrade_count = rest.upgrade_options.len();
-        let columns = if logical_width < 540.0 {
-            upgrade_count.min(2).max(1)
-        } else if upgrade_count >= 9 {
-            5
-        } else if upgrade_count >= 6 {
-            4
-        } else if upgrade_count >= 3 {
-            3
-        } else {
-            upgrade_count.max(1)
-        };
         let card_w = if upgrade_count == 0 {
             0.0
         } else {
@@ -6478,7 +6637,7 @@ impl App {
         };
 
         let mut row_counts = Vec::new();
-        let mut remaining = upgrade_count;
+        let mut remaining = page_info.visible_upgrade_indices.len();
         while remaining > 0 {
             let row_count = remaining.min(columns);
             row_counts.push(row_count);
@@ -6487,11 +6646,14 @@ impl App {
 
         let mut row_heights = Vec::with_capacity(row_counts.len());
         let dungeon = self.dungeon.as_ref()?;
-        let mut option_index = 0usize;
+        let mut visible_index = 0usize;
         for &count in &row_counts {
             let row_height = (0..count)
                 .filter_map(|offset| {
-                    let deck_index = *rest.upgrade_options.get(option_index + offset)?;
+                    let option_index = *page_info
+                        .visible_upgrade_indices
+                        .get(visible_index + offset)?;
+                    let deck_index = *rest.upgrade_options.get(option_index)?;
                     let upgraded = upgraded_card(*dungeon.deck.get(deck_index)?)?;
                     Some(card_content_height(
                         self.localized_card_def(upgraded),
@@ -6500,7 +6662,7 @@ impl App {
                 })
                 .fold(0.0, f32::max);
             row_heights.push(row_height);
-            option_index += count;
+            visible_index += count;
         }
 
         let cards_h =
@@ -6512,7 +6674,54 @@ impl App {
             w: confirm_w,
             h: confirm_h,
         };
-        let content_h = title_block_h + heal_h + gap + upgrade_block_h;
+
+        let prev_label = "<";
+        let next_label = ">";
+        let page_button_font_size = 18.0;
+        let page_button_pad_x = button_pad_x * 0.58;
+        let page_button_pad_y = button_pad_y * 0.58;
+        let (prev_w, prev_h) = button_size(
+            prev_label,
+            page_button_font_size,
+            page_button_pad_x,
+            page_button_pad_y,
+        );
+        let (next_w, next_h) = button_size(
+            next_label,
+            page_button_font_size,
+            page_button_pad_x,
+            page_button_pad_y,
+        );
+        let page_status_label = if page_info.page_count > 1 {
+            Some(format!(
+                "{}/{}",
+                page_info.current_page + 1,
+                page_info.page_count
+            ))
+        } else {
+            None
+        };
+        let page_status_size = page_status_label.as_ref().map(|label| {
+            let center_max_w = (logical_width - gap * 6.0 - prev_w - next_w).max(72.0);
+            fit_text_size(label, 18.0, center_max_w).max(12.0)
+        });
+        let page_row_h = if page_status_label.is_some() {
+            prev_h
+                .max(next_h)
+                .max(page_status_size.unwrap_or(0.0) + 6.0)
+        } else {
+            0.0
+        };
+
+        let content_h = title_block_h
+            + heal_h
+            + gap
+            + upgrade_block_h
+            + if page_status_label.is_some() {
+                gap + page_row_h
+            } else {
+                0.0
+            };
         let stack_top = ((confirm_rect.y - gap - content_h) * 0.5).max(gap);
         let heal_rect = Rect {
             x: (logical_width - heal_w) * 0.5,
@@ -6521,13 +6730,17 @@ impl App {
             h: heal_h,
         };
 
-        let mut card_rects = Vec::with_capacity(upgrade_count);
+        let mut card_rects = Vec::with_capacity(page_info.visible_upgrade_indices.len());
         let mut row_top = heal_rect.y + heal_rect.h + gap;
-        let mut option_index = 0usize;
+        let mut visible_index = 0usize;
         for (row_index, &count) in row_counts.iter().enumerate() {
             let row_width = count as f32 * card_w + gap * count.saturating_sub(1) as f32;
             let mut x = (logical_width - row_width) * 0.5;
             for _ in 0..count {
+                let Some(&option_index) = page_info.visible_upgrade_indices.get(visible_index)
+                else {
+                    break;
+                };
                 let Some(&deck_index) = rest.upgrade_options.get(option_index) else {
                     break;
                 };
@@ -6545,14 +6758,62 @@ impl App {
                     h: card_h,
                 });
                 x += card_w + gap;
-                option_index += 1;
+                visible_index += 1;
             }
             row_top += row_heights[row_index] + gap;
         }
+        let cards_bottom = if card_rects.is_empty() {
+            heal_rect.y + heal_rect.h + upgrade_block_h
+        } else {
+            row_top - gap
+        };
+        let (prev_button, next_button, page_status_x, page_status_y) =
+            if let (Some(page_status_label), Some(page_status_size)) =
+                (page_status_label.as_ref(), page_status_size)
+            {
+                let page_top = cards_bottom + gap;
+                let page_status_w = text_width(page_status_label, page_status_size);
+                let page_gap = (HAND_MIN_GAP * 1.2).clamp(10.0, 16.0);
+                let group_w = prev_w + page_gap + page_status_w + page_gap + next_w;
+                let group_x = (logical_width - group_w) * 0.5;
+                (
+                    Some(FittedPrimaryButton {
+                        rect: Rect {
+                            x: group_x,
+                            y: page_top + (page_row_h - prev_h) * 0.5,
+                            w: prev_w,
+                            h: prev_h,
+                        },
+                        font_size: page_button_font_size,
+                    }),
+                    Some(FittedPrimaryButton {
+                        rect: Rect {
+                            x: group_x + prev_w + page_gap + page_status_w + page_gap,
+                            y: page_top + (page_row_h - next_h) * 0.5,
+                            w: next_w,
+                            h: next_h,
+                        },
+                        font_size: page_button_font_size,
+                    }),
+                    Some(group_x + prev_w + page_gap + page_status_w * 0.5),
+                    Some(page_top + page_row_h * 0.5 + page_status_size * 0.32),
+                )
+            } else {
+                (None, None, None, None)
+            };
 
         Some(RestLayout {
             heal_rect,
             card_rects,
+            visible_upgrade_indices: page_info.visible_upgrade_indices,
+            prev_button,
+            next_button,
+            page_status_label,
+            page_status_x,
+            page_status_y,
+            page_status_size,
+            current_page: page_info.current_page,
+            page_count: page_info.page_count,
             confirm_rect,
         })
     }
@@ -6662,6 +6923,11 @@ impl App {
                         return Some(HitTarget::DebugLevelUp);
                     }
                 }
+                if let Some(rect) = map_layout.debug_fill_deck_button {
+                    if rect.contains(x, y) {
+                        return Some(HitTarget::DebugFillDeck);
+                    }
+                }
                 for node in map_layout.nodes.iter().rev() {
                     if point_in_circle(x, y, node.center_x, node.center_y, MAP_NODE_RADIUS) {
                         return Some(HitTarget::MapNode(node.id));
@@ -6689,18 +6955,35 @@ impl App {
                 if rest_layout.heal_rect.contains(x, y) && self.rest_heal_actionable() {
                     return Some(HitTarget::RestHeal);
                 }
-                for (index, rect) in rest_layout.card_rects.iter().enumerate().rev() {
-                    if rect.contains(x, y) {
-                        return Some(HitTarget::RestCard(index));
-                    }
-                }
                 if rest_layout.confirm_rect.contains(x, y) && self.ui.rest_selection.is_some() {
                     return Some(HitTarget::RestConfirm);
+                }
+                if let Some(button) = rest_layout.prev_button {
+                    if button.rect.contains(x, y) && rest_layout.current_page > 0 {
+                        return Some(HitTarget::RestPagePrev);
+                    }
+                }
+                if let Some(button) = rest_layout.next_button {
+                    if button.rect.contains(x, y)
+                        && rest_layout.current_page + 1 < rest_layout.page_count
+                    {
+                        return Some(HitTarget::RestPageNext);
+                    }
+                }
+                for (slot, rect) in rest_layout.card_rects.iter().enumerate().rev() {
+                    if rect.contains(x, y) {
+                        if let Some(&option_index) = rest_layout.visible_upgrade_indices.get(slot) {
+                            return Some(HitTarget::RestCard(option_index));
+                        }
+                    }
                 }
                 None
             }
             AppScreen::Shop => {
                 let shop_layout = self.shop_layout()?;
+                if shop_layout.leave_button.contains(x, y) {
+                    return Some(HitTarget::ShopLeave);
+                }
                 let credits = self
                     .dungeon
                     .as_ref()
@@ -6715,9 +6998,6 @@ impl App {
                         return Some(HitTarget::ShopCard(index));
                     }
                 }
-                if shop_layout.leave_button.contains(x, y) {
-                    return Some(HitTarget::ShopLeave);
-                }
                 None
             }
             AppScreen::Event => {
@@ -6731,13 +7011,13 @@ impl App {
             }
             AppScreen::Reward => {
                 let reward_layout = self.reward_layout()?;
+                if reward_layout.skip_button.contains(x, y) {
+                    return Some(HitTarget::RewardSkip);
+                }
                 for (index, rect) in reward_layout.card_rects.iter().enumerate().rev() {
                     if rect.contains(x, y) {
                         return Some(HitTarget::RewardCard(index));
                     }
-                }
-                if reward_layout.skip_button.contains(x, y) {
-                    return Some(HitTarget::RewardSkip);
                 }
                 None
             }
@@ -7657,8 +7937,11 @@ impl App {
             let Some(dungeon) = self.dungeon.as_ref() else {
                 return;
             };
-            for (index, rect) in layout.card_rects.iter().enumerate() {
-                let Some(&deck_index) = rest.upgrade_options.get(index) else {
+            for (slot, rect) in layout.card_rects.iter().enumerate() {
+                let Some(&option_index) = layout.visible_upgrade_indices.get(slot) else {
+                    continue;
+                };
+                let Some(&deck_index) = rest.upgrade_options.get(option_index) else {
                     continue;
                 };
                 let Some(&card) = dungeon.deck.get(deck_index) else {
@@ -7667,8 +7950,8 @@ impl App {
                 let Some(upgraded) = upgraded_card(card) else {
                     continue;
                 };
-                let selected = self.ui.rest_selection == Some(RestSelection::Upgrade(index));
-                let hovered = self.ui.hover == Some(HitTarget::RestCard(index));
+                let selected = self.ui.rest_selection == Some(RestSelection::Upgrade(option_index));
+                let hovered = self.ui.hover == Some(HitTarget::RestCard(option_index));
                 let stroke = if selected {
                     COLOR_LIME_STROKE_TARGET
                 } else if hovered {
@@ -7678,6 +7961,97 @@ impl App {
                 };
                 self.render_selection_card(scene, *rect, upgraded, stroke);
             }
+        }
+
+        if let (
+            Some(prev_button),
+            Some(next_button),
+            Some(page_status_label),
+            Some(page_status_x),
+            Some(page_status_y),
+            Some(page_status_size),
+        ) = (
+            layout.prev_button,
+            layout.next_button,
+            layout.page_status_label.as_deref(),
+            layout.page_status_x,
+            layout.page_status_y,
+            layout.page_status_size,
+        ) {
+            let prev_enabled = layout.current_page > 0;
+            let prev_hovered = prev_enabled && self.ui.hover == Some(HitTarget::RestPagePrev);
+            let next_enabled = layout.current_page + 1 < layout.page_count;
+            let next_hovered = next_enabled && self.ui.hover == Some(HitTarget::RestPageNext);
+            let prev_label = "<";
+            let next_label = ">";
+
+            scene.rect(
+                prev_button.rect,
+                BUTTON_RADIUS,
+                COLOR_TILE_FILL,
+                if prev_enabled {
+                    if prev_hovered {
+                        COLOR_GREEN_STROKE_STRONG
+                    } else {
+                        COLOR_GREEN_STROKE_IDLE
+                    }
+                } else {
+                    COLOR_GRAY_STROKE_DISABLED
+                },
+                2.0,
+            );
+            scene.text(
+                prev_button.rect.x + prev_button.rect.w * 0.5,
+                button_text_baseline(prev_button.rect, prev_button.font_size),
+                prev_button.font_size,
+                "center",
+                if prev_enabled {
+                    TERM_GREEN_SOFT
+                } else {
+                    "#b0b0b0"
+                },
+                "label",
+                prev_label,
+            );
+
+            scene.rect(
+                next_button.rect,
+                BUTTON_RADIUS,
+                COLOR_TILE_FILL,
+                if next_enabled {
+                    if next_hovered {
+                        COLOR_GREEN_STROKE_STRONG
+                    } else {
+                        COLOR_GREEN_STROKE_IDLE
+                    }
+                } else {
+                    COLOR_GRAY_STROKE_DISABLED
+                },
+                2.0,
+            );
+            scene.text(
+                next_button.rect.x + next_button.rect.w * 0.5,
+                button_text_baseline(next_button.rect, next_button.font_size),
+                next_button.font_size,
+                "center",
+                if next_enabled {
+                    TERM_GREEN_SOFT
+                } else {
+                    "#b0b0b0"
+                },
+                "label",
+                next_label,
+            );
+
+            scene.text(
+                page_status_x,
+                page_status_y,
+                page_status_size,
+                "center",
+                TERM_GREEN_DIM,
+                "body",
+                page_status_label,
+            );
         }
 
         let confirm_enabled = self.ui.rest_selection.is_some();
@@ -8317,6 +8691,33 @@ impl App {
                     TERM_GREEN_DIM,
                     "body",
                     &debug_map_label(dungeon, self.language),
+                );
+            }
+            if let Some(button) = layout.debug_fill_deck_button {
+                let hovered = self.ui.hover == Some(HitTarget::DebugFillDeck);
+                scene.rect(
+                    button,
+                    BUTTON_RADIUS,
+                    COLOR_TILE_FILL,
+                    if hovered {
+                        COLOR_GREEN_STROKE_STRONG
+                    } else {
+                        COLOR_GREEN_STROKE_IDLE
+                    },
+                    2.0,
+                );
+                scene.text(
+                    button.x + button.w * 0.5,
+                    button_text_baseline(button, MAP_DEBUG_BUTTON_FONT_SIZE),
+                    MAP_DEBUG_BUTTON_FONT_SIZE,
+                    "center",
+                    if hovered {
+                        TERM_GREEN_SOFT
+                    } else {
+                        TERM_GREEN_TEXT
+                    },
+                    "label",
+                    self.tr(MAP_DEBUG_FILL_DECK_LABEL, "Llenar mazo"),
                 );
             }
         }
@@ -11462,6 +11863,50 @@ mod tests {
         app
     }
 
+    fn dense_rest_test_deck() -> Vec<CardId> {
+        vec![
+            CardId::FlareSlash,
+            CardId::GuardStep,
+            CardId::Slipstream,
+            CardId::QuickStrike,
+            CardId::PinpointJab,
+            CardId::SignalTap,
+            CardId::Reinforce,
+            CardId::PressurePoint,
+            CardId::BurstArray,
+            CardId::CoverPulse,
+        ]
+    }
+
+    fn active_rest_fixture(deck: Vec<CardId>, player_hp: i32) -> App {
+        let mut app = App::new();
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.player_hp = player_hp;
+        dungeon.deck = deck;
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Rest,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        app.dungeon = Some(dungeon);
+        app.begin_rest();
+        app.screen_transition = None;
+        app
+    }
+
     fn active_shop_fixture() -> App {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
@@ -12186,6 +12631,148 @@ mod tests {
     }
 
     #[test]
+    fn shop_layout_on_mobile_keeps_cards_and_labels_above_leave_button() {
+        let mut app = active_shop_fixture();
+        app.resize(320.0, 568.0);
+
+        let layout = app.shop_layout().unwrap();
+        let cards_bottom = layout
+            .card_rects
+            .iter()
+            .map(|rect| rect.y + rect.h)
+            .fold(0.0, f32::max);
+        let prices_bottom = layout.price_ys.iter().copied().fold(0.0, f32::max);
+
+        assert!(cards_bottom < layout.leave_button.y);
+        assert!(prices_bottom < layout.leave_button.y);
+        assert!(layout.credits_y < layout.leave_button.y);
+    }
+
+    #[test]
+    fn shop_leave_button_hit_test_wins_at_its_center() {
+        let app = active_shop_fixture();
+        let layout = app.shop_layout().unwrap();
+
+        assert_eq!(
+            app.hit_test(
+                layout.leave_button.x + layout.leave_button.w * 0.5,
+                layout.leave_button.y + layout.leave_button.h * 0.5,
+            ),
+            Some(HitTarget::ShopLeave)
+        );
+    }
+
+    #[test]
+    fn rest_layout_paginates_on_mobile_without_overlapping_controls() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 24);
+        app.resize(320.0, 568.0);
+
+        let layout = app.rest_layout().unwrap();
+        let pagination_top = layout
+            .prev_button
+            .unwrap()
+            .rect
+            .y
+            .min(layout.next_button.unwrap().rect.y);
+
+        assert_eq!(layout.page_count, 3);
+        assert_eq!(layout.current_page, 0);
+        assert_eq!(layout.card_rects.len(), 4);
+        assert_eq!(layout.visible_upgrade_indices, vec![0, 1, 2, 3]);
+        assert_eq!(layout.page_status_label.as_deref(), Some("1/3"));
+        for rect in &layout.card_rects {
+            assert!(rect.y + rect.h <= pagination_top + 0.01);
+            assert!(rect.y + rect.h <= layout.confirm_rect.y - 0.01);
+        }
+    }
+
+    #[test]
+    fn rest_layout_limits_columns_when_mid_width_would_overflow() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 24);
+        app.resize(600.0, 720.0);
+
+        let layout = app.rest_layout().unwrap();
+
+        assert_eq!(layout.page_count, 2);
+        assert_eq!(layout.card_rects.len(), 9);
+        for rect in &layout.card_rects {
+            assert!(rect.x >= 0.0);
+            assert!(rect.x + rect.w <= app.logical_width() + 0.01);
+        }
+    }
+
+    #[test]
+    fn rest_pagination_renders_as_compact_inline_group() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 24);
+        app.resize(320.0, 568.0);
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let layout = app.rest_layout().unwrap();
+        let prev_button = layout.prev_button.unwrap();
+        let next_button = layout.next_button.unwrap();
+        let page_status_x = layout.page_status_x.unwrap();
+        let page_status_size = layout.page_status_size.unwrap();
+        let page_status_w = text_width(
+            layout.page_status_label.as_deref().unwrap(),
+            page_status_size,
+        );
+        let status_left = page_status_x - page_status_w * 0.5;
+        let status_right = page_status_x + page_status_w * 0.5;
+
+        assert!(frame.contains("|label|<"));
+        assert!(frame.contains("|body|1/3"));
+        assert!(frame.contains("|label|>"));
+        assert!(!frame.contains("|label|Previous"));
+        assert!(!frame.contains("|label|Next"));
+        assert!(!frame.contains("|body|Page 1/3"));
+        assert!((status_left - (prev_button.rect.x + prev_button.rect.w)) >= 10.0);
+        assert!((next_button.rect.x - status_right) >= 10.0);
+        assert!(next_button.rect.x - prev_button.rect.x < app.logical_width() * 0.35);
+    }
+
+    #[test]
+    fn rest_confirm_hit_test_wins_over_cards_in_dense_layout() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 24);
+        app.resize(320.0, 568.0);
+
+        let layout = app.rest_layout().unwrap();
+        app.select_rest_option(RestSelection::Upgrade(layout.visible_upgrade_indices[0]));
+        let layout = app.rest_layout().unwrap();
+
+        assert_eq!(
+            app.hit_test(
+                layout.confirm_rect.x + layout.confirm_rect.w * 0.5,
+                layout.confirm_rect.y + layout.confirm_rect.h * 0.5,
+            ),
+            Some(HitTarget::RestConfirm)
+        );
+    }
+
+    #[test]
+    fn rest_pagination_keyboard_navigation_updates_visible_selection() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 32);
+        app.resize(320.0, 568.0);
+
+        app.key_down(39);
+        assert_eq!(app.ui.rest_page, 1);
+
+        let layout = app.rest_layout().unwrap();
+        assert_eq!(layout.visible_upgrade_indices, vec![4, 5, 6, 7]);
+        let expected_selection = layout.visible_upgrade_indices[0];
+
+        app.key_down(49);
+        assert_eq!(
+            app.ui.rest_selection,
+            Some(RestSelection::Upgrade(expected_selection))
+        );
+
+        app.key_down(37);
+        assert_eq!(app.ui.rest_page, 0);
+        assert_eq!(app.ui.rest_selection, None);
+    }
+
+    #[test]
     fn visited_nodes_keep_room_type_accents_on_map() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
@@ -12857,6 +13444,56 @@ mod tests {
 
         assert!(layout.credits_y > cards_bottom);
         assert!(layout.credits_y < layout.skip_button.y);
+    }
+
+    #[test]
+    fn reward_layout_on_mobile_keeps_cards_and_credits_above_skip_button() {
+        let mut app = App::new();
+        app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+        app.screen = AppScreen::Reward;
+        app.reward = Some(RewardState {
+            tier: RewardTier::Combat,
+            options: vec![CardId::QuickStrike, CardId::BarrierField, CardId::SignalTap],
+            followup: RewardFollowup {
+                completed_run: false,
+            },
+            seed: TEST_RUN_SEED,
+        });
+        app.resize(320.0, 568.0);
+
+        let layout = app.reward_layout().unwrap();
+        let cards_bottom = layout
+            .card_rects
+            .iter()
+            .map(|rect| rect.y + rect.h)
+            .fold(0.0, f32::max);
+
+        assert!(cards_bottom < layout.skip_button.y);
+        assert!(layout.credits_y < layout.skip_button.y);
+    }
+
+    #[test]
+    fn reward_skip_button_hit_test_wins_at_its_center() {
+        let mut app = App::new();
+        app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+        app.screen = AppScreen::Reward;
+        app.reward = Some(RewardState {
+            tier: RewardTier::Combat,
+            options: vec![CardId::QuickStrike, CardId::BarrierField, CardId::SignalTap],
+            followup: RewardFollowup {
+                completed_run: false,
+            },
+            seed: TEST_RUN_SEED,
+        });
+        let layout = app.reward_layout().unwrap();
+
+        assert_eq!(
+            app.hit_test(
+                layout.skip_button.x + layout.skip_button.w * 0.5,
+                layout.skip_button.y + layout.skip_button.h * 0.5,
+            ),
+            Some(HitTarget::RewardSkip)
+        );
     }
 
     #[test]
@@ -14057,6 +14694,85 @@ mod tests {
         assert!(down.y >= layout.legend_button.y + layout.legend_button.h + HAND_MIN_GAP - 0.01);
         app.handle_map_pointer(down.x + down.w * 0.5, down.y + down.h * 0.5);
         assert_eq!(app.dungeon.as_ref().unwrap().current_level(), 1);
+    }
+
+    #[test]
+    fn debug_map_fill_deck_button_renders_below_level_controls() {
+        let mut app = App::new();
+        app.screen = AppScreen::Map;
+        app.debug_mode = true;
+        app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|label|Fill Deck"));
+
+        let layout = app.map_layout().unwrap();
+        let up = layout.debug_level_up_button.unwrap();
+        let fill = layout.debug_fill_deck_button.unwrap();
+        assert!(fill.y >= up.y + up.h + HAND_MIN_GAP - 0.01);
+        assert!(fill.y >= layout.legend_button.y + layout.legend_button.h + HAND_MIN_GAP - 0.01);
+        assert_eq!(
+            app.hit_test(fill.x + fill.w * 0.5, fill.y + fill.h * 0.5),
+            Some(HitTarget::DebugFillDeck)
+        );
+    }
+
+    #[test]
+    fn debug_fill_deck_appends_missing_base_cards_and_updates_run_save() {
+        let mut app = App::new();
+        app.screen = AppScreen::Map;
+        app.debug_mode = true;
+        app.language = Language::Spanish;
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.deck = vec![
+            CardId::GuardStep,
+            CardId::FlareSlashPlus,
+            CardId::AnchorLoop,
+        ];
+        app.dungeon = Some(dungeon);
+        app.refresh_run_save_snapshot();
+
+        let before_snapshot = app.run_save_snapshot.clone();
+        let before_deck = app.dungeon.as_ref().unwrap().deck.clone();
+        let expected_missing: Vec<CardId> = all_base_cards()
+            .iter()
+            .copied()
+            .filter(|card| !before_deck.contains(card))
+            .collect();
+
+        app.debug_fill_deck();
+
+        let deck = &app.dungeon.as_ref().unwrap().deck;
+        assert_eq!(&deck[..before_deck.len()], before_deck.as_slice());
+        assert_eq!(&deck[before_deck.len()..], expected_missing.as_slice());
+        assert_ne!(app.run_save_snapshot, before_snapshot);
+        let expected_log = format!("Se llenó el mazo con {} cartas.", expected_missing.len());
+        assert_eq!(
+            app.log.back().map(String::as_str),
+            Some(expected_log.as_str())
+        );
+    }
+
+    #[test]
+    fn debug_fill_deck_is_idempotent_once_all_base_cards_are_present() {
+        let mut app = App::new();
+        app.screen = AppScreen::Map;
+        app.debug_mode = true;
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.deck = vec![CardId::GuardStep];
+        app.dungeon = Some(dungeon);
+
+        app.debug_fill_deck();
+        let filled_deck = app.dungeon.as_ref().unwrap().deck.clone();
+
+        app.debug_fill_deck();
+
+        assert_eq!(app.dungeon.as_ref().unwrap().deck, filled_deck);
+        assert_eq!(
+            app.log.back().map(String::as_str),
+            Some("Deck already contains all base cards.")
+        );
     }
 
     #[test]
