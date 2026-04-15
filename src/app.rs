@@ -3740,7 +3740,8 @@ impl App {
         let upgrade_count = rest.upgrade_options.len();
         let logical_width = self.logical_width();
         let logical_height = self.logical_height();
-        let columns = if logical_width < 540.0 {
+        let gap = HAND_MIN_GAP * 1.3;
+        let preferred_columns = if logical_width < 540.0 {
             upgrade_count.min(2).max(1)
         } else if upgrade_count >= 9 {
             5
@@ -3751,6 +3752,11 @@ impl App {
         } else {
             upgrade_count.max(1)
         };
+        let max_columns_for_width =
+            (((logical_width - gap).max(0.0)) / (136.0 + gap)).floor() as usize;
+        let columns = preferred_columns
+            .min(max_columns_for_width.max(1))
+            .min(upgrade_count.max(1));
         let rows_per_page = if logical_height < 640.0 { 2 } else { 3 };
         let page_size = (columns * rows_per_page).max(1);
         let page_count = if upgrade_count == 0 {
@@ -12677,6 +12683,21 @@ mod tests {
         for rect in &layout.card_rects {
             assert!(rect.y + rect.h <= pagination_top + 0.01);
             assert!(rect.y + rect.h <= layout.confirm_rect.y - 0.01);
+        }
+    }
+
+    #[test]
+    fn rest_layout_limits_columns_when_mid_width_would_overflow() {
+        let mut app = active_rest_fixture(dense_rest_test_deck(), 24);
+        app.resize(600.0, 720.0);
+
+        let layout = app.rest_layout().unwrap();
+
+        assert_eq!(layout.page_count, 2);
+        assert_eq!(layout.card_rects.len(), 9);
+        for rect in &layout.card_rects {
+            assert!(rect.x >= 0.0);
+            assert!(rect.x + rect.w <= app.logical_width() + 0.01);
         }
     }
 
