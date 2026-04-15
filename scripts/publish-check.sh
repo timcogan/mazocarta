@@ -20,10 +20,10 @@ scan_tracked() {
   echo "==> ${label}"
 
   local matches=""
-  if matches="$(rg -n --hidden -S "$pattern" -- "${tracked_files[@]}")"; then
+  if matches="$(grep -nHE -- "$pattern" "${tracked_files[@]}")"; then
     if [ -n "$allow_pattern" ]; then
       local filtered_matches=""
-      if filtered_matches="$(printf '%s\n' "$matches" | rg -n -v -S "$allow_pattern")"; then
+      if filtered_matches="$(printf '%s\n' "$matches" | grep -nEv -- "$allow_pattern")"; then
         printf '%s\n' "$filtered_matches"
         echo "$failure_message" >&2
         exit 1
