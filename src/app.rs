@@ -2297,6 +2297,12 @@ impl App {
         }
     }
 
+    fn clear_boot_request_flags(&mut self) {
+        self.resume_request_pending = false;
+        self.install_request_pending = false;
+        self.update_request_pending = false;
+    }
+
     fn request_resume(&mut self) {
         if !self.has_saved_run {
             return;
@@ -2305,9 +2311,8 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
+        self.clear_boot_request_flags();
         self.resume_request_pending = true;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2320,9 +2325,7 @@ impl App {
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
         self.ui.restart_confirm_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2345,9 +2348,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.install_help_open = false;
         self.ui.settings_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2370,9 +2371,8 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
+        self.clear_boot_request_flags();
         self.install_request_pending = true;
-        self.update_request_pending = false;
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2385,8 +2385,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.update_request_pending = true;
         self.refresh_hover();
         self.dirty = true;
@@ -2402,9 +2401,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2459,9 +2456,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
+        self.clear_boot_request_flags();
         self.start_run();
     }
 
@@ -2473,9 +2468,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
-        self.update_request_pending = false;
+        self.clear_boot_request_flags();
         self.clear_run_save_snapshot();
         self.refresh_hover();
         self.dirty = true;
@@ -3475,6 +3468,7 @@ impl App {
                 ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ self.boot_time_ms.to_bits() as u64,
         ));
+        self.clear_boot_request_flags();
         self.restart_count = self.restart_count.wrapping_add(1);
         self.seed_entropy = scramble_seed(seed ^ 0x94D0_49BB_1331_11EB);
         self.dungeon = Some(DungeonRun::new(seed));
@@ -14711,6 +14705,20 @@ mod tests {
 
         app.set_update_available(false);
 
+        assert!(!app.update_request_pending);
+    }
+
+    #[test]
+    fn start_run_clears_boot_request_flags() {
+        let mut app = App::new();
+        app.resume_request_pending = true;
+        app.install_request_pending = true;
+        app.update_request_pending = true;
+
+        app.start_run();
+
+        assert!(!app.resume_request_pending);
+        assert!(!app.install_request_pending);
         assert!(!app.update_request_pending);
     }
 

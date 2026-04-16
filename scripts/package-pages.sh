@@ -66,12 +66,24 @@ stamp_service_worker_version() {
   local short_sha="$3"
   local sw_path="$destination/sw.js"
   local sw_version="${channel}-${BUILD_TIMESTAMP_UTC}-${short_sha}"
+  local expected_line="const CACHE_VERSION = \"${sw_version}\";"
 
   if [[ ! -f "$sw_path" ]]; then
-    return 0
+    echo "Missing service worker to stamp: $sw_path" >&2
+    return 1
   fi
 
   sed -i -E "s/^const CACHE_VERSION = \".*\";/const CACHE_VERSION = \"${sw_version}\";/" "$sw_path"
+
+  if ! grep -qxF "$expected_line" "$sw_path"; then
+    echo "Failed to stamp service worker version in $sw_path" >&2
+    return 1
+  fi
+
+  if grep -q "__MAZOCARTA_SW_VERSION__" "$sw_path"; then
+    echo "Service worker placeholder remained after stamping: $sw_path" >&2
+    return 1
+  fi
 }
 
 build_site() {
