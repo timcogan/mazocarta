@@ -640,10 +640,13 @@ function drawFrame() {
           color,
           animationTimeMs,
         );
+        const parsedAlpha = Number.parseFloat(alpha);
+        const spriteAlpha = Number.isFinite(parsedAlpha) ? parsedAlpha : 1;
+        const clampedAlpha = Math.min(1, Math.max(0, spriteAlpha * animation.alpha));
         const centerX = xValue + wValue * 0.5 + animation.dx * wValue;
         const centerY = yValue + hValue * 0.5 + animation.dy * hValue;
         ctx.save();
-        ctx.globalAlpha *= Number.parseFloat(alpha) * animation.alpha;
+        ctx.globalAlpha = ctx.globalAlpha * clampedAlpha;
         ctx.imageSmoothingEnabled = false;
         ctx.translate(centerX, centerY);
         ctx.scale(animation.scale, animation.scale);
