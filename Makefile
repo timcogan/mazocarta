@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := all
 
-.PHONY: all clean test build build-wasm serve debug publish-check
+.PHONY: all clean test build build-wasm serve debug publish-check enemy-previews
 
 all: build
 
@@ -24,6 +24,9 @@ debug: build
 
 publish-check:
 	./scripts/publish-check.sh
+
+enemy-previews:
+	python3 scripts/render-enemy-previews.py
 
 clean:
 	rm -rf target web/mazocarta.wasm web/.debug-mode.json web/icons web/apple-touch-icon.png

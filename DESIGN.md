@@ -45,6 +45,7 @@ extends the same game instead of drifting into ad hoc patterns.
 - Consumables should visually reuse the card template, but remain clearly utility items: no cost number, compact width, and dedicated combat placement separate from the hand.
 - Empty consumable slots should stay visually subdued, with gray text instead of the active card palette.
 - Event choice cards should use smaller text than module cards and always wrap long titles and body copy within the card bounds.
+- Enemy panels may include a small enemy icon at the top right, aligned with the name row. It should help recognition, stay fully inside the panel, remain secondary to the text, and use level palette cues: green for level 1, purple for level 2, and orange with a more dangerous presence for level 3.
 - Keep `Run Info` compact and readable. Modules should render in a stable order with a little extra space before each module title.
 - When adding new overlays or modals, preserve generous internal padding and clear bottom spacing. Avoid panels that feel text-cramped.
 - Map symbols should stay simple and legible. Event nodes use `?`.

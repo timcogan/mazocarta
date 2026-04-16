@@ -138,6 +138,38 @@ pub extern "C" fn frame_len() -> usize {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
+pub extern "C" fn enemy_sprite_width(code: u32) -> u32 {
+    crate::content::enemy_sprite_layer_def_by_code(code as u8)
+        .map(|sprite| sprite.width as u32)
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn enemy_sprite_height(code: u32) -> u32 {
+    crate::content::enemy_sprite_layer_def_by_code(code as u8)
+        .map(|sprite| sprite.height as u32)
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn enemy_sprite_data_ptr(code: u32) -> *const u8 {
+    crate::content::enemy_sprite_layer_def_by_code(code as u8)
+        .map(|sprite| sprite.bits.as_ptr())
+        .unwrap_or(std::ptr::null())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn enemy_sprite_data_len(code: u32) -> usize {
+    crate::content::enemy_sprite_layer_def_by_code(code as u8)
+        .map(|sprite| sprite.bits.len())
+        .unwrap_or(0)
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
 pub extern "C" fn run_save_generation() -> u32 {
     APP.with(|app| app.borrow().run_save_generation())
 }

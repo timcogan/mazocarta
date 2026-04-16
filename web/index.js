@@ -11,6 +11,35 @@ const encoder = new TextEncoder();
 const blurCanvas = document.createElement("canvas");
 const blurCtx = blurCanvas.getContext("2d");
 const imageCache = new Map();
+const spriteCache = new Map();
+const spriteColorCache = new Map();
+const spriteColorProbeCanvas = document.createElement("canvas");
+spriteColorProbeCanvas.width = 1;
+spriteColorProbeCanvas.height = 1;
+const spriteColorProbeCtx = spriteColorProbeCanvas.getContext("2d");
+const spriteStyleByColor = new Map([
+  ["#8dffad", { tier: 1, variant: "base" }],
+  ["#efff6f", { tier: 1, variant: "detailA" }],
+  ["#39e8ff", { tier: 1, variant: "detailB" }],
+  ["#7fb6ff", { tier: 1, variant: "detailC" }],
+  ["#1fba63", { tier: 1, variant: "detailD" }],
+  ["#ffe39a", { tier: 1, variant: "detailE" }],
+  ["#6f9f7b", { tier: 1, variant: "dim" }],
+  ["#c7a7ff", { tier: 2, variant: "base" }],
+  ["#ff9df3", { tier: 2, variant: "detailA" }],
+  ["#7f89ff", { tier: 2, variant: "detailB" }],
+  ["#79e7ff", { tier: 2, variant: "detailC" }],
+  ["#b65cff", { tier: 2, variant: "detailD" }],
+  ["#ffe9b8", { tier: 2, variant: "detailE" }],
+  ["#7f719b", { tier: 2, variant: "dim" }],
+  ["#ffb852", { tier: 3, variant: "base" }],
+  ["#ffe07a", { tier: 3, variant: "detailA" }],
+  ["#ff6438", { tier: 3, variant: "detailB" }],
+  ["#ff4f8a", { tier: 3, variant: "detailC" }],
+  ["#fff27a", { tier: 3, variant: "detailD" }],
+  ["#9fe7ff", { tier: 3, variant: "detailE" }],
+  ["#9a7657", { tier: 3, variant: "dim" }],
+]);
 
 let wasm = null;
 let rafId = 0;
@@ -207,6 +236,172 @@ function loadImageAsset(src) {
   });
 }
 
+function resolveSpriteColor(color) {
+  if (spriteColorCache.has(color)) {
+    return spriteColorCache.get(color);
+  }
+
+  if (!spriteColorProbeCtx) {
+    const fallback = [255, 255, 255, 255];
+    spriteColorCache.set(color, fallback);
+    return fallback;
+  }
+
+  spriteColorProbeCtx.clearRect(0, 0, 1, 1);
+  spriteColorProbeCtx.fillStyle = color;
+  spriteColorProbeCtx.fillRect(0, 0, 1, 1);
+  const data = spriteColorProbeCtx.getImageData(0, 0, 1, 1).data;
+  const rgba = [data[0], data[1], data[2], data[3]];
+  spriteColorCache.set(color, rgba);
+  return rgba;
+}
+
+function buildEnemySprite(code, color) {
+  if (
+    !wasm ||
+    typeof wasm.enemy_sprite_width !== "function" ||
+    typeof wasm.enemy_sprite_height !== "function" ||
+    typeof wasm.enemy_sprite_data_ptr !== "function" ||
+    typeof wasm.enemy_sprite_data_len !== "function"
+  ) {
+    return null;
+  }
+
+  const width = wasm.enemy_sprite_width(code) >>> 0;
+  const height = wasm.enemy_sprite_height(code) >>> 0;
+  const len = wasm.enemy_sprite_data_len(code) >>> 0;
+  if (!width || !height || !len || len * 8 < width * height) {
+    return null;
+  }
+
+  const ptr = wasm.enemy_sprite_data_ptr(code);
+  const bytes = new Uint8Array(wasm.memory.buffer, ptr, len).slice();
+  const spriteCanvas = document.createElement("canvas");
+  spriteCanvas.width = width;
+  spriteCanvas.height = height;
+  const spriteCtx = spriteCanvas.getContext("2d");
+  if (!spriteCtx) {
+    return null;
+  }
+
+  const imageData = spriteCtx.createImageData(width, height);
+  const pixels = imageData.data;
+  const [r, g, b, a] = resolveSpriteColor(color);
+
+  for (let bitIndex = 0; bitIndex < width * height; bitIndex += 1) {
+    const byte = bytes[bitIndex >> 3];
+    const mask = 0x80 >> (bitIndex & 7);
+    if ((byte & mask) === 0) {
+      continue;
+    }
+    const offset = bitIndex * 4;
+    pixels[offset] = r;
+    pixels[offset + 1] = g;
+    pixels[offset + 2] = b;
+    pixels[offset + 3] = a;
+  }
+
+  spriteCtx.putImageData(imageData, 0, 0);
+  return spriteCanvas;
+}
+
+function getEnemySprite(code, color) {
+  const key = `${code}|${color}`;
+  if (!spriteCache.has(key)) {
+    spriteCache.set(key, buildEnemySprite(code, color));
+  }
+  return spriteCache.get(key);
+}
+
+function spriteAnimationState(code, color, timeMs) {
+  const style = spriteStyleByColor.get(color.toLowerCase()) || { tier: 1, variant: "base" };
+  const { tier, variant } = style;
+  if (variant === "dim") {
+    return { dx: 0, dy: 0, scale: 1, alpha: 1 };
+  }
+
+  const t = timeMs * 0.001;
+  const seed = code * 0.61803398875;
+  const wave = (speed, phase = 0) => Math.sin(t * speed + seed + phase);
+  const pulse = (speed, phase = 0) => wave(speed, phase) * 0.5 + 0.5;
+  const baseBob = wave(1.1 + (code % 5) * 0.12, 0.4) * 0.006;
+  let state;
+
+  switch (variant) {
+    case "detailA":
+      state = {
+        dx: wave(2.8, 0.3) * 0.018,
+        dy: baseBob + wave(2.1, 1.2) * 0.012,
+        scale: 1 + pulse(3.6, 0.9) * 0.045,
+        alpha: 0.76 + pulse(4.4, 0.2) * 0.24,
+      };
+      break;
+    case "detailB":
+      state = {
+        dx: 0,
+        dy: baseBob * 0.6,
+        scale: 1 + pulse(1.0, 1.9) * 0.028,
+        alpha: 0.82 + pulse(1.8, 0.6) * 0.16,
+      };
+      break;
+    case "detailC":
+      state = {
+        dx: wave(3.1, 0.8) * 0.014,
+        dy: baseBob + wave(4.2, 0.7) * 0.01,
+        scale: 1 + pulse(2.6, 1.4) * 0.022,
+        alpha: 0.74 + pulse(5.1, 1.2) * 0.2,
+      };
+      break;
+    case "detailD":
+      state = {
+        dx: wave(2.2, 0.1) * 0.01,
+        dy: baseBob + wave(2.0, 2.1) * 0.008,
+        scale: 1 + pulse(5.8, 0.4) * 0.06,
+        alpha: 0.6 + pulse(6.6, 0.1) * 0.4,
+      };
+      break;
+    case "detailE":
+      state = {
+        dx: wave(1.7, 0.9) * 0.012,
+        dy: baseBob + wave(1.4, 1.7) * 0.012,
+        scale: 1 + pulse(2.1, 0.3) * 0.03,
+        alpha: 0.84 + pulse(2.4, 0.6) * 0.14,
+      };
+      break;
+    case "base":
+    default:
+      state = {
+        dx: wave(1.5, 0.2) * 0.006,
+        dy: baseBob + wave(1.8, 0.5) * 0.012,
+        scale: 1 + wave(1.2, 1.1) * 0.018,
+        alpha: 0.94 + pulse(1.1, 0.3) * 0.06,
+      };
+      break;
+  }
+
+  if (tier === 2) {
+    return {
+      dx: state.dx * 1.14,
+      dy: state.dy * 1.1,
+      scale: 1 + (state.scale - 1) * 1.18,
+      alpha: Math.min(1.08, state.alpha * 1.04),
+    };
+  }
+
+  if (tier === 3) {
+    const surge = Math.max(0, wave(6.2, 0.7)) * 0.018;
+    const snap = variant === "base" ? 0 : wave(8.0, 0.3) * 0.005;
+    return {
+      dx: state.dx * 1.32 + snap,
+      dy: state.dy * 1.26 - surge * (variant === "detailC" || variant === "detailD" ? 0.45 : 0.28),
+      scale: 1 + (state.scale - 1) * 1.45 + surge * 0.4,
+      alpha: Math.min(1.14, state.alpha * 1.08 + surge * 0.24),
+    };
+  }
+
+  return state;
+}
+
 function ensureBlurCanvas() {
   if (blurCanvas.width !== canvas.width || blurCanvas.height !== canvas.height) {
     blurCanvas.width = canvas.width;
@@ -311,6 +506,7 @@ function drawFrame() {
   }
 
   syncBootScreenState();
+  const animationTimeMs = performance.now();
 
   const ptr = wasm.frame_ptr();
   const len = wasm.frame_len();
@@ -426,6 +622,35 @@ function drawFrame() {
           Number.parseFloat(w),
           Number.parseFloat(h),
         );
+        ctx.restore();
+      }
+      continue;
+    }
+
+    if (opcode === "SPRITE") {
+      const [, x, y, w, h, code, color, alpha] = parts;
+      const sprite = getEnemySprite(Number.parseInt(code, 10), color);
+      if (sprite) {
+        const xValue = Number.parseFloat(x);
+        const yValue = Number.parseFloat(y);
+        const wValue = Number.parseFloat(w);
+        const hValue = Number.parseFloat(h);
+        const animation = spriteAnimationState(
+          Number.parseInt(code, 10),
+          color,
+          animationTimeMs,
+        );
+        const parsedAlpha = Number.parseFloat(alpha);
+        const spriteAlpha = Number.isFinite(parsedAlpha) ? parsedAlpha : 1;
+        const clampedAlpha = Math.min(1, Math.max(0, spriteAlpha * animation.alpha));
+        const centerX = xValue + wValue * 0.5 + animation.dx * wValue;
+        const centerY = yValue + hValue * 0.5 + animation.dy * hValue;
+        ctx.save();
+        ctx.globalAlpha = ctx.globalAlpha * clampedAlpha;
+        ctx.imageSmoothingEnabled = false;
+        ctx.translate(centerX, centerY);
+        ctx.scale(animation.scale, animation.scale);
+        ctx.drawImage(sprite, -wValue * 0.5, -hValue * 0.5, wValue, hValue);
         ctx.restore();
       }
       continue;
