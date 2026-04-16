@@ -60,6 +60,32 @@ create_worktree() {
   printf '%s\n' "$worktree"
 }
 
+stamp_service_worker_version() {
+  local destination="$1"
+  local channel="$2"
+  local short_sha="$3"
+  local sw_path="$destination/sw.js"
+  local sw_version="${channel}-${BUILD_TIMESTAMP_UTC}-${short_sha}"
+  local expected_line="const CACHE_VERSION = \"${sw_version}\";"
+
+  if [[ ! -f "$sw_path" ]]; then
+    echo "Missing service worker to stamp: $sw_path" >&2
+    return 1
+  fi
+
+  sed -i -E "s/^const CACHE_VERSION = \".*\";/const CACHE_VERSION = \"${sw_version}\";/" "$sw_path"
+
+  if ! grep -qxF "$expected_line" "$sw_path"; then
+    echo "Failed to stamp service worker version in $sw_path" >&2
+    return 1
+  fi
+
+  if grep -q "__MAZOCARTA_SW_VERSION__" "$sw_path"; then
+    echo "Service worker placeholder remained after stamping: $sw_path" >&2
+    return 1
+  fi
+}
+
 build_site() {
   local ref="$1"
   local channel="$2"
@@ -82,6 +108,7 @@ build_site() {
   mkdir -p "$destination"
   cp -R "$worktree/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  stamp_service_worker_version "$destination" "$channel" "$short_sha"
 }
 
 build_current_site() {
@@ -103,6 +130,7 @@ build_current_site() {
   mkdir -p "$destination"
   cp -R "$ROOT_DIR/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  stamp_service_worker_version "$destination" "$channel" "$short_sha"
 }
 
 write_root_redirect() {

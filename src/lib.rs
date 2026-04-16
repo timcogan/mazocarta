@@ -90,6 +90,18 @@ pub extern "C" fn app_set_install_capability(code: u32) {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
+pub extern "C" fn app_set_update_available(available: u32) {
+    APP.with(|app| app.borrow_mut().set_update_available(available != 0));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_is_boot_screen() -> u32 {
+    APP.with(|app| u32::from(app.borrow().is_boot_screen()))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
 pub extern "C" fn pointer_down(x: f32, y: f32) {
     APP.with(|app| app.borrow_mut().pointer_down(x, y));
 }
@@ -164,6 +176,18 @@ pub extern "C" fn install_request_pending() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn clear_install_request() {
     APP.with(|app| app.borrow_mut().clear_install_request());
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn update_request_pending() -> u32 {
+    APP.with(|app| u32::from(app.borrow().update_request_pending()))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn clear_update_request() {
+    APP.with(|app| app.borrow_mut().clear_update_request());
 }
 
 #[cfg(target_arch = "wasm32")]

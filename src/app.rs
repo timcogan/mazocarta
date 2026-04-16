@@ -126,6 +126,7 @@ const BOOT_CONTINUE_LABEL: &str = "Continue";
 const BOOT_RESTART_LABEL: &str = "Restart";
 const BOOT_SETTINGS_LABEL: &str = "Settings";
 const BOOT_INSTALL_LABEL: &str = "Install";
+const BOOT_UPDATE_LABEL: &str = "Update";
 const BOOT_DEBUG_CLEAR_LABEL: &str = "Reset";
 const BOOT_RESTART_CONFIRM_TITLE: &str = "Are you sure you want to restart?";
 const BOOT_RESTART_CONFIRM_CANCEL_LABEL: &str = "Cancel";
@@ -174,6 +175,7 @@ enum HitTarget {
     Continue,
     Settings,
     Install,
+    Update,
     SettingsModal,
     SettingsLanguageEnglish,
     SettingsLanguageSpanish,
@@ -483,7 +485,47 @@ struct BootButtonsLayout {
     restart_button: Rect,
     settings_button: Rect,
     install_button: Option<Rect>,
+    update_button: Option<Rect>,
     clear_save_button: Option<Rect>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EventChoiceTileStyle<'a> {
+    stroke: &'a str,
+    title_color: &'a str,
+    body_color: &'a str,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MapNodeSymbolLayout {
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TextLineLayout {
+    x: f32,
+    y: f32,
+    size: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StatusRowLayout {
+    x: f32,
+    y: f32,
+    size: f32,
+    gap: f32,
+}
+
+#[derive(Default)]
+struct RestoredStatePayload {
+    reward: Option<RewardState>,
+    shop: Option<ShopState>,
+    event: Option<EventState>,
+    module_select: Option<ModuleSelectState>,
+    combat: Option<CombatState>,
+    log: VecDeque<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -737,6 +779,8 @@ pub(crate) struct App {
     run_save_generation: u32,
     resume_request_pending: bool,
     install_request_pending: bool,
+    update_available: bool,
+    update_request_pending: bool,
     restore_buffer: Vec<u8>,
 }
 
@@ -797,6 +841,8 @@ impl App {
             run_save_generation: 0,
             resume_request_pending: false,
             install_request_pending: false,
+            update_available: false,
+            update_request_pending: false,
             restore_buffer: Vec::new(),
         }
     }
@@ -811,6 +857,10 @@ impl App {
 
     fn logical_center_x(&self) -> f32 {
         self.logical_width() * 0.5
+    }
+
+    pub(crate) fn is_boot_screen(&self) -> bool {
+        matches!(self.screen, AppScreen::Boot)
     }
 
     fn legend_visible(&self) -> bool {
@@ -890,12 +940,35 @@ impl App {
         }
     }
 
+    pub(crate) fn set_update_available(&mut self, available: bool) {
+        if self.update_available == available {
+            return;
+        }
+        self.update_available = available;
+        if !available {
+            self.update_request_pending = false;
+        }
+        self.refresh_hover();
+        self.dirty = true;
+        if self.dirty {
+            self.rebuild_frame();
+        }
+    }
+
     pub(crate) fn install_request_pending(&self) -> bool {
         self.install_request_pending
     }
 
     pub(crate) fn clear_install_request(&mut self) {
         self.install_request_pending = false;
+    }
+
+    pub(crate) fn update_request_pending(&self) -> bool {
+        self.update_request_pending
+    }
+
+    pub(crate) fn clear_update_request(&mut self) {
+        self.update_request_pending = false;
     }
 
     fn tr<'a>(&self, english: &'a str, spanish: &'a str) -> &'a str {
@@ -1961,6 +2034,7 @@ impl App {
                         13 | 32 => self.activate_boot_primary_action(),
                         83 | 115 => self.open_settings(),
                         73 | 105 => self.activate_boot_install_action(),
+                        85 | 117 => self.request_update(),
                         _ => {}
                     }
                 }
@@ -1996,8 +2070,8 @@ impl App {
                 }
                 _ => {}
             },
-            AppScreen::ModuleSelect => match key_code {
-                49..=57 => {
+            AppScreen::ModuleSelect => {
+                if let 49..=57 = key_code {
                     let index = (key_code - 49) as usize;
                     if self
                         .module_select
@@ -2007,8 +2081,7 @@ impl App {
                         self.claim_module_select(index);
                     }
                 }
-                _ => {}
-            },
+            }
             AppScreen::LevelIntro => {
                 if matches!(key_code, 13 | 32 | 27) {
                     self.continue_from_level_intro();
@@ -2056,15 +2129,14 @@ impl App {
                 }
                 _ => {}
             },
-            AppScreen::Event => match key_code {
-                49..=57 => {
+            AppScreen::Event => {
+                if let 49..=57 = key_code {
                     let index = (key_code - 49) as usize;
                     if index < 2 {
                         self.claim_event_choice(index);
                     }
                 }
-                _ => {}
-            },
+            }
             AppScreen::Reward => match key_code {
                 48 => self.skip_reward(),
                 49..=57 => {
@@ -2225,6 +2297,12 @@ impl App {
         }
     }
 
+    fn clear_boot_request_flags(&mut self) {
+        self.resume_request_pending = false;
+        self.install_request_pending = false;
+        self.update_request_pending = false;
+    }
+
     fn request_resume(&mut self) {
         if !self.has_saved_run {
             return;
@@ -2233,8 +2311,8 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
+        self.clear_boot_request_flags();
         self.resume_request_pending = true;
-        self.install_request_pending = false;
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2247,8 +2325,7 @@ impl App {
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
         self.ui.restart_confirm_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2271,8 +2348,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.install_help_open = false;
         self.ui.settings_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2295,8 +2371,22 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
+        self.clear_boot_request_flags();
         self.install_request_pending = true;
+        self.refresh_hover();
+        self.dirty = true;
+    }
+
+    fn request_update(&mut self) {
+        if !matches!(self.screen, AppScreen::Boot) || !self.update_available {
+            return;
+        }
+
+        self.ui.restart_confirm_open = false;
+        self.ui.settings_open = false;
+        self.ui.install_help_open = false;
+        self.clear_boot_request_flags();
+        self.update_request_pending = true;
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2311,8 +2401,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = true;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.refresh_hover();
         self.dirty = true;
     }
@@ -2367,8 +2456,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.start_run();
     }
 
@@ -2380,8 +2468,7 @@ impl App {
         self.ui.restart_confirm_open = false;
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
-        self.resume_request_pending = false;
-        self.install_request_pending = false;
+        self.clear_boot_request_flags();
         self.clear_run_save_snapshot();
         self.refresh_hover();
         self.dirty = true;
@@ -2408,6 +2495,7 @@ impl App {
             HitTarget::Continue => self.request_resume(),
             HitTarget::Settings => self.open_settings(),
             HitTarget::Install => self.activate_boot_install_action(),
+            HitTarget::Update => self.request_update(),
             HitTarget::SettingsLanguageEnglish => self.set_language_from_boot(Language::English),
             HitTarget::SettingsLanguageSpanish => self.set_language_from_boot(Language::Spanish),
             HitTarget::InstallHelpClose => self.close_install_help(),
@@ -2776,12 +2864,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Map,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::ModuleSelect {
@@ -2793,12 +2879,11 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::ModuleSelect,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    Some(module_select),
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        module_select: Some(module_select),
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::LevelIntro { dungeon } => {
@@ -2806,12 +2891,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::LevelIntro,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::Rest { dungeon } => {
@@ -2819,12 +2902,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Rest,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::Shop { dungeon, shop } => {
@@ -2833,12 +2914,11 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Shop,
                     dungeon,
-                    None,
-                    Some(shop),
-                    None,
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        shop: Some(shop),
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::Event { dungeon, event } => {
@@ -2847,12 +2927,11 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Event,
                     dungeon,
-                    None,
-                    None,
-                    Some(event),
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        event: Some(event),
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::Reward { dungeon, reward } => {
@@ -2861,12 +2940,11 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Reward,
                     dungeon,
-                    Some(reward),
-                    None,
-                    None,
-                    None,
-                    None,
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        reward: Some(reward),
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedRunState::Combat { dungeon, combat } => {
@@ -2875,12 +2953,11 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Combat,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(combat),
-                    Self::normalize_saved_log(saved_log),
+                    RestoredStatePayload {
+                        combat: Some(combat),
+                        log: Self::normalize_saved_log(saved_log),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
         }
@@ -2898,12 +2975,7 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Map,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload::default(),
                 )?;
             }
             SavedCheckpoint::ModuleSelect {
@@ -2915,12 +2987,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::ModuleSelect,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    Some(module_select),
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload {
+                        module_select: Some(module_select),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedCheckpoint::LevelIntro { dungeon } => {
@@ -2928,12 +2998,7 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::LevelIntro,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload::default(),
                 )?;
             }
             SavedCheckpoint::Rest { dungeon } => {
@@ -2941,12 +3006,7 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Rest,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload::default(),
                 )?;
             }
             SavedCheckpoint::Shop { dungeon, shop } => {
@@ -2955,12 +3015,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Shop,
                     dungeon,
-                    None,
-                    Some(shop),
-                    None,
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload {
+                        shop: Some(shop),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedCheckpoint::Event { dungeon, event } => {
@@ -2969,12 +3027,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Event,
                     dungeon,
-                    None,
-                    None,
-                    Some(event),
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload {
+                        event: Some(event),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedCheckpoint::Reward { dungeon, reward } => {
@@ -2983,12 +3039,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Reward,
                     dungeon,
-                    Some(reward),
-                    None,
-                    None,
-                    None,
-                    None,
-                    VecDeque::new(),
+                    RestoredStatePayload {
+                        reward: Some(reward),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
             }
             SavedCheckpoint::EncounterStart {
@@ -3016,12 +3070,10 @@ impl App {
                 self.apply_restored_state(
                     AppScreen::Combat,
                     dungeon,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(combat),
-                    VecDeque::new(),
+                    RestoredStatePayload {
+                        combat: Some(combat),
+                        ..RestoredStatePayload::default()
+                    },
                 )?;
                 self.handle_events(&events);
                 self.apply_start_of_combat_modules();
@@ -3323,13 +3375,16 @@ impl App {
         &mut self,
         screen: AppScreen,
         dungeon: DungeonRun,
-        reward: Option<RewardState>,
-        shop: Option<ShopState>,
-        event: Option<EventState>,
-        module_select: Option<ModuleSelectState>,
-        combat: Option<CombatState>,
-        log: VecDeque<String>,
+        restored: RestoredStatePayload,
     ) -> Result<(), String> {
+        let RestoredStatePayload {
+            reward,
+            shop,
+            event,
+            module_select,
+            combat,
+            log,
+        } = restored;
         self.screen = screen;
         self.dungeon = Some(dungeon);
         self.reward = if matches!(screen, AppScreen::Reward) {
@@ -3413,6 +3468,7 @@ impl App {
                 ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
                 ^ self.boot_time_ms.to_bits() as u64,
         ));
+        self.clear_boot_request_flags();
         self.restart_count = self.restart_count.wrapping_add(1);
         self.seed_entropy = scramble_seed(seed ^ 0x94D0_49BB_1331_11EB);
         self.dungeon = Some(DungeonRun::new(seed));
@@ -3612,6 +3668,7 @@ impl App {
             | HitTarget::SettingsLanguageEnglish
             | HitTarget::SettingsLanguageSpanish
             | HitTarget::Install
+            | HitTarget::Update
             | HitTarget::InstallHelpModal
             | HitTarget::InstallHelpClose
             | HitTarget::DebugClearSave => {}
@@ -3742,7 +3799,7 @@ impl App {
         let logical_height = self.logical_height();
         let gap = HAND_MIN_GAP * 1.3;
         let preferred_columns = if logical_width < 540.0 {
-            upgrade_count.min(2).max(1)
+            upgrade_count.clamp(1, 2)
         } else if upgrade_count >= 9 {
             5
         } else if upgrade_count >= 6 {
@@ -3762,7 +3819,7 @@ impl App {
         let page_count = if upgrade_count == 0 {
             0
         } else {
-            (upgrade_count + page_size - 1) / page_size
+            upgrade_count.div_ceil(page_size)
         };
         let current_page = if page_count == 0 {
             0
@@ -4434,6 +4491,7 @@ impl App {
             | HitTarget::SettingsLanguageEnglish
             | HitTarget::SettingsLanguageSpanish
             | HitTarget::Install
+            | HitTarget::Update
             | HitTarget::InstallHelpModal
             | HitTarget::InstallHelpClose
             | HitTarget::DebugClearSave => {}
@@ -4554,9 +4612,8 @@ impl App {
         if matches!(
             action,
             CombatAction::PlayCard { .. } | CombatAction::EndTurn
-        ) {
-            self.ui.selected_card = None;
-        } else if !self.combat.is_player_turn() {
+        ) || !self.combat.is_player_turn()
+        {
             self.ui.selected_card = None;
         } else if let Some(index) = self.ui.selected_card {
             if index >= self.combat.hand_len() {
@@ -5652,6 +5709,18 @@ impl App {
                 settings_button.y + settings_button.h + 18.0,
             )
         });
+        let update_button = self.update_available.then(|| {
+            centered_button_rect(
+                self.tr(BOOT_UPDATE_LABEL, "Actualizar"),
+                START_BUTTON_FONT_SIZE,
+                restart_pad_x,
+                restart_pad_y,
+                center_x,
+                install_button
+                    .map(|button| button.y + button.h + 18.0)
+                    .unwrap_or(settings_button.y + settings_button.h + 18.0),
+            )
+        });
         let clear_save_button = (self.debug_mode && has_saved_run).then(|| {
             centered_button_rect(
                 self.tr(BOOT_DEBUG_CLEAR_LABEL, "Reset"),
@@ -5659,8 +5728,9 @@ impl App {
                 RESET_BUTTON_PAD_X,
                 RESET_BUTTON_PAD_Y,
                 center_x,
-                install_button
+                update_button
                     .map(|button| button.y + button.h + 18.0)
+                    .or_else(|| install_button.map(|button| button.y + button.h + 18.0))
                     .unwrap_or(settings_button.y + settings_button.h + 18.0),
             )
         });
@@ -5670,6 +5740,7 @@ impl App {
             restart_button,
             settings_button,
             install_button,
+            update_button,
             clear_save_button,
         }
     }
@@ -6879,6 +6950,12 @@ impl App {
                 {
                     return Some(HitTarget::Install);
                 }
+                if buttons
+                    .update_button
+                    .is_some_and(|button| button.contains(x, y))
+                {
+                    return Some(HitTarget::Update);
+                }
                 if self.debug_mode
                     && self.has_saved_run
                     && buttons
@@ -7255,6 +7332,16 @@ impl App {
                 install_button,
                 self.ui.hover == Some(HitTarget::Install),
                 self.tr(BOOT_INSTALL_LABEL, "Instalar"),
+                self.boot_time_ms,
+            );
+        }
+
+        if let Some(update_button) = buttons.update_button {
+            render_primary_button(
+                scene,
+                update_button,
+                self.ui.hover == Some(HitTarget::Update),
+                self.tr(BOOT_UPDATE_LABEL, "Actualizar"),
                 self.boot_time_ms,
             );
         }
@@ -7683,13 +7770,15 @@ impl App {
                 *rect,
                 title,
                 &body,
-                if hovered {
-                    COLOR_BLUE_STROKE_STRONG
-                } else {
-                    COLOR_BLUE_STROKE_IDLE
+                EventChoiceTileStyle {
+                    stroke: if hovered {
+                        COLOR_BLUE_STROKE_STRONG
+                    } else {
+                        COLOR_BLUE_STROKE_IDLE
+                    },
+                    title_color: TERM_BLUE_SOFT,
+                    body_color: TERM_GREEN_TEXT,
                 },
-                TERM_BLUE_SOFT,
-                TERM_GREEN_TEXT,
             );
         }
     }
@@ -8411,15 +8500,13 @@ impl App {
         rect: Rect,
         title: &str,
         body: &str,
-        stroke: &str,
-        title_color: &str,
-        body_color: &str,
+        style: EventChoiceTileStyle<'_>,
     ) {
         let metrics = event_box_metrics(rect.w);
         let title_lines = wrap_text(title, metrics.title_chars);
         let body_lines = wrap_text(body, metrics.body_chars);
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, style.stroke, 2.0);
 
         let title_x = rect.x + metrics.pad_x;
         let mut title_y = rect.y + metrics.top_pad + metrics.title_size;
@@ -8429,7 +8516,7 @@ impl App {
                 title_y,
                 metrics.title_size,
                 "left",
-                title_color,
+                style.title_color,
                 "label",
                 line,
             );
@@ -8452,7 +8539,7 @@ impl App {
                 body_y,
                 metrics.body_size,
                 "left",
-                body_color,
+                style.body_color,
                 "body",
                 &line,
             );
@@ -8723,9 +8810,9 @@ impl App {
         }
 
         for edge in &layout.edges {
-            let edge_color = if dungeon.is_visited(edge.from_id) && dungeon.is_visited(edge.to_id) {
-                COLOR_WHITE_STROKE_PATH
-            } else if dungeon.is_visited(edge.from_id) && dungeon.is_available(edge.to_id) {
+            let edge_color = if dungeon.is_visited(edge.from_id)
+                && (dungeon.is_visited(edge.to_id) || dungeon.is_available(edge.to_id))
+            {
                 COLOR_WHITE_STROKE_PATH
             } else {
                 COLOR_GRAY_STROKE_DISABLED
@@ -8785,9 +8872,11 @@ impl App {
                 scene,
                 dungeon_node.kind,
                 dungeon.boss_symbol_sides(),
-                node.center_x,
-                node.center_y,
-                glyph_size * 0.42,
+                MapNodeSymbolLayout {
+                    center_x: node.center_x,
+                    center_y: node.center_y,
+                    radius: glyph_size * 0.42,
+                },
                 &text_color,
             );
         }
@@ -8802,11 +8891,14 @@ impl App {
         scene: &mut SceneBuilder,
         kind: RoomKind,
         boss_sides: usize,
-        center_x: f32,
-        center_y: f32,
-        radius: f32,
+        layout: MapNodeSymbolLayout,
         color: &str,
     ) {
+        let MapNodeSymbolLayout {
+            center_x,
+            center_y,
+            radius,
+        } = layout;
         match kind {
             RoomKind::Start => scene.rect(
                 Rect {
@@ -8980,9 +9072,11 @@ impl App {
                 scene,
                 *kind,
                 boss_sides,
-                symbol_x,
-                row_center_y,
-                symbol_radius,
+                MapNodeSymbolLayout {
+                    center_x: symbol_x,
+                    center_y: row_center_y,
+                    radius: symbol_radius,
+                },
                 &symbol_color,
             );
             scene.text(
@@ -9072,11 +9166,7 @@ impl App {
         let hover_target = self.ui.hover == Some(HitTarget::Enemy(enemy_index));
         let is_alive = enemy.fighter.hp > 0;
 
-        let enemy_fill = if self.ui.selected_card.is_some() {
-            COLOR_TILE_FILL
-        } else {
-            COLOR_TILE_FILL
-        };
+        let enemy_fill = COLOR_TILE_FILL;
         let enemy_stroke = if !is_alive {
             COLOR_GRAY_STROKE_DISABLED
         } else if hover_target {
@@ -9099,9 +9189,11 @@ impl App {
         );
         self.render_actor_stats_line(
             scene,
-            text_x,
-            stats_y,
-            metrics.stats_size,
+            TextLineLayout {
+                x: text_x,
+                y: stats_y,
+                size: metrics.stats_size,
+            },
             Actor::Enemy(enemy_index),
             displayed.hp,
             enemy.fighter.max_hp,
@@ -9109,10 +9201,12 @@ impl App {
         );
         self.render_status_row_left_sized(
             scene,
-            text_x,
-            status_y,
-            metrics.status_size,
-            metrics.status_gap,
+            StatusRowLayout {
+                x: text_x,
+                y: status_y,
+                size: metrics.status_size,
+                gap: metrics.status_gap,
+            },
             enemy.fighter.statuses,
             enemy.on_hit_bleed,
         );
@@ -9164,9 +9258,7 @@ impl App {
             layout.tile_scale,
             layout.tile_insets,
         );
-        let stroke = if targeted {
-            COLOR_CYAN_STROKE_TARGET
-        } else if hovered {
+        let stroke = if targeted || hovered {
             COLOR_CYAN_STROKE_TARGET
         } else {
             COLOR_GREEN_STROKE_CARD
@@ -9191,9 +9283,11 @@ impl App {
         );
         self.render_actor_stats_line(
             scene,
-            text_x,
-            stats_y,
-            metrics.stats_size,
+            TextLineLayout {
+                x: text_x,
+                y: stats_y,
+                size: metrics.stats_size,
+            },
             Actor::Player,
             displayed.hp,
             self.combat.player.fighter.max_hp,
@@ -9201,10 +9295,12 @@ impl App {
         );
         self.render_status_row_left_sized(
             scene,
-            text_x,
-            status_y,
-            metrics.status_size,
-            metrics.status_gap,
+            StatusRowLayout {
+                x: text_x,
+                y: status_y,
+                size: metrics.status_size,
+                gap: metrics.status_gap,
+            },
             self.combat.player.fighter.statuses,
             0,
         );
@@ -9238,9 +9334,7 @@ impl App {
     fn render_actor_stats_line(
         &self,
         scene: &mut SceneBuilder,
-        x: f32,
-        y: f32,
-        size: f32,
+        layout: TextLineLayout,
         actor: Actor,
         hp: i32,
         max_hp: i32,
@@ -9251,7 +9345,7 @@ impl App {
         let block_text = block.to_string();
         let hp_color = animated_stat_color(self, actor, CombatStat::Hp);
         let block_color = animated_stat_color(self, actor, CombatStat::Block);
-        let mut cursor = x;
+        let mut cursor = layout.x;
 
         for (text, color) in [
             (format!("{SHIELD_LABEL} "), TERM_GREEN_TEXT),
@@ -9265,27 +9359,24 @@ impl App {
             ),
             (block_text, block_color),
         ] {
-            scene.text(cursor, y, size, "left", color, "body", &text);
-            cursor += text_width(&text, size);
+            scene.text(cursor, layout.y, layout.size, "left", color, "body", &text);
+            cursor += text_width(&text, layout.size);
         }
     }
 
     fn render_status_row_left_sized(
         &self,
         scene: &mut SceneBuilder,
-        x: f32,
-        y: f32,
-        size: f32,
-        gap: f32,
+        layout: StatusRowLayout,
         statuses: StatusSet,
         primed_bleed: u8,
     ) {
         let labels = status_labels(statuses, primed_bleed, self.language);
         if labels.is_empty() {
             scene.text(
-                x,
-                y + size,
-                size,
+                layout.x,
+                layout.y + layout.size,
+                layout.size,
                 "left",
                 TERM_GREEN_FAINT,
                 "body",
@@ -9294,13 +9385,21 @@ impl App {
             return;
         }
 
-        let mut cursor = x;
+        let mut cursor = layout.x;
         let last_index = labels.len().saturating_sub(1);
         for (index, (label, color)) in labels.iter().enumerate() {
-            scene.text(cursor, y + size, size, "left", color, "body", label);
-            cursor += status_label_width(label, size);
+            scene.text(
+                cursor,
+                layout.y + layout.size,
+                layout.size,
+                "left",
+                color,
+                "body",
+                label,
+            );
+            cursor += status_label_width(label, layout.size);
             if index < last_index {
-                cursor += gap;
+                cursor += layout.gap;
             }
         }
     }
@@ -9424,13 +9523,7 @@ impl App {
         let active = self.combat.is_player_turn() && !self.combat_input_locked();
         let hovered = self.ui.hover == Some(HitTarget::EndTurn);
         let font_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
-        let fill = if !active {
-            COLOR_TILE_FILL
-        } else if hovered {
-            COLOR_TILE_FILL
-        } else {
-            COLOR_TILE_FILL
-        };
+        let fill = COLOR_TILE_FILL;
         let stroke = if !active {
             COLOR_CYAN_STROKE_DISABLED
         } else if hovered {
@@ -11634,6 +11727,7 @@ impl SceneBuilder {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn regular_polygon(
         &mut self,
         center_x: f32,
@@ -11653,6 +11747,7 @@ impl SceneBuilder {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn triangle(
         &mut self,
         x1: f32,
@@ -11688,6 +11783,7 @@ impl SceneBuilder {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn text(
         &mut self,
         x: f32,
@@ -13178,7 +13274,17 @@ mod tests {
         let app = App::new();
         let mut scene = SceneBuilder::new();
 
-        app.render_map_node_symbol(&mut scene, RoomKind::Shop, 5, 100.0, 120.0, 10.0, "#ffaa00");
+        app.render_map_node_symbol(
+            &mut scene,
+            RoomKind::Shop,
+            5,
+            MapNodeSymbolLayout {
+                center_x: 100.0,
+                center_y: 120.0,
+                radius: 10.0,
+            },
+            "#ffaa00",
+        );
 
         let frame = scene.finish();
         assert!(frame.contains("RECT|92.93|120.00|14.14|7.07|0.00|#ffaa00|transparent|0.00"));
@@ -13196,9 +13302,11 @@ mod tests {
             &mut scene,
             RoomKind::Event,
             5,
-            100.0,
-            120.0,
-            10.0,
+            MapNodeSymbolLayout {
+                center_x: 100.0,
+                center_y: 120.0,
+                radius: 10.0,
+            },
             "#88aaff",
         );
 
@@ -14506,6 +14614,13 @@ mod tests {
     }
 
     #[test]
+    fn boot_update_button_is_hidden_when_no_update_is_available() {
+        let app = App::new();
+
+        assert!(app.boot_buttons_layout(false).update_button.is_none());
+    }
+
+    #[test]
     fn boot_install_button_appears_below_settings_when_available() {
         let mut app = App::new();
         app.set_install_capability(InstallCapability::PromptAvailable);
@@ -14532,6 +14647,82 @@ mod tests {
     }
 
     #[test]
+    fn boot_update_button_appears_below_settings_when_available_without_install() {
+        let mut app = App::new();
+        app.set_update_available(true);
+
+        let buttons = app.boot_buttons_layout(false);
+        let update_button = buttons.update_button.unwrap();
+
+        assert!(update_button.y >= buttons.settings_button.y + buttons.settings_button.h);
+        assert!(buttons.install_button.is_none());
+    }
+
+    #[test]
+    fn boot_update_button_appears_below_install_when_both_are_visible() {
+        let mut app = App::new();
+        app.set_update_available(true);
+        app.set_install_capability(InstallCapability::PromptAvailable);
+
+        let buttons = app.boot_buttons_layout(false);
+        let install_button = buttons.install_button.unwrap();
+        let update_button = buttons.update_button.unwrap();
+
+        assert!(update_button.y >= install_button.y + install_button.h);
+    }
+
+    #[test]
+    fn boot_update_button_queues_update_request() {
+        let mut app = App::new();
+        app.set_update_available(true);
+        let update_button = app.boot_buttons_layout(false).update_button.unwrap();
+
+        app.handle_boot_pointer(
+            update_button.x + update_button.w * 0.5,
+            update_button.y + update_button.h * 0.5,
+        );
+
+        assert!(app.update_request_pending);
+        assert!(!app.install_request_pending);
+    }
+
+    #[test]
+    fn boot_update_hotkey_queues_update_request() {
+        let mut app = App::new();
+        app.set_update_available(true);
+
+        app.key_down(85);
+
+        assert!(app.update_request_pending);
+    }
+
+    #[test]
+    fn boot_update_request_clears_when_update_becomes_unavailable() {
+        let mut app = App::new();
+        app.set_update_available(true);
+        app.request_update();
+        assert!(app.update_request_pending);
+
+        app.set_update_available(false);
+
+        assert!(!app.update_request_pending);
+    }
+
+    #[test]
+    fn start_run_clears_boot_request_flags() {
+        let mut app = App::new();
+        app.resume_request_pending = true;
+        app.install_request_pending = true;
+        app.update_request_pending = true;
+
+        app.start_run();
+
+        assert!(!app.resume_request_pending);
+        assert!(!app.install_request_pending);
+        assert!(!app.update_request_pending);
+    }
+
+    #[test]
     fn boot_install_button_opens_ios_install_help_modal() {
         let mut app = App::new();
         app.set_install_capability(InstallCapability::IosGuide);
@@ -14544,6 +14735,18 @@ mod tests {
 
         assert!(app.ui.install_help_open);
         assert!(!app.install_request_pending);
+    }
+
+    #[test]
+    fn boot_screen_flag_tracks_return_to_menu() {
+        let mut app = App::new();
+        assert!(app.is_boot_screen());
+
+        app.start_run();
+        assert!(!app.is_boot_screen());
+
+        app.return_to_menu();
+        assert!(app.is_boot_screen());
     }
 
     #[test]

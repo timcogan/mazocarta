@@ -20,6 +20,10 @@ let logicalHeight = 720;
 let lastRunSaveGeneration = 0;
 let lastLanguageGeneration = 0;
 let deferredInstallPrompt = null;
+let serviceWorkerRegistration = null;
+let waitingServiceWorker = null;
+let reloadOnNextControllerChange = false;
+let lastBootScreenVisible = null;
 const MONO_STACK =
   '"IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Liberation Mono", monospace';
 const GAME_TITLE = "Mazocarta";
@@ -306,6 +310,8 @@ function drawFrame() {
     return;
   }
 
+  syncBootScreenState();
+
   const ptr = wasm.frame_ptr();
   const len = wasm.frame_len();
   const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
@@ -573,6 +579,64 @@ function syncInstallCapability() {
   return true;
 }
 
+function syncUpdateAvailability() {
+  if (!wasm || typeof wasm.app_set_update_available !== "function") {
+    return false;
+  }
+  const available = waitingServiceWorker && window.navigator.serviceWorker?.controller ? 1 : 0;
+  wasm.app_set_update_available(available);
+  return true;
+}
+
+function setWaitingServiceWorker(worker) {
+  const nextWaitingWorker = window.navigator.serviceWorker?.controller ? worker : null;
+  const changed = waitingServiceWorker !== nextWaitingWorker;
+  waitingServiceWorker = nextWaitingWorker;
+  syncUpdateAvailability();
+  if (changed && wasm) {
+    drawFrame();
+  }
+  return changed;
+}
+
+function syncWaitingServiceWorker(registration = serviceWorkerRegistration) {
+  setWaitingServiceWorker(registration?.waiting ?? null);
+}
+
+function watchInstallingServiceWorker(worker, registration) {
+  if (!worker) {
+    return;
+  }
+  worker.addEventListener("statechange", () => {
+    if (worker.state === "installed" || worker.state === "redundant") {
+      syncWaitingServiceWorker(registration);
+    }
+  });
+}
+
+function syncBootScreenState() {
+  if (!wasm || typeof wasm.app_is_boot_screen !== "function") {
+    return false;
+  }
+
+  const bootScreenVisible = !!wasm.app_is_boot_screen();
+  const enteredBoot = bootScreenVisible && lastBootScreenVisible === false;
+  lastBootScreenVisible = bootScreenVisible;
+
+  if (!enteredBoot) {
+    return false;
+  }
+
+  syncWaitingServiceWorker();
+  if (serviceWorkerRegistration) {
+    void serviceWorkerRegistration
+      .update()
+      .then(() => syncWaitingServiceWorker(serviceWorkerRegistration))
+      .catch(console.error);
+  }
+  return true;
+}
+
 function syncRunSaveSnapshot() {
   if (
     !wasm ||
@@ -628,7 +692,7 @@ function syncStoredLanguage() {
   return writeStoredLanguage(wasm.app_language_code());
 }
 
-async function flushInstallRequest() {
+async function flushInstallRequest({ allowPrivilegedAction = false } = {}) {
   if (
     !wasm ||
     typeof wasm.install_request_pending !== "function" ||
@@ -638,6 +702,10 @@ async function flushInstallRequest() {
   }
 
   if (!wasm.install_request_pending()) {
+    return false;
+  }
+
+  if (!allowPrivilegedAction) {
     return false;
   }
 
@@ -658,6 +726,40 @@ async function flushInstallRequest() {
 
   deferredInstallPrompt = null;
   syncInstallCapability();
+  return true;
+}
+
+async function flushUpdateRequest({ allowPrivilegedAction = false } = {}) {
+  if (
+    !wasm ||
+    typeof wasm.update_request_pending !== "function" ||
+    typeof wasm.clear_update_request !== "function"
+  ) {
+    return false;
+  }
+
+  if (!wasm.update_request_pending()) {
+    return false;
+  }
+
+  if (!allowPrivilegedAction) {
+    return false;
+  }
+
+  wasm.clear_update_request();
+  if (!waitingServiceWorker) {
+    syncWaitingServiceWorker();
+    return true;
+  }
+
+  reloadOnNextControllerChange = true;
+  try {
+    waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+  } catch (error) {
+    reloadOnNextControllerChange = false;
+    console.error(error);
+    syncWaitingServiceWorker();
+  }
   return true;
 }
 
@@ -699,12 +801,13 @@ function flushResumeRequest() {
   return true;
 }
 
-async function flushHostEffects() {
-  const installHandled = await flushInstallRequest();
+async function flushHostEffects(options = { allowPrivilegedAction: false }) {
+  const installHandled = await flushInstallRequest(options);
+  const updateHandled = await flushUpdateRequest(options);
   syncStoredLanguage();
   syncRunSaveSnapshot();
   const resumed = flushResumeRequest();
-  if (installHandled || resumed) {
+  if (installHandled || updateHandled || resumed) {
     drawFrame();
   }
   await flushShareRequest();
@@ -985,7 +1088,7 @@ function onPointerDown(event) {
   }
   wasm.pointer_down(point.x, point.y);
   drawFrame();
-  void flushHostEffects();
+  void flushHostEffects({ allowPrivilegedAction: false });
 }
 
 function onPointerUp(event) {
@@ -996,8 +1099,9 @@ function onPointerUp(event) {
   wasm.pointer_up(point.x, point.y);
   if (event.pointerType === "touch") {
     clearHover();
-    drawFrame();
   }
+  drawFrame();
+  void flushHostEffects({ allowPrivilegedAction: true });
 }
 
 function onPointerCancel() {
@@ -1041,7 +1145,7 @@ function onKeyDown(event) {
   mixEntropy();
   wasm.key_down(code);
   drawFrame();
-  void flushHostEffects();
+  void flushHostEffects({ allowPrivilegedAction: true });
 }
 
 async function registerServiceWorker() {
@@ -1050,10 +1154,35 @@ async function registerServiceWorker() {
   }
 
   try {
-    await window.navigator.serviceWorker.register("./sw.js", {
+    const registration = await window.navigator.serviceWorker.register("./sw.js", {
       scope: "./",
       updateViaCache: "none",
     });
+    serviceWorkerRegistration = registration;
+    syncWaitingServiceWorker(registration);
+    if (registration.installing) {
+      watchInstallingServiceWorker(registration.installing, registration);
+    }
+    registration.addEventListener("updatefound", () => {
+      watchInstallingServiceWorker(registration.installing, registration);
+    });
+    window.navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (reloadOnNextControllerChange) {
+        reloadOnNextControllerChange = false;
+        window.location.reload();
+        return;
+      }
+      syncWaitingServiceWorker(registration);
+      if (wasm) {
+        drawFrame();
+      }
+    });
+    try {
+      await registration.update();
+    } catch (error) {
+      console.error(error);
+    }
+    syncWaitingServiceWorker(registration);
   } catch (error) {
     console.error(error);
   }
@@ -1080,7 +1209,11 @@ async function loadWasm() {
       wasm.app_set_debug_mode(debugEnabled ? 1 : 0);
     }
     syncInstallCapability();
+    syncWaitingServiceWorker();
+    syncUpdateAvailability();
     syncStoredRunAvailability();
+    lastBootScreenVisible =
+      typeof wasm.app_is_boot_screen === "function" ? !!wasm.app_is_boot_screen() : null;
     lastLanguageGeneration =
       typeof wasm.app_language_generation === "function" ? wasm.app_language_generation() : 0;
     lastRunSaveGeneration =
@@ -1136,6 +1269,10 @@ window.addEventListener("pagehide", () => {
 });
 window.addEventListener("pageshow", () => {
   syncInstallCapability();
+  syncWaitingServiceWorker();
+  if (serviceWorkerRegistration) {
+    void serviceWorkerRegistration.update().catch(console.error);
+  }
   drawFrame();
 });
 window.addEventListener("beforeunload", () => {

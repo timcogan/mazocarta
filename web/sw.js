@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "__MAZOCARTA_SW_VERSION__";
 const APP_SCOPE_URL = new URL("./", self.location.href);
 const APP_SCOPE = APP_SCOPE_URL.toString();
 const INDEX_URL = new URL("./index.html", self.location.href).toString();
@@ -25,20 +25,33 @@ const PRECACHE_URLS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) => cache.addAll(PRECACHE_URLS)),
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) =>
+        cache.addAll(PRECACHE_URLS.map((url) => new Request(url, { cache: "reload" }))),
+      ),
   );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== SHELL_CACHE)
-          .map((key) => caches.delete(key)),
-      ),
-    ),
+    caches
+      .keys()
+      .then((keys) =>
+        Promise.all(
+          keys
+            .filter((key) => key.startsWith(CACHE_PREFIX) && key !== SHELL_CACHE)
+            .map((key) => caches.delete(key)),
+        ),
+      )
+      .then(() => self.clients.claim()),
   );
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    void self.skipWaiting();
+  }
 });
 
 function shouldBypass(url) {
