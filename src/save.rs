@@ -405,7 +405,7 @@ pub(crate) fn serialize_enemy_profile(profile: EnemyProfileId) -> &'static str {
         EnemyProfileId::HexarchCore => "hexarch_core",
         EnemyProfileId::NullRaider => "null_raider",
         EnemyProfileId::RiftStalker => "rift_stalker",
-        EnemyProfileId::BulwarkDrone => "bulwark_drone",
+        EnemyProfileId::SiegeSpider => "siege_spider",
         EnemyProfileId::RiftBastion => "rift_bastion",
         EnemyProfileId::HeptarchCore => "heptarch_core",
     }
@@ -425,7 +425,7 @@ pub(crate) fn resolve_enemy_profile(id: &str) -> Option<EnemyProfileId> {
         "hexarch_core" => Some(EnemyProfileId::HexarchCore),
         "null_raider" => Some(EnemyProfileId::NullRaider),
         "rift_stalker" => Some(EnemyProfileId::RiftStalker),
-        "bulwark_drone" => Some(EnemyProfileId::BulwarkDrone),
+        "siege_spider" => Some(EnemyProfileId::SiegeSpider),
         "rift_bastion" => Some(EnemyProfileId::RiftBastion),
         "heptarch_core" => Some(EnemyProfileId::HeptarchCore),
         _ => None,

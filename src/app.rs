@@ -6,8 +6,9 @@ use crate::combat::{
     EnemyState, FighterState, PlayerState, StatusKind, StatusSet,
 };
 use crate::content::{
-    CardDef, CardId, EnemyIntent, EventId, Language, ModuleDef, ModuleId, RewardTier, ShopOffer,
-    all_base_cards, boss_module_choices, default_starter_module, localized_card_def,
+    CardDef, CardId, EnemyIntent, EnemyProfileId, EnemySpriteLayerTone, EventId, Language,
+    ModuleDef, ModuleId, RewardTier, ShopOffer, all_base_cards, boss_module_choices,
+    default_starter_module, enemy_profile_level, enemy_sprite_def, localized_card_def,
     localized_card_name, localized_enemy_intent, localized_enemy_name, localized_event_choice_body,
     localized_event_choice_title, localized_event_def, localized_module_def, localized_text,
     reward_choices, shop_offers, starter_module_choices, upgraded_card,
@@ -78,6 +79,10 @@ const COLOR_WHITE_STROKE_PATH: &str = "rgba(255, 255, 255, 0.78)";
 const BUTTON_RADIUS: f32 = 8.0;
 const CARD_RADIUS: f32 = 8.0;
 const ENEMY_PANEL_RADIUS: f32 = 8.0;
+const ENEMY_PANEL_ICON_SIZE_RATIO: f32 = 0.9;
+const ENEMY_PANEL_ICON_GAP_RATIO: f32 = 0.34;
+const ENEMY_PANEL_ICON_ALPHA: f32 = 0.92;
+const ENEMY_PANEL_ICON_DISABLED_ALPHA: f32 = 0.78;
 const CARD_WIDTH: f32 = 190.0;
 const CARD_HEIGHT: f32 = 160.0;
 const HAND_MIN_GAP: f32 = 10.0;
@@ -713,6 +718,7 @@ struct EnemyPanelMetrics {
     info_body_chars: usize,
     info_gap: f32,
     title_size: f32,
+    title_icon_size: f32,
     stats_size: f32,
     status_size: f32,
     status_gap: f32,
@@ -9177,7 +9183,26 @@ impl App {
             COLOR_GREEN_STROKE_PANEL
         };
         let enemy_stroke = actor_panel_flash_stroke(self, Actor::Enemy(enemy_index), enemy_stroke);
+        let sprite = enemy_sprite_def(enemy.profile);
+        let icon_rect = enemy_panel_icon_rect(
+            rect,
+            layout.tile_insets,
+            title_y,
+            metrics.title_size,
+            metrics.title_icon_size,
+            sprite.width,
+            sprite.height,
+        );
+        let icon_alpha = enemy_panel_icon_alpha(enemy.profile, is_alive);
         scene.rect(rect, ENEMY_PANEL_RADIUS, enemy_fill, enemy_stroke, 2.0);
+        for layer in sprite.layers {
+            scene.sprite(
+                icon_rect,
+                layer.code,
+                enemy_sprite_layer_color(enemy.profile, layer.tone, is_alive),
+                icon_alpha,
+            );
+        }
         scene.text(
             text_x,
             title_y,
@@ -11280,6 +11305,8 @@ fn enemy_panel_metrics(
     let title_size = 18.0 * scale;
     let stats_size = 18.0 * scale;
     let status_size = 14.0 * scale;
+    let title_icon_size = title_size * ENEMY_PANEL_ICON_SIZE_RATIO;
+    let title_icon_gap = title_size * ENEMY_PANEL_ICON_GAP_RATIO;
     let info_body_breathing_room = text_bottom_breathing_room(info_body_size);
     let status_gap = 18.0 * scale;
     let content_pad_x = tile_insets.pad_x;
@@ -11308,12 +11335,19 @@ fn enemy_panel_metrics(
     } else {
         status_row_width(&status_labels, status_size, status_gap)
     };
+    let title_icon_width = enemy
+        .map(|enemy| {
+            let sprite = enemy_sprite_def(enemy.profile);
+            title_icon_size * sprite.width.max(1) as f32 / sprite.height.max(1) as f32
+        })
+        .unwrap_or(title_icon_size);
+    let name_row_width = text_width(enemy_name, title_size) + title_icon_gap + title_icon_width;
     let inner_width = text_width(&stats_line, stats_size)
         .max(text_width(
             app.tr(NEXT_SIGNAL_LABEL, "SIGUIENTE SEÑAL"),
             info_label_size,
         ))
-        .max(text_width(enemy_name, title_size))
+        .max(name_row_width)
         .max(status_width);
     let width = inner_width + content_pad_x * 2.0;
     let info_body_chars = ((inner_width / (info_body_size * 0.62)).floor() as usize).max(18);
@@ -11341,6 +11375,7 @@ fn enemy_panel_metrics(
         info_body_chars,
         info_gap,
         title_size,
+        title_icon_size,
         stats_size,
         status_size,
         status_gap,
@@ -11348,6 +11383,109 @@ fn enemy_panel_metrics(
         line_gap,
         width,
         height,
+    }
+}
+
+fn enemy_panel_icon_rect(
+    rect: Rect,
+    tile_insets: TileInsets,
+    title_baseline_y: f32,
+    title_size: f32,
+    icon_size: f32,
+    sprite_width: u8,
+    sprite_height: u8,
+) -> Rect {
+    let sprite_w = sprite_width.max(1) as f32;
+    let sprite_h = sprite_height.max(1) as f32;
+    let draw_w = icon_size * sprite_w / sprite_h;
+    let title_descender = text_bottom_breathing_room(title_size);
+    let text_mid_y = title_baseline_y - title_size + (title_size + title_descender) * 0.5;
+
+    Rect {
+        x: rect.x + rect.w - tile_insets.pad_x - draw_w,
+        y: text_mid_y - icon_size * 0.5,
+        w: draw_w,
+        h: icon_size,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct EnemySpritePalette {
+    base: &'static str,
+    detail_a: &'static str,
+    detail_b: &'static str,
+    detail_c: &'static str,
+    detail_d: &'static str,
+    detail_e: &'static str,
+    dim: &'static str,
+}
+
+const ENEMY_LEVEL_ONE_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
+    base: TERM_GREEN_SOFT,
+    detail_a: "#efff6f",
+    detail_b: "#39e8ff",
+    detail_c: "#7fb6ff",
+    detail_d: "#1fba63",
+    detail_e: "#ffe39a",
+    dim: TERM_GREEN_DIM,
+};
+
+const ENEMY_LEVEL_TWO_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
+    base: "#c7a7ff",
+    detail_a: "#ff9df3",
+    detail_b: "#7f89ff",
+    detail_c: "#79e7ff",
+    detail_d: "#b65cff",
+    detail_e: "#ffe9b8",
+    dim: "#7f719b",
+};
+
+const ENEMY_LEVEL_THREE_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
+    base: TERM_ORANGE,
+    detail_a: "#ffe07a",
+    detail_b: "#ff6438",
+    detail_c: "#ff4f8a",
+    detail_d: "#fff27a",
+    detail_e: "#9fe7ff",
+    dim: "#9a7657",
+};
+
+fn enemy_sprite_palette(profile: EnemyProfileId) -> EnemySpritePalette {
+    match enemy_profile_level(profile) {
+        1 => ENEMY_LEVEL_ONE_SPRITE_PALETTE,
+        2 => ENEMY_LEVEL_TWO_SPRITE_PALETTE,
+        _ => ENEMY_LEVEL_THREE_SPRITE_PALETTE,
+    }
+}
+
+fn enemy_panel_icon_alpha(profile: EnemyProfileId, is_alive: bool) -> f32 {
+    match (enemy_profile_level(profile), is_alive) {
+        (1, true) => ENEMY_PANEL_ICON_ALPHA - 0.04,
+        (2, true) => ENEMY_PANEL_ICON_ALPHA,
+        (_, true) => ENEMY_PANEL_ICON_ALPHA + 0.05,
+        (1, false) => ENEMY_PANEL_ICON_DISABLED_ALPHA - 0.08,
+        (2, false) => ENEMY_PANEL_ICON_DISABLED_ALPHA - 0.04,
+        (_, false) => ENEMY_PANEL_ICON_DISABLED_ALPHA,
+    }
+}
+
+fn enemy_sprite_layer_color(
+    profile: EnemyProfileId,
+    tone: EnemySpriteLayerTone,
+    is_alive: bool,
+) -> &'static str {
+    let palette = enemy_sprite_palette(profile);
+    if !is_alive {
+        return palette.dim;
+    }
+
+    match tone {
+        EnemySpriteLayerTone::Base => palette.base,
+        EnemySpriteLayerTone::DetailA => palette.detail_a,
+        EnemySpriteLayerTone::DetailB => palette.detail_b,
+        EnemySpriteLayerTone::DetailC => palette.detail_c,
+        EnemySpriteLayerTone::DetailD => palette.detail_d,
+        EnemySpriteLayerTone::DetailE => palette.detail_e,
     }
 }
 
@@ -11727,6 +11865,18 @@ impl SceneBuilder {
         );
     }
 
+    fn sprite(&mut self, rect: Rect, sprite_code: u8, color: &str, alpha: f32) {
+        let _ = writeln!(
+            self.output,
+            "SPRITE|{:.2}|{:.2}|{:.2}|{:.2}|{sprite_code}|{}|{alpha:.3}",
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            sanitize(color)
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn regular_polygon(
         &mut self,
@@ -11813,7 +11963,8 @@ fn sanitize(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::content::{
-        CardDef, CardTarget, EnemyProfileId, ModuleDef, localized_enemy_name, module_def,
+        CardDef, CardTarget, EnemyProfileId, ModuleDef, enemy_sprite_def, localized_enemy_name,
+        module_def,
     };
 
     const TEST_RUN_SEED: u64 = 0x0BAD_5EED;
@@ -11849,6 +12000,14 @@ mod tests {
             .first()
             .copied()
             .expect("combat layout should have a primary enemy rect")
+    }
+
+    fn enemy_sprite_codes(profile: EnemyProfileId) -> Vec<u8> {
+        enemy_sprite_def(profile)
+            .layers
+            .iter()
+            .map(|layer| layer.code)
+            .collect()
     }
 
     fn set_primary_enemy_intent(app: &mut App, profile: EnemyProfileId, intent_index: usize) {
@@ -12073,6 +12232,24 @@ mod tests {
             && inner.y + inner.h <= outer.y + outer.h + 0.01
     }
 
+    fn frame_sprite_entries(frame: &str) -> Vec<(u8, Rect)> {
+        frame
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('|');
+                if parts.next()? != "SPRITE" {
+                    return None;
+                }
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                let w = parts.next()?.parse().ok()?;
+                let h = parts.next()?.parse().ok()?;
+                let code = parts.next()?.parse().ok()?;
+                Some((code, Rect { x, y, w, h }))
+            })
+            .collect()
+    }
+
     fn button_label_fits(button: FittedPrimaryButton, label: &str) -> bool {
         text_width(label, button.font_size) <= button.rect.w + 0.01
             && button.font_size <= button.rect.h + 0.01
@@ -12082,6 +12259,46 @@ mod tests {
         lines
             .iter()
             .all(|line| text_width(line, font_size) <= max_width + 0.01)
+    }
+
+    #[test]
+    fn enemy_sprite_palette_tracks_enemy_level() {
+        assert_eq!(
+            enemy_sprite_layer_color(EnemyProfileId::ScoutDrone, EnemySpriteLayerTone::Base, true),
+            ENEMY_LEVEL_ONE_SPRITE_PALETTE.base
+        );
+        assert_eq!(
+            enemy_sprite_layer_color(EnemyProfileId::VoltMantis, EnemySpriteLayerTone::Base, true),
+            ENEMY_LEVEL_TWO_SPRITE_PALETTE.base
+        );
+        assert_eq!(
+            enemy_sprite_layer_color(EnemyProfileId::NullRaider, EnemySpriteLayerTone::Base, true),
+            ENEMY_LEVEL_THREE_SPRITE_PALETTE.base
+        );
+        assert_eq!(
+            enemy_sprite_layer_color(
+                EnemyProfileId::HeptarchCore,
+                EnemySpriteLayerTone::DetailC,
+                true,
+            ),
+            ENEMY_LEVEL_THREE_SPRITE_PALETTE.detail_c
+        );
+    }
+
+    #[test]
+    fn enemy_level_three_icons_render_more_present_than_level_one() {
+        assert!(
+            enemy_panel_icon_alpha(EnemyProfileId::NullRaider, true)
+                > enemy_panel_icon_alpha(EnemyProfileId::ScoutDrone, true)
+        );
+        assert_eq!(
+            enemy_sprite_layer_color(
+                EnemyProfileId::NullRaider,
+                EnemySpriteLayerTone::DetailC,
+                true
+            ),
+            ENEMY_LEVEL_THREE_SPRITE_PALETTE.detail_c
+        );
     }
 
     fn module_tile_copy_fits_rect(def: ModuleDef, rect: Rect) -> bool {
@@ -12144,6 +12361,49 @@ mod tests {
         assert!(
             long_lines.len() > 1,
             "long next-signal text should wrap to multiple lines"
+        );
+    }
+
+    #[test]
+    fn enemy_panel_emits_a_sprite_command() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let sprites = frame_sprite_entries(&frame);
+        let expected_codes = enemy_sprite_codes(primary_enemy(&app.combat).profile);
+
+        assert_eq!(sprites.len(), expected_codes.len());
+        assert_eq!(
+            sprites.iter().map(|(code, _)| *code).collect::<Vec<_>>(),
+            expected_codes
+        );
+    }
+
+    #[test]
+    fn enemy_name_icon_stays_inside_enemy_panel() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let sprites = frame_sprite_entries(&frame);
+        let panel = primary_enemy_rect(&app.layout());
+        let insets = app.layout().tile_insets;
+        let expected_count = enemy_sprite_codes(primary_enemy(&app.combat).profile).len();
+
+        assert_eq!(sprites.len(), expected_count);
+        assert!(
+            sprites
+                .iter()
+                .all(|(_, sprite_rect)| rect_contains_rect(panel, *sprite_rect))
+        );
+        assert!(sprites.iter().all(|(_, sprite_rect)| {
+            ((sprite_rect.x + sprite_rect.w) - (panel.x + panel.w - insets.pad_x)).abs() < 0.02
+        }));
+        assert!(
+            sprites
+                .iter()
+                .all(|(_, sprite_rect)| sprite_rect.y >= panel.y + insets.top_pad - 0.02)
         );
     }
 
@@ -14377,6 +14637,71 @@ mod tests {
             EnemyProfileId::NeedlerDrone,
             Language::English
         )));
+    }
+
+    #[test]
+    fn two_enemy_combat_emits_a_sprite_for_each_visible_enemy_panel() {
+        let mut app = active_combat_fixture();
+        let mut setup = crate::combat::EncounterSetup {
+            player_hp: 32,
+            player_max_hp: 32,
+            player_max_energy: 3,
+            enemies: Vec::new(),
+        };
+        setup.enemies.push(crate::combat::EncounterEnemySetup {
+            hp: 6,
+            max_hp: 6,
+            block: 0,
+            profile: EnemyProfileId::ScoutDrone,
+            intent_index: 0,
+            on_hit_bleed: 0,
+        });
+        setup.enemies.push(crate::combat::EncounterEnemySetup {
+            hp: 14,
+            max_hp: 14,
+            block: 0,
+            profile: EnemyProfileId::NeedlerDrone,
+            intent_index: 1,
+            on_hit_bleed: 0,
+        });
+        app.begin_encounter(setup);
+        app.screen_transition = None;
+        app.combat.player.energy = 3;
+        app.combat.deck.hand = vec![CardId::FlareSlash];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.sync_combat_feedback_to_combat();
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let sprites = frame_sprite_entries(&frame);
+        let expected_codes = enemy_sprite_codes(EnemyProfileId::ScoutDrone)
+            .into_iter()
+            .chain(enemy_sprite_codes(EnemyProfileId::NeedlerDrone))
+            .collect::<Vec<_>>();
+
+        assert_eq!(sprites.len(), expected_codes.len());
+        assert_eq!(
+            sprites.iter().map(|(code, _)| *code).collect::<Vec<_>>(),
+            expected_codes
+        );
+
+        app.perform_action(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(Actor::Enemy(0)),
+        });
+        advance_until(&mut app, |app| app.layout().enemy_indices == vec![1]);
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let sprites = frame_sprite_entries(&frame);
+        let expected_codes = enemy_sprite_codes(EnemyProfileId::NeedlerDrone);
+
+        assert_eq!(sprites.len(), expected_codes.len());
+        assert_eq!(
+            sprites.iter().map(|(code, _)| *code).collect::<Vec<_>>(),
+            expected_codes
+        );
     }
 
     #[test]
