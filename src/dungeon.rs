@@ -384,7 +384,7 @@ impl DungeonRun {
     }
 
     pub(crate) fn rest_heal_amount(&self) -> i32 {
-        (self.player_max_hp - self.player_hp).max(0).min(REST_HEAL)
+        (self.player_max_hp - self.player_hp).clamp(0, REST_HEAL)
     }
 
     pub(crate) fn upgradable_card_indices(&self) -> Vec<usize> {
@@ -838,16 +838,16 @@ fn generate_nodes(seed: u64, level: usize) -> Vec<DungeonNode> {
         let mut lanes = Vec::with_capacity(MAP_REGULAR_DEPTHS);
         let mut current = first_lane;
         lanes.push(current);
-        for segment_index in 0..MAP_REGULAR_DEPTHS.saturating_sub(1) {
+        for (segment_index, edges) in segment_edges.iter_mut().enumerate() {
             let next = choose_next_lane(
                 &mut rng,
                 current,
-                &segment_edges[segment_index],
+                edges,
                 path_index,
                 start_lanes.len(),
                 segment_index,
             );
-            segment_edges[segment_index].push((current, next));
+            edges.push((current, next));
             lanes.push(next);
             current = next;
         }
@@ -1059,7 +1059,7 @@ fn ensure_event_present(
         return;
     }
 
-    let fallback_min_depth = min_depth.min(2).max(1);
+    let fallback_min_depth = min_depth.clamp(1, 2);
     let fallback_max_depth = max_depth.max(fallback_min_depth);
     let mut candidates: Vec<usize> = nodes
         .iter()
@@ -1107,10 +1107,11 @@ fn choose_next_lane(
         .iter()
         .filter_map(|&(from_lane, to_lane)| (from_lane == current_lane).then_some(to_lane))
         .collect();
-    if !must_claim_new_target && !existing_from_current.is_empty() {
-        if existing_from_current.len() >= 2 || rng.next_u64() % 1000 < 820 {
-            return existing_from_current[rng.next_index(existing_from_current.len())];
-        }
+    if !must_claim_new_target
+        && !existing_from_current.is_empty()
+        && (existing_from_current.len() >= 2 || rng.next_u64() % 1000 < 820)
+    {
+        return existing_from_current[rng.next_index(existing_from_current.len())];
     }
 
     let mut candidates = Vec::with_capacity(3);

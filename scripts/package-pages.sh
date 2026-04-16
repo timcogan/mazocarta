@@ -60,6 +60,20 @@ create_worktree() {
   printf '%s\n' "$worktree"
 }
 
+stamp_service_worker_version() {
+  local destination="$1"
+  local channel="$2"
+  local short_sha="$3"
+  local sw_path="$destination/sw.js"
+  local sw_version="${channel}-${BUILD_TIMESTAMP_UTC}-${short_sha}"
+
+  if [[ ! -f "$sw_path" ]]; then
+    return 0
+  fi
+
+  sed -i -E "s/^const CACHE_VERSION = \".*\";/const CACHE_VERSION = \"${sw_version}\";/" "$sw_path"
+}
+
 build_site() {
   local ref="$1"
   local channel="$2"
@@ -82,6 +96,7 @@ build_site() {
   mkdir -p "$destination"
   cp -R "$worktree/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  stamp_service_worker_version "$destination" "$channel" "$short_sha"
 }
 
 build_current_site() {
@@ -103,6 +118,7 @@ build_current_site() {
   mkdir -p "$destination"
   cp -R "$ROOT_DIR/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  stamp_service_worker_version "$destination" "$channel" "$short_sha"
 }
 
 write_root_redirect() {
