@@ -1830,213 +1830,276 @@ mod tests {
 
     #[test]
     fn rift_dart_variants_respect_the_expose_draw_condition() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::RiftDart];
-        primed.deck.draw_pile = vec![CardId::FlareSlash];
-        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+        for (card, primed, expected_hp, expect_draw) in [
+            (CardId::RiftDart, false, 36, false),
+            (CardId::RiftDart, true, 34, true),
+            (CardId::RiftDartPlus, false, 34, false),
+            (CardId::RiftDartPlus, true, 31, true),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            state.deck.draw_pile = vec![CardId::FlareSlash];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primary_enemy(&primed).fighter.statuses.bleed, 1);
-        assert_eq!(primed.deck.hand, vec![CardId::FlareSlash]);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::RiftDartPlus];
-        unprimed.deck.draw_pile = vec![CardId::FlareSlash];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(primary_enemy(&unprimed).fighter.statuses.bleed, 1);
-        assert!(unprimed.deck.hand.is_empty());
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                primary_enemy(&state).fighter.statuses.bleed,
+                1,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.deck.hand,
+                if expect_draw {
+                    vec![CardId::FlareSlash]
+                } else {
+                    Vec::new()
+                },
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn mark_pulse_variants_grant_block_only_against_bleeding_targets() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::MarkPulsePlus];
-        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
+        for (card, primed, expected_block) in [
+            (CardId::MarkPulse, false, 0),
+            (CardId::MarkPulse, true, 4),
+            (CardId::MarkPulsePlus, false, 0),
+            (CardId::MarkPulsePlus, true, 6),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.bleed = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primed.player.fighter.block, 6);
-        assert_eq!(primary_enemy(&primed).fighter.statuses.expose, 1);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::MarkPulse];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(unprimed.player.fighter.block, 0);
-        assert_eq!(primary_enemy(&unprimed).fighter.statuses.expose, 1);
+            assert_eq!(
+                state.player.fighter.block, expected_block,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                primary_enemy(&state).fighter.statuses.expose,
+                1,
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn brace_circuit_variants_draw_only_when_block_already_exists() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::BraceCircuitPlus];
-        primed.deck.draw_pile = vec![CardId::GuardStep];
-        primed.player.fighter.block = 2;
+        for (card, primed, initial_block, expected_block, expect_draw) in [
+            (CardId::BraceCircuit, false, 0, 6, false),
+            (CardId::BraceCircuit, true, 2, 8, true),
+            (CardId::BraceCircuitPlus, false, 0, 8, false),
+            (CardId::BraceCircuitPlus, true, 2, 10, true),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            state.deck.draw_pile = vec![CardId::GuardStep];
+            state.player.fighter.block = initial_block;
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: None,
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: None,
+            });
 
-        assert_eq!(primed.player.fighter.block, 10);
-        assert_eq!(primed.deck.hand, vec![CardId::GuardStep]);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::BraceCircuit];
-        unprimed.deck.draw_pile = vec![CardId::GuardStep];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: None,
-        });
-
-        assert_eq!(unprimed.player.fighter.block, 6);
-        assert!(unprimed.deck.hand.is_empty());
+            assert_eq!(
+                state.player.fighter.block, expected_block,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.deck.hand,
+                if expect_draw {
+                    vec![CardId::GuardStep]
+                } else {
+                    Vec::new()
+                },
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn fault_shot_variants_gain_strength_only_against_debuffed_targets() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::FaultShotPlus];
-        primary_enemy_mut(&mut primed).fighter.statuses.weak = 1;
+        for (card, primed, expected_hp, expected_strength) in [
+            (CardId::FaultShot, false, 35, 0),
+            (CardId::FaultShot, true, 35, 1),
+            (CardId::FaultShotPlus, false, 33, 0),
+            (CardId::FaultShotPlus, true, 33, 1),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.weak = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primed.player.fighter.statuses.strength, 1);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::FaultShot];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(unprimed.player.fighter.statuses.strength, 0);
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.player.fighter.statuses.strength, expected_strength,
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn sever_arc_variants_hit_twice_only_against_bleeding_targets() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::SeverArcPlus];
-        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
+        for (card, primed, expected_hp) in [
+            (CardId::SeverArc, false, 32),
+            (CardId::SeverArc, true, 24),
+            (CardId::SeverArcPlus, false, 30),
+            (CardId::SeverArcPlus, true, 20),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.bleed = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primary_enemy(&primed).fighter.hp, 20);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::SeverArc];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(primary_enemy(&unprimed).fighter.hp, 32);
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn lockbreaker_variants_convert_expose_into_weak_and_block() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::LockbreakerPlus];
-        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+        for (card, primed, expected_hp, expected_block, expected_weak) in [
+            (CardId::Lockbreaker, false, 34, 0, 0),
+            (CardId::Lockbreaker, true, 31, 6, 1),
+            (CardId::LockbreakerPlus, false, 32, 0, 0),
+            (CardId::LockbreakerPlus, true, 28, 8, 1),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primed.player.fighter.block, 8);
-        assert_eq!(primary_enemy(&primed).fighter.statuses.weak, 1);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::Lockbreaker];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(unprimed.player.fighter.block, 0);
-        assert_eq!(primary_enemy(&unprimed).fighter.statuses.weak, 0);
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.player.fighter.block, expected_block,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                primary_enemy(&state).fighter.statuses.weak,
+                expected_weak,
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn counter_lattice_variants_refund_energy_only_against_weakened_targets() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::CounterLatticePlus];
-        primary_enemy_mut(&mut primed).fighter.statuses.weak = 1;
+        for (card, primed, expected_hp, expected_energy) in [
+            (CardId::CounterLattice, false, 34, 2),
+            (CardId::CounterLattice, true, 34, 3),
+            (CardId::CounterLatticePlus, false, 32, 2),
+            (CardId::CounterLatticePlus, true, 32, 3),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.weak = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primed.player.energy, 3);
-        assert_eq!(primary_enemy(&primed).fighter.hp, 32);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::CounterLattice];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(unprimed.player.energy, 2);
-        assert_eq!(primary_enemy(&unprimed).fighter.hp, 34);
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.player.energy, expected_energy,
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]
     fn terminal_loop_variants_reward_bleed_and_expose_setup() {
-        let mut primed = blank_state();
-        primed.deck.hand = vec![CardId::TerminalLoopPlus];
-        primed.deck.draw_pile = vec![CardId::GuardStep];
-        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
-        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+        for (card, primed, expected_hp, expected_strength, expect_draw) in [
+            (CardId::TerminalLoop, false, 28, 0, false),
+            (CardId::TerminalLoop, true, 22, 1, true),
+            (CardId::TerminalLoopPlus, false, 25, 0, false),
+            (CardId::TerminalLoopPlus, true, 18, 2, true),
+        ] {
+            let mut state = blank_state();
+            state.deck.hand = vec![card];
+            state.deck.draw_pile = vec![CardId::GuardStep];
+            if primed {
+                primary_enemy_mut(&mut state).fighter.statuses.bleed = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+            }
 
-        primed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
+            state.dispatch(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(PRIMARY_ENEMY),
+            });
 
-        assert_eq!(primed.player.fighter.statuses.strength, 2);
-        assert_eq!(primed.deck.hand, vec![CardId::GuardStep]);
-
-        let mut unprimed = blank_state();
-        unprimed.deck.hand = vec![CardId::TerminalLoop];
-        unprimed.deck.draw_pile = vec![CardId::GuardStep];
-
-        unprimed.dispatch(CombatAction::PlayCard {
-            hand_index: 0,
-            target: Some(PRIMARY_ENEMY),
-        });
-
-        assert_eq!(unprimed.player.fighter.statuses.strength, 0);
-        assert!(unprimed.deck.hand.is_empty());
+            assert_eq!(
+                primary_enemy(&state).fighter.hp,
+                expected_hp,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.player.fighter.statuses.strength, expected_strength,
+                "{card:?} primed={primed}"
+            );
+            assert_eq!(
+                state.deck.hand,
+                if expect_draw {
+                    vec![CardId::GuardStep]
+                } else {
+                    Vec::new()
+                },
+                "{card:?} primed={primed}"
+            );
+        }
     }
 
     #[test]

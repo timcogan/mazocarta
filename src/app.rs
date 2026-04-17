@@ -12872,21 +12872,25 @@ mod tests {
         dungeon.current_level = 3;
         dungeon.credits = 55;
         dungeon.current_node = Some(1);
-        dungeon.deck = vec![CardId::RiftDart, CardId::SeverArc, CardId::TerminalLoop];
+        dungeon.deck = vec![
+            CardId::RiftDartPlus,
+            CardId::SeverArcPlus,
+            CardId::TerminalLoopPlus,
+        ];
         app.dungeon = Some(dungeon);
         app.screen = AppScreen::Shop;
         app.shop = Some(ShopState {
             offers: vec![
                 ShopOffer {
-                    card: CardId::RiftDart,
+                    card: CardId::RiftDartPlus,
                     price: 16,
                 },
                 ShopOffer {
-                    card: CardId::SeverArc,
+                    card: CardId::SeverArcPlus,
                     price: 24,
                 },
                 ShopOffer {
-                    card: CardId::TerminalLoop,
+                    card: CardId::TerminalLoopPlus,
                     price: 40,
                 },
             ],
@@ -12899,21 +12903,25 @@ mod tests {
         assert!(matches!(restored.screen, AppScreen::Shop));
         assert_eq!(
             restored.dungeon.as_ref().unwrap().deck,
-            vec![CardId::RiftDart, CardId::SeverArc, CardId::TerminalLoop]
+            vec![
+                CardId::RiftDartPlus,
+                CardId::SeverArcPlus,
+                CardId::TerminalLoopPlus,
+            ]
         );
         assert_eq!(
             restored.shop.as_ref().unwrap().offers,
             vec![
                 ShopOffer {
-                    card: CardId::RiftDart,
+                    card: CardId::RiftDartPlus,
                     price: 16,
                 },
                 ShopOffer {
-                    card: CardId::SeverArc,
+                    card: CardId::SeverArcPlus,
                     price: 24,
                 },
                 ShopOffer {
-                    card: CardId::TerminalLoop,
+                    card: CardId::TerminalLoopPlus,
                     price: 40,
                 },
             ]
