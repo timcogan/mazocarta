@@ -7,6 +7,7 @@ use crate::rng::XorShift64;
 
 pub(crate) const DEFAULT_PLAYER_HP: i32 = 32;
 pub(crate) const MAX_ENEMIES_PER_ENCOUNTER: usize = 2;
+pub(crate) const MAX_HAND_CARDS: usize = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Actor {
@@ -1131,7 +1132,7 @@ impl CombatState {
                 break;
             };
 
-            if self.deck.hand.len() >= 10 {
+            if self.deck.hand.len() >= MAX_HAND_CARDS {
                 self.deck.discard_pile.push(card);
                 events.push(CombatEvent::CardBurned { card });
                 continue;
@@ -1413,6 +1414,31 @@ mod tests {
 
         assert_eq!(state.deck.hand.len(), 2);
         assert!(events.contains(&CombatEvent::Reshuffled));
+    }
+
+    #[test]
+    fn burns_drawn_cards_once_the_hand_reaches_nine_cards() {
+        let mut state = blank_state();
+        state.deck.hand = vec![
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+            CardId::PinpointJab,
+            CardId::BurstArray,
+            CardId::CoverPulse,
+            CardId::BarrierField,
+            CardId::TacticalBurst,
+            CardId::RazorNet,
+        ];
+        state.deck.draw_pile = vec![CardId::FracturePulse];
+
+        let events = state.process_commands([CombatCommand::DrawCards(1)]);
+
+        assert_eq!(state.deck.hand.len(), MAX_HAND_CARDS);
+        assert_eq!(state.deck.discard_pile, vec![CardId::FracturePulse]);
+        assert!(events.contains(&CombatEvent::CardBurned {
+            card: CardId::FracturePulse,
+        }));
     }
 
     #[test]

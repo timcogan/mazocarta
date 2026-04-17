@@ -89,6 +89,10 @@ const HAND_MIN_GAP: f32 = 10.0;
 const HAND_TWO_ROW_SCALE: f32 = 0.82;
 const LOW_HAND_CARD_SCALE: f32 = 1.16;
 const LOW_HAND_MAX_COUNT: usize = 3;
+const MAX_COMBAT_HAND_ROWS: usize = 3;
+const MAX_COMBAT_ENEMY_ROWS: usize = 2;
+const MIN_COMBAT_TILE_SCALE: f32 = 0.35;
+const COMBAT_LAYOUT_SCORE_EPSILON: f32 = 0.01;
 const TOP_BUTTON_FONT_SIZE: f32 = 20.0;
 const LOW_HAND_TOP_BUTTON_FONT_SIZE: f32 = 22.0;
 const START_BUTTON_FONT_SIZE: f32 = 28.0;
@@ -106,6 +110,9 @@ const LOGO_ASSET_PATH: &str = "./mazocarta.svg";
 const LAYOUT_TRANSITION_MS: f32 = 140.0;
 const SCREEN_TRANSITION_MS: f32 = 220.0;
 const RESULT_SCREEN_TRANSITION_MS: f32 = 750.0;
+const OPENING_INTRO_LINE_FADE_MS: f32 = 680.0;
+const OPENING_INTRO_LINE_PAUSE_MS: f32 = 520.0;
+const OPENING_INTRO_BUTTON_TRANSITION_MS: f32 = 180.0;
 const LEGEND_TRANSITION_MS: f32 = 160.0;
 const BOOT_MODAL_TRANSITION_MS: f32 = 160.0;
 const LEGEND_BACKDROP_BLUR: f32 = 7.0;
@@ -143,6 +150,7 @@ const MAP_DEBUG_FILL_DECK_LABEL: &str = "Fill Deck";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppScreen {
     Boot,
+    OpeningIntro,
     Map,
     ModuleSelect,
     LevelIntro,
@@ -354,8 +362,12 @@ struct Layout {
     end_turn_button: Rect,
     end_battle_button: Option<Rect>,
     enemy_indices: Vec<usize>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    enemy_arrangement: CombatGridArrangement,
     enemy_rects: Vec<Rect>,
     player_rect: Rect,
+    #[cfg_attr(not(test), allow(dead_code))]
+    hand_arrangement: CombatGridArrangement,
     hand_rects: Vec<Rect>,
     hint_rect: Option<Rect>,
     low_hand_layout: bool,
@@ -470,10 +482,17 @@ struct LayoutTransition {
 struct ScreenTransition {
     from_screen: AppScreen,
     to_screen: AppScreen,
+    style: ScreenTransitionStyle,
     from_boot_has_saved_run: bool,
     to_boot_has_saved_run: bool,
     ttl_ms: f32,
     total_ms: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreenTransitionStyle {
+    Motion,
+    Fade,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -592,6 +611,12 @@ struct FittedPrimaryButton {
     font_size: f32,
 }
 
+#[derive(Clone, Debug)]
+struct OpeningIntroProgress {
+    line_alphas: Vec<f32>,
+    complete: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OverlayButtonFlow {
     Row,
@@ -651,6 +676,12 @@ struct LevelIntroState {
     level: usize,
     codename: &'static str,
     summary: &'static str,
+}
+
+#[derive(Clone, Debug, Default)]
+struct OpeningIntroState {
+    elapsed_ms: f32,
+    button_transition_ms: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -748,6 +779,68 @@ struct TileInsets {
     bottom_pad: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CombatGridArrangement {
+    row_counts: Vec<usize>,
+}
+
+impl CombatGridArrangement {
+    fn empty() -> Self {
+        Self {
+            row_counts: Vec::new(),
+        }
+    }
+
+    fn balanced(item_count: usize, row_count: usize) -> Self {
+        debug_assert!(row_count > 0);
+        debug_assert!(row_count <= item_count);
+
+        let base = item_count / row_count;
+        let remainder = item_count % row_count;
+        let row_counts = (0..row_count)
+            .map(|row| base + usize::from(row < remainder))
+            .collect();
+
+        Self { row_counts }
+    }
+
+    fn item_count(&self) -> usize {
+        self.row_counts.iter().sum()
+    }
+
+    fn row_count(&self) -> usize {
+        self.row_counts.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.row_counts.is_empty()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CombatLayoutPlan {
+    hand: CombatGridArrangement,
+    enemies: CombatGridArrangement,
+    low_hand_layout: bool,
+    tile_scale: f32,
+    score: CombatLayoutScore,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CombatLayoutScore {
+    fits: bool,
+    hand_card_w: f32,
+    tile_scale: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CombatLayoutContext {
+    tile_gap: f32,
+    start_button: Rect,
+    restart_button: Rect,
+    clear_save_button: Option<Rect>,
+}
+
 pub(crate) struct App {
     screen: AppScreen,
     combat: CombatState,
@@ -758,6 +851,7 @@ pub(crate) struct App {
     module_select: Option<ModuleSelectState>,
     reward: Option<RewardState>,
     level_intro: Option<LevelIntroState>,
+    opening_intro: Option<OpeningIntroState>,
     ui: UiState,
     viewport: Viewport,
     pointer_pos: Option<(f32, f32)>,
@@ -767,6 +861,7 @@ pub(crate) struct App {
     enemy_defeat_vfx_started: Vec<bool>,
     combat_feedback: CombatFeedbackState,
     layout_transition: Option<LayoutTransition>,
+    combat_layout_target: Option<Layout>,
     screen_transition: Option<ScreenTransition>,
     log: VecDeque<String>,
     frame: Vec<u8>,
@@ -813,6 +908,7 @@ impl App {
             module_select: None,
             reward: None,
             level_intro: None,
+            opening_intro: None,
             ui: UiState::default(),
             viewport: Viewport {
                 width: LOGICAL_WIDTH,
@@ -829,6 +925,7 @@ impl App {
                 ..CombatFeedbackState::default()
             },
             layout_transition: None,
+            combat_layout_target: None,
             screen_transition: None,
             log: VecDeque::new(),
             frame: Vec::new(),
@@ -979,6 +1076,37 @@ impl App {
 
     fn tr<'a>(&self, english: &'a str, spanish: &'a str) -> &'a str {
         localized_text(self.language, english, spanish)
+    }
+
+    fn tick_opening_intro(&mut self, dt_ms: f32) -> bool {
+        if !matches!(self.screen, AppScreen::OpeningIntro) || self.screen_transition.is_some() {
+            return false;
+        }
+
+        let total_duration_ms = self.opening_intro_total_duration_ms();
+        let Some(opening_intro) = self.opening_intro.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        if opening_intro.elapsed_ms < total_duration_ms {
+            let next_elapsed_ms = (opening_intro.elapsed_ms + dt_ms).min(total_duration_ms);
+            if (next_elapsed_ms - opening_intro.elapsed_ms).abs() > f32::EPSILON {
+                opening_intro.elapsed_ms = next_elapsed_ms;
+                changed = true;
+            }
+        }
+        if opening_intro.elapsed_ms >= total_duration_ms
+            && opening_intro.button_transition_ms < OPENING_INTRO_BUTTON_TRANSITION_MS
+        {
+            let next_transition_ms = (opening_intro.button_transition_ms + dt_ms)
+                .min(OPENING_INTRO_BUTTON_TRANSITION_MS);
+            if (next_transition_ms - opening_intro.button_transition_ms).abs() > f32::EPSILON {
+                opening_intro.button_transition_ms = next_transition_ms;
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     fn localized_card_def(&self, card: CardId) -> CardDef {
@@ -1801,6 +1929,11 @@ impl App {
         self.ui.hover = None;
         self.layout_transition = None;
         self.screen_transition = None;
+        self.combat_layout_target = if matches!(self.screen, AppScreen::Combat) {
+            Some(self.layout_target())
+        } else {
+            None
+        };
         self.dirty = true;
     }
 
@@ -1808,11 +1941,13 @@ impl App {
         let dt_ms = dt_ms.clamp(0.0, 64.0);
         self.boot_time_ms += dt_ms;
         let combat_locked_before = self.combat_input_locked();
+        self.snapshot_combat_layout_target();
 
         let mut changed = matches!(
             self.screen,
-            AppScreen::Boot | AppScreen::Map | AppScreen::LevelIntro
+            AppScreen::Boot | AppScreen::OpeningIntro | AppScreen::Map | AppScreen::LevelIntro
         );
+        changed |= self.tick_opening_intro(dt_ms);
         let legend_target = if self.ui.legend_open { 1.0 } else { 0.0 };
         if (self.ui.legend_progress - legend_target).abs() > 0.001 {
             let step = (dt_ms / LEGEND_TRANSITION_MS).clamp(0.0, 1.0);
@@ -1937,6 +2072,9 @@ impl App {
             if !matches!(self.screen, AppScreen::LevelIntro) {
                 self.level_intro = None;
             }
+            if !matches!(self.screen, AppScreen::OpeningIntro) {
+                self.opening_intro = None;
+            }
             screen_transition_changed = true;
         }
         if self.screen_transition.is_some() || screen_transition_changed {
@@ -1960,6 +2098,7 @@ impl App {
         }
 
         changed |= self.tick_combat_feedback(dt_ms);
+        self.refresh_combat_layout_transition();
         if combat_locked_before != self.combat_input_locked() {
             self.refresh_hover();
         }
@@ -1984,7 +2123,11 @@ impl App {
         }
 
         let Some((lx, ly)) = self.to_logical(x, y) else {
+            if self.ui.selected_card.is_some() {
+                self.snapshot_combat_layout_target();
+            }
             if self.ui.selected_card.take().is_some() {
+                self.refresh_hover();
                 self.dirty = true;
             }
             return;
@@ -1992,6 +2135,7 @@ impl App {
 
         match self.screen {
             AppScreen::Boot => self.handle_boot_pointer(lx, ly),
+            AppScreen::OpeningIntro => self.handle_opening_intro_pointer(lx, ly),
             AppScreen::Map => self.handle_map_pointer(lx, ly),
             AppScreen::ModuleSelect => self.handle_module_select_pointer(lx, ly),
             AppScreen::LevelIntro => self.handle_level_intro_pointer(lx, ly),
@@ -2043,6 +2187,11 @@ impl App {
                         85 | 117 => self.request_update(),
                         _ => {}
                     }
+                }
+            }
+            AppScreen::OpeningIntro => {
+                if matches!(key_code, 13 | 27 | 32) {
+                    self.handle_opening_intro_action();
                 }
             }
             AppScreen::Map => match key_code {
@@ -2463,7 +2612,8 @@ impl App {
         self.ui.settings_open = false;
         self.ui.install_help_open = false;
         self.clear_boot_request_flags();
-        self.start_run();
+        self.clear_run_save_snapshot();
+        self.dirty = true;
     }
 
     fn debug_clear_saved_run(&mut self) {
@@ -2549,6 +2699,7 @@ impl App {
     fn refresh_run_save_snapshot(&mut self) {
         match self.screen {
             AppScreen::Boot => {}
+            AppScreen::OpeningIntro => self.clear_run_save_snapshot(),
             AppScreen::Result(_) => self.clear_run_save_snapshot(),
             AppScreen::Map
             | AppScreen::ModuleSelect
@@ -2603,7 +2754,7 @@ impl App {
                 dungeon,
                 combat: self.save_combat_state(),
             }),
-            AppScreen::Boot | AppScreen::Result(_) => None,
+            AppScreen::Boot | AppScreen::OpeningIntro | AppScreen::Result(_) => None,
         }
     }
 
@@ -3438,6 +3589,7 @@ impl App {
         } else {
             None
         };
+        self.opening_intro = None;
         if let Some(combat) = combat {
             self.combat = combat;
         }
@@ -3488,7 +3640,8 @@ impl App {
         self.event = None;
         self.reward = None;
         self.level_intro = None;
-        self.screen = AppScreen::ModuleSelect;
+        self.opening_intro = Some(OpeningIntroState::default());
+        self.screen = AppScreen::OpeningIntro;
         self.ui = UiState::default();
         self.pointer_pos = None;
         self.floaters.clear();
@@ -3500,7 +3653,8 @@ impl App {
         self.layout_transition = None;
         self.screen_transition = None;
         self.log.clear();
-        self.begin_screen_transition(from_screen, AppScreen::ModuleSelect);
+        self.clear_run_save_snapshot();
+        self.begin_screen_transition(from_screen, AppScreen::OpeningIntro);
         self.refresh_run_save_snapshot();
         self.dirty = true;
     }
@@ -3515,6 +3669,7 @@ impl App {
         self.module_select = None;
         self.reward = None;
         self.level_intro = None;
+        self.opening_intro = None;
         self.ui = UiState::default();
         self.pointer_pos = None;
         self.floaters.clear();
@@ -3551,6 +3706,7 @@ impl App {
         self.module_select = None;
         self.reward = None;
         self.level_intro = None;
+        self.opening_intro = None;
         self.screen = AppScreen::Combat;
         self.ui = UiState::default();
         self.pointer_pos = None;
@@ -3602,6 +3758,7 @@ impl App {
         self.event = None;
         self.reward = None;
         self.level_intro = None;
+        self.opening_intro = None;
         self.screen = AppScreen::Map;
         self.ui = UiState::default();
         self.pointer_pos = None;
@@ -3775,6 +3932,16 @@ impl App {
         if self.hit_test(x, y) == Some(HitTarget::Continue) {
             self.continue_from_level_intro();
         }
+    }
+
+    fn handle_opening_intro_pointer(&mut self, x: f32, y: f32) {
+        if self.hit_test(x, y) == Some(HitTarget::Continue) {
+            self.handle_opening_intro_action();
+        }
+    }
+
+    fn handle_opening_intro_action(&mut self) {
+        self.continue_from_opening_intro();
     }
 
     fn handle_rest_pointer(&mut self, x: f32, y: f32) {
@@ -4048,6 +4215,7 @@ impl App {
             codename: localized_level_codename(dungeon.current_level(), self.language),
             summary: localized_level_summary(dungeon.current_level(), self.language),
         });
+        self.opening_intro = None;
         self.screen = AppScreen::LevelIntro;
         self.ui = UiState::default();
         self.pointer_pos = None;
@@ -4065,6 +4233,7 @@ impl App {
         self.module_select = None;
         self.reward = None;
         self.level_intro = None;
+        self.opening_intro = None;
         self.share_request = None;
         self.event = Some(EventState { event });
         self.screen = AppScreen::Event;
@@ -4073,6 +4242,38 @@ impl App {
         self.layout_transition = None;
         self.screen_transition = None;
         self.begin_screen_transition(from_screen, AppScreen::Event);
+        self.refresh_run_save_snapshot();
+        self.dirty = true;
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn complete_opening_intro(&mut self) {
+        let total_duration_ms = self.opening_intro_total_duration_ms();
+        let Some(opening_intro) = self.opening_intro.as_mut() else {
+            return;
+        };
+        if opening_intro.elapsed_ms >= total_duration_ms {
+            return;
+        }
+
+        opening_intro.elapsed_ms = total_duration_ms;
+        opening_intro.button_transition_ms = 0.0;
+        self.dirty = true;
+    }
+
+    fn continue_from_opening_intro(&mut self) {
+        if !matches!(self.screen, AppScreen::OpeningIntro) {
+            return;
+        }
+
+        let from_screen = self.screen;
+        self.screen = AppScreen::ModuleSelect;
+        self.ui = UiState::default();
+        self.pointer_pos = None;
+        self.share_request = None;
+        self.layout_transition = None;
+        self.screen_transition = None;
+        self.begin_screen_transition(from_screen, AppScreen::ModuleSelect);
         self.refresh_run_save_snapshot();
         self.dirty = true;
     }
@@ -4432,8 +4633,12 @@ impl App {
                 self.close_run_info();
                 return;
             }
+            if self.ui.selected_card.is_some() {
+                self.snapshot_combat_layout_target();
+            }
             if self.ui.selected_card.take().is_some() {
                 self.push_log(self.tr("Selection cleared.", "Selección cancelada."));
+                self.refresh_hover();
                 self.dirty = true;
             }
             return;
@@ -4514,6 +4719,7 @@ impl App {
             return;
         }
 
+        self.snapshot_combat_layout_target();
         self.ui.selected_card = Some(index);
         if let Some(card) = self.combat.hand_card(index) {
             self.push_log(match self.language {
@@ -4525,6 +4731,7 @@ impl App {
                 }
             });
         }
+        self.refresh_hover();
         self.dirty = true;
     }
 
@@ -4940,6 +5147,7 @@ impl App {
         self.screen_transition = Some(ScreenTransition {
             from_screen,
             to_screen,
+            style: screen_transition_style(from_screen, to_screen),
             from_boot_has_saved_run: self.has_saved_run,
             to_boot_has_saved_run: self.has_saved_run,
             ttl_ms: duration_ms,
@@ -4948,6 +5156,7 @@ impl App {
     }
 
     fn refresh_hover(&mut self) {
+        self.refresh_combat_layout_transition();
         let hover = if self.screen_transition.is_some() {
             None
         } else {
@@ -5337,6 +5546,113 @@ impl App {
         }
     }
 
+    fn opening_intro_lines(&self) -> [&'static str; 5] {
+        [
+            self.tr(
+                "You walk down a narrow hallway toward a door.",
+                "Avanzas por un pasillo estrecho hacia una puerta.",
+            ),
+            self.tr("You enter through the door.", "Cruzas la puerta."),
+            self.tr(
+                "The door locks behind you.",
+                "La puerta se cierra con llave detrás de ti.",
+            ),
+            self.tr(
+                "You find yourself in a cavernous room with metal walls.",
+                "Te encuentras en una sala cavernosa con muros de metal.",
+            ),
+            self.tr("Three doors lie ahead.", "Hay tres puertas delante."),
+        ]
+    }
+
+    fn opening_intro_total_duration_ms(&self) -> f32 {
+        self.opening_intro_lines().iter().fold(0.0, |total, _line| {
+            total + OPENING_INTRO_LINE_FADE_MS + OPENING_INTRO_LINE_PAUSE_MS
+        })
+    }
+
+    fn opening_intro_progress(&self) -> OpeningIntroProgress {
+        let lines = self.opening_intro_lines();
+        let Some(state) = self.opening_intro.as_ref() else {
+            return OpeningIntroProgress {
+                line_alphas: Vec::new(),
+                complete: true,
+            };
+        };
+
+        let mut remaining_ms = state
+            .elapsed_ms
+            .clamp(0.0, self.opening_intro_total_duration_ms());
+        let mut line_alphas = Vec::with_capacity(lines.len());
+        for _line in lines.iter() {
+            if remaining_ms < OPENING_INTRO_LINE_FADE_MS {
+                line_alphas.push((remaining_ms / OPENING_INTRO_LINE_FADE_MS).clamp(0.0, 1.0));
+                return OpeningIntroProgress {
+                    line_alphas,
+                    complete: false,
+                };
+            }
+
+            line_alphas.push(1.0);
+            remaining_ms -= OPENING_INTRO_LINE_FADE_MS;
+            if remaining_ms < OPENING_INTRO_LINE_PAUSE_MS {
+                return OpeningIntroProgress {
+                    line_alphas,
+                    complete: false,
+                };
+            }
+            remaining_ms -= OPENING_INTRO_LINE_PAUSE_MS;
+        }
+
+        OpeningIntroProgress {
+            line_alphas,
+            complete: true,
+        }
+    }
+
+    fn opening_intro_complete(&self) -> bool {
+        self.opening_intro_progress().complete
+    }
+
+    fn opening_intro_button_transition_progress(&self) -> f32 {
+        if !self.opening_intro_complete() {
+            return 0.0;
+        }
+
+        self.opening_intro
+            .as_ref()
+            .map(|opening_intro| {
+                (opening_intro.button_transition_ms / OPENING_INTRO_BUTTON_TRANSITION_MS)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or(1.0)
+    }
+
+    fn opening_intro_action_button(&self) -> FittedPrimaryButton {
+        let (pad_x, pad_y) = boot_button_tile_padding();
+        let font_size = START_BUTTON_FONT_SIZE;
+        let (skip_w, skip_h) = button_size(
+            self.tr("Skip Intro", "Saltar intro"),
+            font_size,
+            pad_x,
+            pad_y,
+        );
+        let (continue_w, continue_h) =
+            button_size(self.tr("Continue", "Continuar"), font_size, pad_x, pad_y);
+        let transition = self.opening_intro_button_transition_progress();
+        let w = lerp_f32(skip_w, continue_w, transition);
+        let h = lerp_f32(skip_h, continue_h, transition);
+        FittedPrimaryButton {
+            rect: Rect {
+                x: self.logical_center_x() - w * 0.5,
+                y: (self.logical_height() - h - pad_y).max(0.0),
+                w,
+                h,
+            },
+            font_size,
+        }
+    }
+
     fn visible_combat_hand_count(&self) -> usize {
         if self.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn) {
             0
@@ -5347,23 +5663,76 @@ impl App {
 
     fn base_layout(&self) -> Layout {
         let hand_count = self.visible_combat_hand_count();
-        let low_hand_layout = hand_count <= LOW_HAND_MAX_COUNT;
-        let tile_gap = HAND_MIN_GAP;
-        let tile_scale = self.combat_tile_scale(low_hand_layout, tile_gap);
         let boot_buttons = self.boot_buttons_layout(self.has_saved_run);
+        let layout_context = CombatLayoutContext {
+            tile_gap: HAND_MIN_GAP,
+            start_button: boot_buttons.start_button,
+            restart_button: boot_buttons.restart_button,
+            clear_save_button: boot_buttons.clear_save_button,
+        };
+        let layout_plan = self.best_combat_layout_plan(hand_count, layout_context);
 
         self.layout_with_scale(
-            low_hand_layout,
-            tile_gap,
-            tile_scale,
-            boot_buttons.start_button,
-            boot_buttons.restart_button,
-            boot_buttons.clear_save_button,
+            &layout_plan.hand,
+            &layout_plan.enemies,
+            layout_plan.low_hand_layout,
+            layout_plan.tile_scale,
+            layout_context,
         )
     }
 
+    fn layout_target(&self) -> Layout {
+        self.base_layout()
+    }
+
+    fn refresh_combat_layout_transition(&mut self) {
+        if !matches!(self.screen, AppScreen::Combat) {
+            self.combat_layout_target = None;
+            return;
+        }
+
+        let target_layout = self.layout_target();
+        let Some(previous_target) = self.combat_layout_target.clone() else {
+            self.combat_layout_target = Some(target_layout);
+            return;
+        };
+        if combat_layouts_match(&previous_target, &target_layout) {
+            self.combat_layout_target = Some(target_layout);
+            return;
+        }
+
+        let stable_hand_count = previous_target.hand_rects.len() == target_layout.hand_rects.len();
+        let stable_enemy_count =
+            previous_target.enemy_indices.len() == target_layout.enemy_indices.len();
+        if stable_hand_count && stable_enemy_count {
+            let from_layout = if self.layout_transition.is_some() {
+                self.layout()
+            } else {
+                previous_target.clone()
+            };
+            let hand_from_rects = target_layout
+                .hand_rects
+                .iter()
+                .enumerate()
+                .map(|(index, _)| from_layout.hand_rects.get(index).copied())
+                .collect();
+            self.set_layout_transition(from_layout, hand_from_rects);
+        }
+
+        self.combat_layout_target = Some(target_layout);
+    }
+
+    fn snapshot_combat_layout_target(&mut self) {
+        if matches!(self.screen, AppScreen::Combat)
+            && self.layout_transition.is_none()
+            && self.combat_layout_target.is_none()
+        {
+            self.combat_layout_target = Some(self.layout_target());
+        }
+    }
+
     fn layout(&self) -> Layout {
-        let base_layout = self.base_layout();
+        let base_layout = self.layout_target();
         if !matches!(self.screen, AppScreen::Combat) {
             return base_layout;
         }
@@ -5386,27 +5755,19 @@ impl App {
 
     fn layout_with_scale(
         &self,
+        hand_arrangement: &CombatGridArrangement,
+        enemy_arrangement: &CombatGridArrangement,
         low_hand_layout: bool,
-        tile_gap: f32,
         tile_scale: f32,
-        start_button: Rect,
-        restart_button: Rect,
-        clear_save_button: Option<Rect>,
+        layout_context: CombatLayoutContext,
     ) -> Layout {
         let hand_count = self.visible_combat_hand_count();
         let logical_width = self.logical_width();
+        let tile_gap = layout_context.tile_gap;
         let hand_band_x = tile_gap;
         let hand_band_w = logical_width - hand_band_x * 2.0;
-        let (top_count, bottom_count) = hand_row_distribution(hand_count);
-        let base_card_w = if bottom_count > 0 {
-            CARD_WIDTH * HAND_TWO_ROW_SCALE
-        } else if top_count > 0 && low_hand_layout {
-            CARD_WIDTH * LOW_HAND_CARD_SCALE
-        } else {
-            CARD_WIDTH
-        };
-        let target_card_w = base_card_w * tile_scale;
-        let card_w = target_card_w;
+        debug_assert_eq!(hand_arrangement.item_count(), hand_count);
+        let card_w = combat_hand_card_width(hand_arrangement, low_hand_layout, tile_scale);
         let tile_insets = tile_insets_for_card_width(card_w);
         let top_button_font_size = combat_top_button_font_size(low_hand_layout, tile_scale);
         let top_button_gap = tile_gap;
@@ -5440,6 +5801,7 @@ impl App {
         let top_group_x = (logical_width - top_group_w) * 0.5;
         let top_row_h = menu_size.1.max(end_turn_size.1);
         let visible_enemy_indices = self.visible_enemy_indices();
+        debug_assert_eq!(enemy_arrangement.item_count(), visible_enemy_indices.len());
         let enemy_metrics: Vec<_> = visible_enemy_indices
             .iter()
             .map(|enemy_index| {
@@ -5448,20 +5810,6 @@ impl App {
             .collect();
         let player_metrics = player_panel_metrics(self, low_hand_layout, tile_scale, tile_insets);
         let enemy_y = top_button_y + top_row_h + tile_gap;
-        let enemy_row_w = if enemy_metrics.is_empty() {
-            0.0
-        } else {
-            enemy_metrics
-                .iter()
-                .map(|metrics| metrics.width)
-                .sum::<f32>()
-                + tile_gap * enemy_metrics.len().saturating_sub(1) as f32
-        };
-        let enemy_row_h = enemy_metrics
-            .iter()
-            .map(|metrics| metrics.height)
-            .fold(0.0, f32::max);
-        let enemy_x = (logical_width - enemy_row_w) * 0.5;
         let player_x = (logical_width - player_metrics.width) * 0.5;
         let card_heights: Vec<f32> = (0..hand_count)
             .map(|index| {
@@ -5471,69 +5819,62 @@ impl App {
                     .unwrap_or(card_w * (CARD_HEIGHT / CARD_WIDTH))
             })
             .collect();
-        let top_row_max_h = card_heights
-            .iter()
-            .take(top_count)
-            .copied()
-            .fold(0.0, f32::max);
-        let bottom_row_max_h = card_heights
-            .iter()
-            .skip(top_count)
-            .take(bottom_count)
-            .copied()
-            .fold(0.0, f32::max);
-        let enemy_bottom = enemy_y + enemy_row_h;
-        let top_row_y = enemy_bottom + tile_gap;
-        let bottom_row_y = top_row_y + top_row_max_h + tile_gap;
-
-        let mut enemy_cursor_x = enemy_x;
-        let enemy_rects: Vec<_> = enemy_metrics
-            .iter()
-            .map(|metrics| {
-                let rect = Rect {
+        let mut enemy_rects = Vec::with_capacity(enemy_metrics.len());
+        let mut enemy_item_index = 0usize;
+        let mut enemy_row_top = enemy_y;
+        for &row_count in &enemy_arrangement.row_counts {
+            let row_end = enemy_item_index + row_count;
+            let row_metrics = &enemy_metrics[enemy_item_index..row_end];
+            let row_height = row_metrics
+                .iter()
+                .map(|metrics| metrics.height)
+                .fold(0.0, f32::max);
+            let row_width = row_metrics.iter().map(|metrics| metrics.width).sum::<f32>()
+                + tile_gap * row_count.saturating_sub(1) as f32;
+            let mut enemy_cursor_x = (logical_width - row_width) * 0.5;
+            for metrics in row_metrics {
+                enemy_rects.push(Rect {
                     x: enemy_cursor_x,
-                    y: enemy_y + (enemy_row_h - metrics.height) * 0.5,
+                    y: enemy_row_top + (row_height - metrics.height) * 0.5,
                     w: metrics.width,
                     h: metrics.height,
-                };
+                });
                 enemy_cursor_x += metrics.width + tile_gap;
-                rect
-            })
-            .collect();
-
-        let hand_rects = (0..hand_count)
-            .map(|index| {
-                let (index_in_row, row_count, row_y, row_max_h) = if index < top_count {
-                    (index, top_count, top_row_y, top_row_max_h)
-                } else {
-                    (
-                        index - top_count,
-                        bottom_count,
-                        bottom_row_y,
-                        bottom_row_max_h,
-                    )
-                };
-                let row_total_w = if row_count == 0 {
-                    0.0
-                } else {
-                    card_w * row_count as f32 + tile_gap * row_count.saturating_sub(1) as f32
-                };
-                let row_start_x = hand_band_x + (hand_band_w - row_total_w) * 0.5;
-                let card_h = card_heights.get(index).copied().unwrap_or_default();
-                Rect {
-                    x: row_start_x + (card_w + tile_gap) * index_in_row as f32,
-                    y: row_y + (row_max_h - card_h) * 0.5,
-                    w: card_w,
-                    h: card_h,
-                }
-            })
-            .collect();
-        let hand_bottom = if bottom_count > 0 {
-            bottom_row_y + bottom_row_max_h
-        } else if top_count > 0 {
-            top_row_y + top_row_max_h
+            }
+            enemy_item_index = row_end;
+            enemy_row_top += row_height + tile_gap;
+        }
+        let enemy_bottom = if enemy_arrangement.is_empty() {
+            enemy_y
         } else {
+            enemy_row_top - tile_gap
+        };
+
+        let mut hand_rects = Vec::with_capacity(hand_count);
+        let mut hand_item_index = 0usize;
+        let mut hand_row_top = enemy_bottom + tile_gap;
+        for &row_count in &hand_arrangement.row_counts {
+            let row_end = hand_item_index + row_count;
+            let row_heights = &card_heights[hand_item_index..row_end];
+            let row_max_h = row_heights.iter().copied().fold(0.0, f32::max);
+            let row_total_w =
+                card_w * row_count as f32 + tile_gap * row_count.saturating_sub(1) as f32;
+            let row_start_x = hand_band_x + (hand_band_w - row_total_w) * 0.5;
+            for (index_in_row, card_h) in row_heights.iter().enumerate() {
+                hand_rects.push(Rect {
+                    x: row_start_x + (card_w + tile_gap) * index_in_row as f32,
+                    y: hand_row_top + (row_max_h - *card_h) * 0.5,
+                    w: card_w,
+                    h: *card_h,
+                });
+            }
+            hand_item_index = row_end;
+            hand_row_top += row_max_h + tile_gap;
+        }
+        let hand_bottom = if hand_arrangement.is_empty() {
             enemy_bottom
+        } else {
+            hand_row_top - tile_gap
         };
         let player_y = hand_bottom + tile_gap;
         let (hint_message, _, _) = combat_hint_tile(self, hand_count);
@@ -5548,9 +5889,9 @@ impl App {
         });
 
         let mut layout = Layout {
-            start_button,
-            restart_button,
-            clear_save_button,
+            start_button: layout_context.start_button,
+            restart_button: layout_context.restart_button,
+            clear_save_button: layout_context.clear_save_button,
             menu_button: Rect {
                 x: top_group_x,
                 y: top_button_y,
@@ -5570,6 +5911,7 @@ impl App {
                 h: size.1,
             }),
             enemy_indices: visible_enemy_indices,
+            enemy_arrangement: enemy_arrangement.clone(),
             enemy_rects,
             player_rect: Rect {
                 x: player_x,
@@ -5577,6 +5919,7 @@ impl App {
                 w: player_metrics.width,
                 h: player_metrics.height,
             },
+            hand_arrangement: hand_arrangement.clone(),
             hand_rects,
             hint_rect,
             low_hand_layout,
@@ -5604,36 +5947,83 @@ impl App {
         layout
     }
 
-    fn combat_tile_scale(&self, low_hand_layout: bool, tile_gap: f32) -> f32 {
+    fn best_combat_layout_plan(
+        &self,
+        hand_count: usize,
+        layout_context: CombatLayoutContext,
+    ) -> CombatLayoutPlan {
+        let enemy_count = self.visible_enemy_indices().len();
+        let mut best_plan = None;
+
+        for hand in combat_grid_arrangement_candidates(hand_count, MAX_COMBAT_HAND_ROWS) {
+            let low_hand_layout = hand_count <= LOW_HAND_MAX_COUNT;
+            for enemies in combat_grid_arrangement_candidates(enemy_count, MAX_COMBAT_ENEMY_ROWS) {
+                let tile_scale =
+                    self.combat_tile_scale(&hand, &enemies, low_hand_layout, layout_context);
+                let fits = self.combat_tiles_fit(
+                    &hand,
+                    &enemies,
+                    low_hand_layout,
+                    tile_scale,
+                    layout_context,
+                );
+                let candidate = CombatLayoutPlan {
+                    hand: hand.clone(),
+                    enemies: enemies.clone(),
+                    low_hand_layout,
+                    tile_scale,
+                    score: CombatLayoutScore {
+                        fits,
+                        hand_card_w: combat_hand_card_width(&hand, low_hand_layout, tile_scale),
+                        tile_scale,
+                    },
+                };
+                let should_replace = match best_plan.as_ref() {
+                    None => true,
+                    Some(best) => combat_layout_plan_better(&candidate, hand_count, best),
+                };
+                if should_replace {
+                    best_plan = Some(candidate);
+                }
+            }
+        }
+
+        best_plan.expect("combat layout should produce at least one arrangement")
+    }
+
+    fn combat_tile_scale(
+        &self,
+        hand_arrangement: &CombatGridArrangement,
+        enemy_arrangement: &CombatGridArrangement,
+        low_hand_layout: bool,
+        layout_context: CombatLayoutContext,
+    ) -> f32 {
         let logical_width = self.logical_width();
         let logical_height = self.logical_height();
-        let boot_buttons = self.boot_buttons_layout(self.has_saved_run);
         let fits = |scale| {
             self.combat_tiles_fit(
+                hand_arrangement,
+                enemy_arrangement,
                 low_hand_layout,
-                tile_gap,
                 scale,
-                boot_buttons.start_button,
-                boot_buttons.restart_button,
-                boot_buttons.clear_save_button,
+                layout_context,
             )
         };
 
-        let mut low = 0.35;
+        let mut low = MIN_COMBAT_TILE_SCALE;
         if !fits(low) {
             return low;
         }
 
         let max_search_scale = (logical_width / CARD_WIDTH).max(logical_height / CARD_HEIGHT) * 2.0;
-        let available_w = logical_width - tile_gap * 2.0;
-        let available_h = logical_height - tile_gap * 2.0;
+        let available_w = logical_width - layout_context.tile_gap * 2.0;
+        let available_h = logical_height - layout_context.tile_gap * 2.0;
         let initial_layout = self.layout_with_scale(
+            hand_arrangement,
+            enemy_arrangement,
             low_hand_layout,
-            tile_gap,
             1.0,
-            boot_buttons.start_button,
-            boot_buttons.restart_button,
-            boot_buttons.clear_save_button,
+            layout_context,
         );
         let initial_bounds = combat_layout_bounds(&initial_layout);
         let mut high = if initial_bounds.w > 0.0 && initial_bounds.h > 0.0 {
@@ -5753,25 +6143,23 @@ impl App {
 
     fn combat_tiles_fit(
         &self,
+        hand_arrangement: &CombatGridArrangement,
+        enemy_arrangement: &CombatGridArrangement,
         low_hand_layout: bool,
-        tile_gap: f32,
         tile_scale: f32,
-        start_button: Rect,
-        restart_button: Rect,
-        clear_save_button: Option<Rect>,
+        layout_context: CombatLayoutContext,
     ) -> bool {
         let layout = self.layout_with_scale(
+            hand_arrangement,
+            enemy_arrangement,
             low_hand_layout,
-            tile_gap,
             tile_scale,
-            start_button,
-            restart_button,
-            clear_save_button,
+            layout_context,
         );
         let bounds = combat_layout_bounds(&layout);
-        let min_edge = tile_gap - 0.5;
-        let max_x = self.logical_width() - tile_gap + 0.5;
-        let max_y = self.logical_height() - tile_gap + 0.5;
+        let min_edge = layout_context.tile_gap - 0.5;
+        let max_x = self.logical_width() - layout_context.tile_gap + 0.5;
+        let max_y = self.logical_height() - layout_context.tile_gap + 0.5;
         bounds.x >= min_edge
             && bounds.y >= min_edge
             && bounds.x + bounds.w <= max_x
@@ -6972,6 +7360,12 @@ impl App {
                 }
                 None
             }
+            AppScreen::OpeningIntro => {
+                if self.opening_intro_action_button().rect.contains(x, y) {
+                    return Some(HitTarget::Continue);
+                }
+                None
+            }
             AppScreen::Map => {
                 let map_layout = self.map_layout()?;
                 if map_layout.info_button.contains(x, y) {
@@ -7185,7 +7579,18 @@ impl App {
             let eased = ease_out_cubic(progress);
             let from_alpha = 1.0 - eased;
             let to_alpha = eased;
-            let travel = self.logical_height().min(72.0);
+            let (from_offset_y, from_scale, to_offset_y, to_scale) = match transition.style {
+                ScreenTransitionStyle::Motion => {
+                    let travel = self.logical_height().min(72.0);
+                    (
+                        -travel * 0.18 * eased,
+                        1.0 - eased * 0.035,
+                        travel * 0.18 * (1.0 - eased),
+                        0.965 + eased * 0.035,
+                    )
+                }
+                ScreenTransitionStyle::Fade => (0.0, 1.0, 0.0, 1.0),
+            };
 
             self.render_screen_layer(
                 &mut scene,
@@ -7196,8 +7601,8 @@ impl App {
                     None
                 },
                 from_alpha,
-                -travel * 0.18 * eased,
-                1.0 - eased * 0.035,
+                from_offset_y,
+                from_scale,
             );
             self.render_screen_layer(
                 &mut scene,
@@ -7208,8 +7613,8 @@ impl App {
                     None
                 },
                 to_alpha,
-                travel * 0.18 * (1.0 - eased),
-                0.965 + eased * 0.035,
+                to_offset_y,
+                to_scale,
             );
         } else {
             self.render_screen(&mut scene, self.screen, None);
@@ -7262,6 +7667,7 @@ impl App {
             AppScreen::Boot => {
                 self.render_boot(scene, boot_has_saved_run.unwrap_or(self.has_saved_run))
             }
+            AppScreen::OpeningIntro => self.render_opening_intro(scene),
             AppScreen::Map => self.render_map(scene),
             AppScreen::ModuleSelect => self.render_module_select(scene),
             AppScreen::LevelIntro => self.render_level_intro(scene),
@@ -7607,6 +8013,87 @@ impl App {
             self.boot_time_ms,
         );
         scene.pop_layer();
+    }
+
+    fn render_opening_intro(&self, scene: &mut SceneBuilder) {
+        let progress = self.opening_intro_progress();
+        let lines = self.opening_intro_lines();
+        let center_x = self.logical_center_x();
+        let body_max_width = (self.logical_width() - 120.0).max(220.0);
+        let widest_line = lines
+            .iter()
+            .max_by_key(|line| line.chars().count())
+            .copied()
+            .unwrap_or(lines[0]);
+        let body_size = fit_text_size(widest_line, 24.0, body_max_width).max(15.0);
+        let body_chars = ((body_max_width / (body_size * 0.62)).floor() as usize).max(20);
+        let body_line_gap = (body_size * 0.26).max(4.0);
+        let section_gap = (body_size * 0.8).clamp(12.0, 20.0);
+        let mut baseline_y = (self.logical_height() * 0.32).max(body_size + 32.0);
+
+        for (index, line) in lines.iter().enumerate() {
+            let alpha = progress.line_alphas.get(index).copied().unwrap_or(0.0);
+            if alpha <= 0.001 {
+                break;
+            }
+            let wrapped_lines: Vec<_> = wrap_text(line, body_chars)
+                .into_iter()
+                .filter(|wrapped| !wrapped.is_empty())
+                .collect();
+            if wrapped_lines.is_empty() {
+                continue;
+            }
+            for wrapped in wrapped_lines {
+                scene.text(
+                    center_x,
+                    baseline_y,
+                    body_size,
+                    "center",
+                    &rgba((201, 255, 215), alpha),
+                    "body",
+                    &wrapped,
+                );
+                baseline_y += body_size + body_line_gap;
+            }
+            if index + 1 < lines.len() {
+                baseline_y += section_gap;
+            }
+        }
+
+        let action_button = self.opening_intro_action_button();
+        let hovered = self.ui.hover == Some(HitTarget::Continue);
+        let label_alpha = if hovered {
+            1.0
+        } else {
+            primary_button_pulse(self.boot_time_ms)
+        };
+        let button_transition = self.opening_intro_button_transition_progress();
+        scene.rect(
+            action_button.rect,
+            BUTTON_RADIUS,
+            COLOR_TILE_FILL,
+            COLOR_GREEN_STROKE_START,
+            2.0,
+        );
+        let text_y = button_text_baseline(action_button.rect, action_button.font_size);
+        scene.text(
+            action_button.rect.x + action_button.rect.w * 0.5,
+            text_y,
+            action_button.font_size,
+            "center",
+            &rgba((51, 255, 102), label_alpha * (1.0 - button_transition)),
+            "label",
+            self.tr("Skip Intro", "Saltar intro"),
+        );
+        scene.text(
+            action_button.rect.x + action_button.rect.w * 0.5,
+            text_y,
+            action_button.font_size,
+            "center",
+            &rgba((51, 255, 102), label_alpha * button_transition),
+            "label",
+            self.tr("Continue", "Continuar"),
+        );
     }
 
     fn render_level_intro(&self, scene: &mut SceneBuilder) {
@@ -9343,7 +9830,7 @@ impl App {
             playback_meta
                 .unwrap_or_else(|| {
                     format!(
-                        "{} {}/{}{PANEL_TEXT_GAP}{} {}->{}",
+                        "{} {}/{}{PANEL_TEXT_GAP}{} {}→{}",
                         self.tr(ENERGY_LABEL, "Energía"),
                         self.combat.player.energy,
                         self.combat.player.max_energy,
@@ -10565,20 +11052,71 @@ fn defeat_by_text(summary: &DefeatSummary, language: Language) -> String {
     }
 }
 
-fn hand_row_distribution(hand_count: usize) -> (usize, usize) {
-    match hand_count {
-        0 => (0, 0),
-        1 => (1, 0),
-        2 => (2, 0),
-        3 => (3, 0),
-        4 => (2, 2),
-        5 => (3, 2),
-        6 => (3, 3),
-        7 => (4, 3),
-        8 => (4, 4),
-        9 => (5, 4),
-        _ => (5, 5),
+fn combat_grid_arrangement_candidates(
+    item_count: usize,
+    max_rows: usize,
+) -> Vec<CombatGridArrangement> {
+    if item_count == 0 {
+        return vec![CombatGridArrangement::empty()];
     }
+
+    (1..=item_count.min(max_rows))
+        .map(|row_count| CombatGridArrangement::balanced(item_count, row_count))
+        .collect()
+}
+
+fn combat_hand_base_card_width(
+    hand_arrangement: &CombatGridArrangement,
+    low_hand_layout: bool,
+) -> f32 {
+    if hand_arrangement.row_count() > 1 {
+        CARD_WIDTH * HAND_TWO_ROW_SCALE
+    } else if !hand_arrangement.is_empty() && low_hand_layout {
+        CARD_WIDTH * LOW_HAND_CARD_SCALE
+    } else {
+        CARD_WIDTH
+    }
+}
+
+fn combat_hand_card_width(
+    hand_arrangement: &CombatGridArrangement,
+    low_hand_layout: bool,
+    tile_scale: f32,
+) -> f32 {
+    combat_hand_base_card_width(hand_arrangement, low_hand_layout) * tile_scale
+}
+
+fn combat_layout_plan_better(
+    candidate: &CombatLayoutPlan,
+    hand_count: usize,
+    current_best: &CombatLayoutPlan,
+) -> bool {
+    if candidate.score.fits != current_best.score.fits {
+        return candidate.score.fits;
+    }
+
+    if hand_count > 0
+        && (candidate.score.hand_card_w - current_best.score.hand_card_w).abs()
+            > COMBAT_LAYOUT_SCORE_EPSILON
+    {
+        return candidate.score.hand_card_w > current_best.score.hand_card_w;
+    }
+
+    if (candidate.score.tile_scale - current_best.score.tile_scale).abs()
+        > COMBAT_LAYOUT_SCORE_EPSILON
+    {
+        return candidate.score.tile_scale > current_best.score.tile_scale;
+    }
+
+    if candidate.hand.row_count() != current_best.hand.row_count() {
+        return candidate.hand.row_count() < current_best.hand.row_count();
+    }
+
+    if candidate.enemies.row_count() != current_best.enemies.row_count() {
+        return candidate.enemies.row_count() < current_best.enemies.row_count();
+    }
+
+    false
 }
 
 fn status_label_width(label: &str, size: f32) -> f32 {
@@ -10781,6 +11319,48 @@ fn lerp_optional_rect(from: Option<Rect>, to: Option<Rect>, t: f32) -> Option<Re
         (Some(from_rect), None) => Some(from_rect),
         (None, None) => None,
     }
+}
+
+fn optional_rects_match(left: Option<Rect>, right: Option<Rect>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => rects_match(left, right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn rects_match(left: Rect, right: Rect) -> bool {
+    (left.x - right.x).abs() <= 0.01
+        && (left.y - right.y).abs() <= 0.01
+        && (left.w - right.w).abs() <= 0.01
+        && (left.h - right.h).abs() <= 0.01
+}
+
+fn rect_vecs_match(left: &[Rect], right: &[Rect]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right.iter())
+            .all(|(left, right)| rects_match(*left, *right))
+}
+
+fn combat_layouts_match(left: &Layout, right: &Layout) -> bool {
+    rects_match(left.start_button, right.start_button)
+        && rects_match(left.restart_button, right.restart_button)
+        && optional_rects_match(left.clear_save_button, right.clear_save_button)
+        && rects_match(left.menu_button, right.menu_button)
+        && rects_match(left.end_turn_button, right.end_turn_button)
+        && optional_rects_match(left.end_battle_button, right.end_battle_button)
+        && left.enemy_indices == right.enemy_indices
+        && rect_vecs_match(&left.enemy_rects, &right.enemy_rects)
+        && rects_match(left.player_rect, right.player_rect)
+        && rect_vecs_match(&left.hand_rects, &right.hand_rects)
+        && optional_rects_match(left.hint_rect, right.hint_rect)
+        && (left.tile_scale - right.tile_scale).abs() <= 0.01
+        && (left.tile_insets.pad_x - right.tile_insets.pad_x).abs() <= 0.01
+        && (left.tile_insets.top_pad - right.tile_insets.top_pad).abs() <= 0.01
+        && (left.tile_insets.bottom_pad - right.tile_insets.bottom_pad).abs() <= 0.01
+        && left.low_hand_layout == right.low_hand_layout
 }
 
 fn lerp_tile_insets(from: TileInsets, to: TileInsets, t: f32) -> TileInsets {
@@ -11236,6 +11816,16 @@ fn boot_hero_layout(logical_width: f32, logical_height: f32) -> BootHeroLayout {
     }
 }
 
+fn screen_transition_style(from_screen: AppScreen, to_screen: AppScreen) -> ScreenTransitionStyle {
+    if matches!(from_screen, AppScreen::OpeningIntro)
+        || matches!(to_screen, AppScreen::OpeningIntro)
+    {
+        ScreenTransitionStyle::Fade
+    } else {
+        ScreenTransitionStyle::Motion
+    }
+}
+
 fn hand_hint_metrics(tile_scale: f32) -> (f32, f32, f32) {
     (16.0 * tile_scale, 14.0 * tile_scale, 8.0 * tile_scale)
 }
@@ -11533,7 +12123,7 @@ fn player_panel_metrics(
     );
     let meta_line = combat_playback_meta_label(app).unwrap_or_else(|| {
         format!(
-            "{} {}/{}{PANEL_TEXT_GAP}{} {}->{}",
+            "{} {}/{}{PANEL_TEXT_GAP}{} {}→{}",
             app.tr(ENERGY_LABEL, "Energía"),
             app.combat.player.energy,
             app.combat.player.max_energy,
@@ -12062,9 +12652,16 @@ mod tests {
         restored
     }
 
+    fn skip_opening_intro(app: &mut App) {
+        app.complete_opening_intro();
+        app.continue_from_opening_intro();
+        app.screen_transition = None;
+        app.opening_intro = None;
+    }
+
     fn start_run_to_map(app: &mut App) {
         app.start_run();
-        app.screen_transition = None;
+        skip_opening_intro(app);
         app.claim_module_select(0);
         app.screen_transition = None;
     }
@@ -12072,7 +12669,7 @@ mod tests {
     fn active_module_select_fixture() -> App {
         let mut app = App::new();
         app.start_run();
-        app.screen_transition = None;
+        skip_opening_intro(&mut app);
         app
     }
 
@@ -12117,6 +12714,36 @@ mod tests {
         dungeon.available_nodes.clear();
         let setup = dungeon.current_encounter_setup().unwrap();
         app.dungeon = Some(dungeon);
+        app.begin_encounter(setup);
+        app.screen_transition = None;
+        app
+    }
+
+    fn active_two_enemy_combat_fixture() -> App {
+        let mut app = active_combat_fixture();
+        let setup = crate::combat::EncounterSetup {
+            player_hp: 32,
+            player_max_hp: 32,
+            player_max_energy: 3,
+            enemies: vec![
+                crate::combat::EncounterEnemySetup {
+                    hp: 16,
+                    max_hp: 16,
+                    block: 0,
+                    profile: EnemyProfileId::HeptarchCore,
+                    intent_index: 1,
+                    on_hit_bleed: 0,
+                },
+                crate::combat::EncounterEnemySetup {
+                    hp: 16,
+                    max_hp: 16,
+                    block: 0,
+                    profile: EnemyProfileId::HeptarchCore,
+                    intent_index: 1,
+                    on_hit_bleed: 0,
+                },
+            ],
+        };
         app.begin_encounter(setup);
         app.screen_transition = None;
         app
@@ -12350,6 +12977,251 @@ mod tests {
         wrapped_lines_fit_width(&title_lines, metrics.title_size, inner_width)
             && wrapped_lines_fit_width(&body_lines, metrics.body_size, inner_width)
             && content_bottom <= rect.y + rect.h + 0.01
+    }
+
+    #[test]
+    fn combat_layout_prefers_single_row_hand_in_landscape_with_four_cards() {
+        let mut app = active_combat_fixture();
+        app.combat.deck.hand = vec![
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+            CardId::PinpointJab,
+        ];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.resize(1280.0, 720.0);
+
+        let layout = app.layout();
+
+        assert_eq!(layout.hand_arrangement.row_counts, vec![4]);
+    }
+
+    #[test]
+    fn combat_layout_prefers_two_by_two_hand_in_portrait_with_four_cards() {
+        let mut app = active_combat_fixture();
+        app.combat.deck.hand = vec![
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+            CardId::PinpointJab,
+        ];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.resize(320.0, 568.0);
+
+        let layout = app.layout();
+
+        assert_eq!(layout.hand_arrangement.row_counts, vec![2, 2]);
+    }
+
+    #[test]
+    fn combat_layout_prefers_three_by_three_hand_in_portrait_with_nine_cards() {
+        let mut app = active_combat_fixture();
+        app.combat.deck.hand = vec![
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+            CardId::PinpointJab,
+            CardId::BurstArray,
+            CardId::CoverPulse,
+            CardId::BarrierField,
+            CardId::TacticalBurst,
+            CardId::RazorNet,
+        ];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.resize(320.0, 568.0);
+
+        let layout = app.layout();
+        let viewport = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 320.0,
+            h: 568.0,
+        };
+
+        assert_eq!(layout.hand_arrangement.row_counts, vec![3, 3, 3]);
+        assert!(rect_contains_rect(viewport, combat_layout_bounds(&layout)));
+    }
+
+    #[test]
+    fn combat_layout_prefers_single_enemy_row_in_landscape() {
+        let mut app = active_two_enemy_combat_fixture();
+        app.resize(1280.0, 720.0);
+
+        let layout = app.layout();
+
+        assert_eq!(layout.enemy_arrangement.row_counts, vec![2]);
+    }
+
+    #[test]
+    fn combat_layout_stacks_enemy_rows_in_portrait_when_panels_are_wide() {
+        let mut app = active_two_enemy_combat_fixture();
+        for enemy in &mut app.combat.enemies {
+            enemy.fighter.statuses = StatusSet {
+                bleed: 1,
+                expose: 1,
+                weak: 1,
+                frail: 1,
+                strength: 1,
+            };
+        }
+        app.resize(320.0, 568.0);
+
+        let layout = app.layout();
+
+        assert_eq!(layout.enemy_arrangement.row_counts, vec![1, 1]);
+    }
+
+    #[test]
+    fn enemy_turn_playback_can_recompute_enemy_arrangement_after_hiding_the_hand() {
+        let mut app = active_two_enemy_combat_fixture();
+        app.combat.deck.hand = vec![
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+            CardId::PinpointJab,
+        ];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.resize(430.0, 640.0);
+        let baseline_layout = app.layout();
+
+        app.perform_action(CombatAction::EndTurn);
+        advance_until(&mut app, |app| {
+            app.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn)
+                && app.layout().hand_rects.is_empty()
+                && app.layout_transition.is_none()
+        });
+
+        let collapsed_layout = app.layout();
+
+        assert_ne!(
+            baseline_layout.enemy_arrangement.row_counts,
+            collapsed_layout.enemy_arrangement.row_counts
+        );
+        assert!(collapsed_layout.hand_arrangement.row_counts.is_empty());
+    }
+
+    #[test]
+    fn combat_hint_bar_smoothly_interpolates_when_message_width_changes() {
+        let hand_sets = [
+            vec![CardId::QuickStrike],
+            vec![
+                CardId::QuickStrike,
+                CardId::GuardStep,
+                CardId::FlareSlash,
+                CardId::PinpointJab,
+            ],
+            vec![
+                CardId::QuickStrike,
+                CardId::GuardStep,
+                CardId::FlareSlash,
+                CardId::PinpointJab,
+                CardId::BurstArray,
+                CardId::CoverPulse,
+                CardId::BarrierField,
+                CardId::TacticalBurst,
+                CardId::RazorNet,
+            ],
+        ];
+        let mut scenario = None;
+
+        'search: for two_enemies in [false, true] {
+            for language in [Language::English, Language::Spanish] {
+                for (width, height) in [(320.0, 568.0), (360.0, 640.0), (430.0, 640.0)] {
+                    for hand in &hand_sets {
+                        let mut app = if two_enemies {
+                            active_two_enemy_combat_fixture()
+                        } else {
+                            active_combat_fixture()
+                        };
+                        app.set_language(language);
+                        app.combat.deck.hand = hand.clone();
+                        app.combat.deck.draw_pile.clear();
+                        app.combat.deck.discard_pile.clear();
+                        app.resize(width, height);
+
+                        let before = app.layout();
+                        app.select_or_play_card(0);
+                        let target = app.layout_target();
+                        let other_tiles_changed =
+                            !rects_match(before.player_rect, target.player_rect)
+                                || !rect_vecs_match(&before.hand_rects, &target.hand_rects)
+                                || !rect_vecs_match(&before.enemy_rects, &target.enemy_rects);
+
+                        if other_tiles_changed {
+                            scenario = Some((app, before, target));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some((mut app, before, target)) = scenario else {
+            panic!("expected at least one combat layout where the hint changes other tiles");
+        };
+        let at_start = app.layout();
+
+        assert!(app.layout_transition.is_some());
+        assert!(!combat_layouts_match(&before, &target));
+        assert!(rects_match(before.player_rect, at_start.player_rect));
+        assert!(optional_rects_match(before.hint_rect, at_start.hint_rect));
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS * 0.5);
+        let mid = app.layout();
+        let mid_hint = mid.hint_rect.unwrap();
+        let before_hint = before.hint_rect.unwrap();
+        let target_hint = target.hint_rect.unwrap();
+
+        assert!(mid_hint.w > before_hint.w.min(target_hint.w));
+        assert!(mid_hint.w < before_hint.w.max(target_hint.w));
+        assert!(mid.player_rect.y > before.player_rect.y.min(target.player_rect.y));
+        assert!(mid.player_rect.y < before.player_rect.y.max(target.player_rect.y));
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS);
+        let final_layout = app.layout();
+
+        assert!(combat_layouts_match(&final_layout, &target));
+    }
+
+    #[test]
+    fn combat_layout_smoothly_interpolates_when_enemy_signal_wrap_changes() {
+        let mut app = active_combat_fixture();
+        app.set_language(Language::Spanish);
+        app.resize(320.0, 568.0);
+
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 2);
+        app.sync_combat_feedback_to_combat();
+        let before = app.layout();
+
+        app.snapshot_combat_layout_target();
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 1);
+        app.sync_combat_feedback_to_combat();
+        app.refresh_combat_layout_transition();
+
+        let target = app.layout_target();
+        let at_start = app.layout();
+
+        assert!(app.layout_transition.is_some());
+        assert!(!combat_layouts_match(&before, &target));
+        assert!(rect_vecs_match(&before.enemy_rects, &at_start.enemy_rects));
+        assert!(rects_match(before.player_rect, at_start.player_rect));
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS * 0.5);
+        let mid = app.layout();
+
+        assert!(
+            mid.player_rect.y > before.player_rect.y.min(target.player_rect.y)
+                && mid.player_rect.y < before.player_rect.y.max(target.player_rect.y)
+        );
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS);
+        let final_layout = app.layout();
+
+        assert!(combat_layouts_match(&final_layout, &target));
     }
 
     #[test]
@@ -12717,18 +13589,110 @@ mod tests {
     }
 
     #[test]
-    fn start_run_opens_module_select_before_the_map() {
+    fn start_run_opens_opening_intro_before_module_select() {
         let mut app = App::new();
 
         app.start_run();
 
-        assert!(matches!(app.screen, AppScreen::ModuleSelect));
+        assert!(matches!(app.screen, AppScreen::OpeningIntro));
+        assert!(app.opening_intro.is_some());
         assert!(app.module_select.is_some());
         assert!(matches!(
             app.module_select.as_ref().unwrap().context,
             ModuleSelectContext::Starter
         ));
         assert!(app.dungeon.as_ref().unwrap().modules.is_empty());
+        assert!(app.run_save_snapshot.is_none());
+        assert!(!app.has_saved_run);
+    }
+
+    #[test]
+    fn opening_intro_tick_reveals_text_then_completes() {
+        let mut app = App::new();
+        app.start_run();
+        app.screen_transition = None;
+
+        advance_time(&mut app, OPENING_INTRO_LINE_FADE_MS * 0.5);
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|body|You walk down a narrow hallway toward a door."));
+        assert!(!frame.contains("|body|You enter through the door."));
+        assert!(!app.opening_intro_complete());
+
+        advance_until(&mut app, |app| app.opening_intro_complete());
+
+        assert!(app.opening_intro_complete());
+        assert!(app.opening_intro_button_transition_progress() > 0.0);
+    }
+
+    #[test]
+    fn opening_intro_skip_reveals_all_lines_and_continue_enters_module_select() {
+        let mut app = App::new();
+        app.start_run();
+        app.screen_transition = None;
+
+        app.handle_opening_intro_action();
+
+        assert!(matches!(app.screen, AppScreen::ModuleSelect));
+        assert!(app.run_save_snapshot.is_some());
+        assert!(app.has_saved_run);
+    }
+
+    #[test]
+    fn opening_intro_action_button_animates_to_continue_label() {
+        let mut app = App::new();
+        app.start_run();
+        app.screen_transition = None;
+
+        let skip_button = app.opening_intro_action_button();
+        app.complete_opening_intro();
+        let transition_start_button = app.opening_intro_action_button();
+        advance_time(&mut app, OPENING_INTRO_BUTTON_TRANSITION_MS * 0.5);
+        let transition_mid_button = app.opening_intro_action_button();
+        advance_time(&mut app, OPENING_INTRO_BUTTON_TRANSITION_MS * 0.5);
+        let continue_button = app.opening_intro_action_button();
+
+        assert_eq!(transition_start_button.rect.w, skip_button.rect.w);
+        assert!(transition_mid_button.rect.w < skip_button.rect.w);
+        assert!(transition_mid_button.rect.w > continue_button.rect.w);
+        assert!(continue_button.rect.w < skip_button.rect.w);
+        assert_eq!(
+            continue_button.rect.x + continue_button.rect.w * 0.5,
+            skip_button.rect.x + skip_button.rect.w * 0.5
+        );
+    }
+
+    #[test]
+    fn opening_intro_renders_localized_copy_with_regular_first_line() {
+        let mut app = App::new();
+        app.set_language(Language::Spanish);
+        app.start_run();
+        app.screen_transition = None;
+        app.complete_opening_intro();
+        advance_time(&mut app, OPENING_INTRO_BUTTON_TRANSITION_MS);
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|body|Avanzas por un pasillo estrecho hacia una puerta."));
+        assert!(frame.contains("|body|Cruzas la puerta."));
+        assert!(frame.contains("|body|Hay tres puertas delante."));
+        assert!(frame.contains("|label|Continuar"));
+    }
+
+    #[test]
+    fn opening_intro_does_not_serialize_until_module_select() {
+        let mut app = App::new();
+        app.start_run();
+
+        assert!(app.serialize_current_run().is_none());
+        assert!(app.run_save_snapshot.is_none());
+
+        skip_opening_intro(&mut app);
+
+        assert!(matches!(app.screen, AppScreen::ModuleSelect));
+        assert!(app.serialize_current_run().is_some());
+        assert!(app.run_save_snapshot.is_some());
     }
 
     #[test]
@@ -14564,6 +15528,30 @@ mod tests {
     }
 
     #[test]
+    fn player_panel_deck_counter_uses_unicode_arrow_in_both_languages() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 2;
+        app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.discard_pile = vec![CardId::QuickStrike];
+        app.sync_combat_feedback_to_combat();
+        app.dirty = true;
+        app.tick(0.0);
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("Stack 2→1"));
+        assert!(!frame.contains("Stack 2->1"));
+
+        app.language = Language::Spanish;
+        app.sync_combat_feedback_to_combat();
+        app.dirty = true;
+        app.tick(0.0);
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("Mazo 2→1"));
+        assert!(!frame.contains("Mazo 2->1"));
+    }
+
+    #[test]
     fn enemy_turn_playback_collapses_the_hidden_hand_gap() {
         let mut app = active_combat_fixture();
         let combat_layout = app.layout();
@@ -14916,8 +15904,7 @@ mod tests {
 
     #[test]
     fn returning_to_menu_keeps_continue_available() {
-        let mut app = App::new();
-        app.start_run();
+        let mut app = active_module_select_fixture();
         let saved_snapshot = app.run_save_snapshot.clone();
 
         app.return_to_menu();
@@ -15169,6 +16156,7 @@ mod tests {
     fn boot_restart_modal_cancels_and_confirms_restart() {
         let mut app = App::new();
         app.start_run();
+        skip_opening_intro(&mut app);
         app.return_to_menu();
         app.screen_transition = None;
         let restart_button = app.layout().restart_button;
@@ -15189,8 +16177,17 @@ mod tests {
         app.open_restart_confirm();
         app.key_down(13);
 
-        assert!(matches!(app.screen, AppScreen::ModuleSelect));
-        assert!(app.run_save_snapshot.is_some());
+        assert!(matches!(app.screen, AppScreen::Boot));
+        assert!(app.run_save_snapshot.is_none());
+        assert!(!app.has_saved_run);
+        let start_button = app.layout().start_button;
+        assert_eq!(
+            app.hit_test(
+                start_button.x + start_button.w * 0.5,
+                start_button.y + start_button.h * 0.5,
+            ),
+            Some(HitTarget::Start)
+        );
     }
 
     #[test]
@@ -15198,6 +16195,7 @@ mod tests {
         let mut app = App::new();
         app.debug_mode = true;
         app.start_run();
+        skip_opening_intro(&mut app);
         app.return_to_menu();
         app.screen_transition = None;
 
@@ -15232,6 +16230,7 @@ mod tests {
     fn result_screen_clears_saved_run_snapshot() {
         let mut app = App::new();
         app.start_run();
+        skip_opening_intro(&mut app);
 
         app.screen = AppScreen::Result(CombatOutcome::Defeat);
         app.refresh_run_save_snapshot();

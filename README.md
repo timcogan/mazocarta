@@ -1,4 +1,14 @@
-# Mazocarta
+<p align="center">
+  <img src="web/mazocarta.svg" alt="Mazocarta icon" width="120" height="120">
+</p>
+
+<h1 align="center">Mazocarta</h1>
+
+<p align="center">
+  <a href="https://www.mazocarta.com">
+    <img src="https://img.shields.io/badge/website-www.mazocarta.com-335c3f?style=for-the-badge" alt="Mazocarta website">
+  </a>
+</p>
 
 A browser-first tactical card game written in Rust and compiled to WASM.
 

@@ -475,16 +475,22 @@ pub(crate) fn serialize_reward_tier(tier: RewardTier) -> &'static str {
 pub(crate) fn serialize_event_id(id: EventId) -> &'static str {
     match id {
         EventId::SalvageCache => "salvage_cache",
+        EventId::RelayTerminal => "relay_terminal",
         EventId::ClinicPod => "clinic_pod",
+        EventId::ExchangeConsole => "exchange_console",
         EventId::PrototypeRack => "prototype_rack",
+        EventId::CoolingVault => "cooling_vault",
     }
 }
 
 pub(crate) fn resolve_event_id(id: &str) -> Option<EventId> {
     match id {
         "salvage_cache" => Some(EventId::SalvageCache),
+        "relay_terminal" => Some(EventId::RelayTerminal),
         "clinic_pod" => Some(EventId::ClinicPod),
+        "exchange_console" => Some(EventId::ExchangeConsole),
         "prototype_rack" => Some(EventId::PrototypeRack),
+        "cooling_vault" => Some(EventId::CoolingVault),
         _ => None,
     }
 }

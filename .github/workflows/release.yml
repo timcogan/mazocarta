@@ -1,0 +1,262 @@
+name: Release
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - Cargo.toml
+      - .github/workflows/release.yml
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - Cargo.toml
+      - .github/workflows/release.yml
+      - .github/workflows/pages.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    needs: checks
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      current_version: ${{ steps.meta.outputs.current_version }}
+      previous_version: ${{ steps.meta.outputs.previous_version }}
+      publishing: ${{ steps.meta.outputs.publishing }}
+      dispatch_pages: ${{ steps.meta.outputs.dispatch_pages }}
+      tag_exists: ${{ steps.meta.outputs.tag_exists }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch refs for release checks
+        run: git fetch origin --force --prune "+refs/heads/*:refs/remotes/origin/*" --tags
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          REF_NAME: ${{ github.ref_name }}
+          TARGET_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          parse_package_version() {
+            awk '
+              /^\[package\]$/ { in_package = 1; next }
+              /^\[/ { in_package = 0 }
+              in_package && /^version = / { print $3; exit }
+            ' "$1" | tr -d '"'
+          }
+
+          current_version="$(parse_package_version Cargo.toml)"
+          [[ -n "$current_version" ]] || {
+            echo "failed to determine package version from Cargo.toml" >&2
+            exit 1
+          }
+
+          [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "release automation only supports Cargo.toml versions in X.Y.Z format, found: $current_version" >&2
+            exit 1
+          }
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$REF_NAME" != "master" ]]; then
+            echo "workflow_dispatch release runs must target master, found: $REF_NAME" >&2
+            exit 1
+          fi
+
+          tag="v$current_version"
+          previous_version=""
+          comparison_sha=""
+          manifest_changed=false
+
+          case "$EVENT_NAME" in
+            push)
+              comparison_sha="${BEFORE_SHA:-}"
+              ;;
+            pull_request)
+              comparison_sha="${BASE_SHA:-}"
+              ;;
+          esac
+
+          if [[ -n "$comparison_sha" && "$comparison_sha" != "0000000000000000000000000000000000000000" ]]; then
+            if ! git diff --quiet "$comparison_sha" "$TARGET_SHA" -- Cargo.toml; then
+              manifest_changed=true
+            fi
+
+            if git cat-file -e "${comparison_sha}:Cargo.toml" 2>/dev/null; then
+              previous_manifest="$(git show "${comparison_sha}:Cargo.toml")"
+              previous_version="$(
+                printf '%s\n' "$previous_manifest" | awk '
+                  /^\[package\]$/ { in_package = 1; next }
+                  /^\[/ { in_package = 0 }
+                  in_package && /^version = / { print $3; exit }
+                ' | tr -d '"'
+              )"
+            fi
+          fi
+
+          version_changed=false
+          if [[ "$manifest_changed" == "true" && "$previous_version" != "$current_version" ]]; then
+            version_changed=true
+          fi
+
+          release_state="missing"
+          if gh release view "$tag" --json isDraft >/tmp/release.json 2>/dev/null; then
+            if jq -e '.isDraft' /tmp/release.json >/dev/null; then
+              release_state="draft"
+            else
+              release_state="published"
+            fi
+          fi
+
+          tag_exists=false
+          tag_commit=""
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_exists=true
+            tag_commit="$(git rev-list -n 1 "refs/tags/$tag")"
+            if [[ "$release_state" == "missing" ]]; then
+              release_state="tag-only"
+            fi
+          fi
+
+          publishing=false
+          dispatch_pages=false
+
+          case "$EVENT_NAME" in
+            pull_request)
+              if [[ "$version_changed" == "true" ]]; then
+                if [[ "$release_state" != "missing" || "$tag_exists" == "true" ]]; then
+                  echo "Release version $current_version is already reserved by $tag." >&2
+                  exit 1
+                fi
+              fi
+              ;;
+            push)
+              if [[ "$version_changed" == "true" ]]; then
+                case "$release_state" in
+                  published)
+                    echo "Release $tag already exists. Refusing to reuse version $current_version." >&2
+                    exit 1
+                    ;;
+                  draft)
+                    echo "Draft release $tag already exists. Resolve it before rerunning release automation." >&2
+                    exit 1
+                    ;;
+                  tag-only)
+                    if [[ "$tag_commit" != "$TARGET_SHA" ]]; then
+                      echo "Tag $tag already points to $tag_commit, expected $TARGET_SHA." >&2
+                      exit 1
+                    fi
+                    publishing=true
+                    dispatch_pages=true
+                    ;;
+                  missing)
+                    publishing=true
+                    dispatch_pages=true
+                    ;;
+                esac
+              fi
+              ;;
+            workflow_dispatch)
+              case "$release_state" in
+                published)
+                  dispatch_pages=true
+                  ;;
+                draft)
+                  echo "Draft release $tag already exists. Resolve it before rerunning release automation." >&2
+                  exit 1
+                  ;;
+                tag-only)
+                  if [[ "$tag_commit" != "$TARGET_SHA" ]]; then
+                    echo "Tag $tag already points to $tag_commit, expected $TARGET_SHA." >&2
+                    exit 1
+                  fi
+                  publishing=true
+                  dispatch_pages=true
+                  ;;
+                missing)
+                  publishing=true
+                  dispatch_pages=true
+                  ;;
+              esac
+              ;;
+          esac
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "previous_version=$previous_version" >> "$GITHUB_OUTPUT"
+          echo "publishing=$publishing" >> "$GITHUB_OUTPUT"
+          echo "dispatch_pages=$dispatch_pages" >> "$GITHUB_OUTPUT"
+          echo "tag_exists=$tag_exists" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          TAG_EXISTS: ${{ needs.prepare.outputs.tag_exists }}
+        run: |
+          set -euo pipefail
+
+          args=(
+            release
+            create
+            "$RELEASE_TAG"
+            --title "$RELEASE_TAG"
+            --generate-notes
+          )
+
+          if [[ "$TAG_EXISTS" != "true" ]]; then
+            args+=(--target "$RELEASE_COMMIT")
+          fi
+
+          gh "${args[@]}"
+
+  pages:
+    needs:
+      - prepare
+      - publish
+    if: ${{ always() && needs.prepare.outputs.dispatch_pages == 'true' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch GitHub Pages deploy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh workflow run pages.yml --ref master \
+            -f stable_ref="$RELEASE_TAG" \
+            -f preview_ref="origin/master"
