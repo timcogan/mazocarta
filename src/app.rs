@@ -10102,6 +10102,14 @@ fn card_banner_color(card: CardId) -> &'static str {
         CardId::ChainBarrage | CardId::ChainBarragePlus => TERM_PINK_SOFT,
         CardId::FortressMatrix | CardId::FortressMatrixPlus => TERM_CYAN_SOFT,
         CardId::OverwatchGrid | CardId::OverwatchGridPlus => TERM_CYAN_SOFT,
+        CardId::RiftDart | CardId::RiftDartPlus => TERM_PINK,
+        CardId::MarkPulse | CardId::MarkPulsePlus => TERM_LIME,
+        CardId::BraceCircuit | CardId::BraceCircuitPlus => TERM_CYAN,
+        CardId::FaultShot | CardId::FaultShotPlus => TERM_LIME,
+        CardId::SeverArc | CardId::SeverArcPlus => TERM_PINK_SOFT,
+        CardId::Lockbreaker | CardId::LockbreakerPlus => TERM_LIME_SOFT,
+        CardId::CounterLattice | CardId::CounterLatticePlus => TERM_CYAN_SOFT,
+        CardId::TerminalLoop | CardId::TerminalLoopPlus => TERM_LIME_SOFT,
         CardId::ZeroPoint | CardId::ZeroPointPlus => TERM_LIME_SOFT,
     }
 }
@@ -10131,6 +10139,14 @@ fn card_banner_rgb(card: CardId) -> (u8, u8, u8) {
         CardId::ChainBarrage | CardId::ChainBarragePlus => (255, 156, 240),
         CardId::FortressMatrix | CardId::FortressMatrixPlus => (168, 252, 255),
         CardId::OverwatchGrid | CardId::OverwatchGridPlus => (168, 252, 255),
+        CardId::RiftDart | CardId::RiftDartPlus => (255, 79, 216),
+        CardId::MarkPulse | CardId::MarkPulsePlus => (216, 255, 61),
+        CardId::BraceCircuit | CardId::BraceCircuitPlus => (61, 245, 255),
+        CardId::FaultShot | CardId::FaultShotPlus => (216, 255, 61),
+        CardId::SeverArc | CardId::SeverArcPlus => (255, 156, 240),
+        CardId::Lockbreaker | CardId::LockbreakerPlus => (235, 255, 154),
+        CardId::CounterLattice | CardId::CounterLatticePlus => (168, 252, 255),
+        CardId::TerminalLoop | CardId::TerminalLoopPlus => (235, 255, 154),
         CardId::ZeroPoint | CardId::ZeroPointPlus => (235, 255, 154),
     }
 }
@@ -12847,6 +12863,61 @@ mod tests {
         assert_eq!(shop.offers[1].price, 24);
         assert_eq!(shop.seed, TEST_AUXILIARY_SEED);
         assert_eq!(restored.log, app.log);
+    }
+
+    #[test]
+    fn shop_save_round_trip_preserves_expanded_card_ids_across_tiers() {
+        let mut app = App::new();
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.current_level = 3;
+        dungeon.credits = 55;
+        dungeon.current_node = Some(1);
+        dungeon.deck = vec![CardId::RiftDart, CardId::SeverArc, CardId::TerminalLoop];
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Shop;
+        app.shop = Some(ShopState {
+            offers: vec![
+                ShopOffer {
+                    card: CardId::RiftDart,
+                    price: 16,
+                },
+                ShopOffer {
+                    card: CardId::SeverArc,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::TerminalLoop,
+                    price: 40,
+                },
+            ],
+            seed: TEST_AUXILIARY_SEED,
+        });
+
+        let snapshot = app.serialize_current_run().unwrap();
+        let restored = restore_app_from_snapshot(&snapshot);
+
+        assert!(matches!(restored.screen, AppScreen::Shop));
+        assert_eq!(
+            restored.dungeon.as_ref().unwrap().deck,
+            vec![CardId::RiftDart, CardId::SeverArc, CardId::TerminalLoop]
+        );
+        assert_eq!(
+            restored.shop.as_ref().unwrap().offers,
+            vec![
+                ShopOffer {
+                    card: CardId::RiftDart,
+                    price: 16,
+                },
+                ShopOffer {
+                    card: CardId::SeverArc,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::TerminalLoop,
+                    price: 40,
+                },
+            ]
+        );
     }
 
     #[test]

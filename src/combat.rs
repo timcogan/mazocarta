@@ -428,6 +428,25 @@ impl CombatState {
             .unwrap_or(false)
     }
 
+    fn status_amount(&self, actor: Actor, status: StatusKind) -> u8 {
+        let statuses = self.fighter(actor).statuses;
+        match status {
+            StatusKind::Bleed => statuses.bleed,
+            StatusKind::Expose => statuses.expose,
+            StatusKind::Weak => statuses.weak,
+            StatusKind::Frail => statuses.frail,
+            StatusKind::Strength => statuses.strength,
+        }
+    }
+
+    fn has_status(&self, actor: Actor, status: StatusKind) -> bool {
+        self.status_amount(actor, status) > 0
+    }
+
+    fn gain_energy(&mut self, amount: u8) {
+        self.player.energy = self.player.energy.saturating_add(amount);
+    }
+
     fn process_commands<I>(&mut self, commands: I) -> Vec<CombatEvent>
     where
         I: IntoIterator<Item = CombatCommand>,
@@ -765,6 +784,146 @@ impl CombatState {
             CardId::OverwatchGridPlus => {
                 self.gain_block(Actor::Player, 22, events);
                 queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::RiftDart => {
+                let enemy = target_enemy.unwrap();
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 4, events);
+                self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
+                if exposed {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+            }
+            CardId::RiftDartPlus => {
+                let enemy = target_enemy.unwrap();
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 6, events);
+                self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
+                if exposed {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+            }
+            CardId::MarkPulse => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                self.apply_enemy_status(enemy, StatusKind::Expose, 1, events);
+                if bleeding {
+                    self.gain_block(Actor::Player, 4, events);
+                }
+            }
+            CardId::MarkPulsePlus => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                self.apply_enemy_status(enemy, StatusKind::Expose, 1, events);
+                if bleeding {
+                    self.gain_block(Actor::Player, 6, events);
+                }
+            }
+            CardId::BraceCircuit => {
+                let had_block = self.player.fighter.block > 0;
+                self.gain_block(Actor::Player, 6, events);
+                if had_block {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+            }
+            CardId::BraceCircuitPlus => {
+                let had_block = self.player.fighter.block > 0;
+                self.gain_block(Actor::Player, 8, events);
+                if had_block {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+            }
+            CardId::FaultShot => {
+                let enemy = target_enemy.unwrap();
+                let primed = self.has_status(Actor::Enemy(enemy), StatusKind::Weak)
+                    || self.has_status(Actor::Enemy(enemy), StatusKind::Frail);
+                self.damage_enemy(Actor::Player, enemy, 5, events);
+                if primed {
+                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                }
+            }
+            CardId::FaultShotPlus => {
+                let enemy = target_enemy.unwrap();
+                let primed = self.has_status(Actor::Enemy(enemy), StatusKind::Weak)
+                    || self.has_status(Actor::Enemy(enemy), StatusKind::Frail);
+                self.damage_enemy(Actor::Player, enemy, 7, events);
+                if primed {
+                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                }
+            }
+            CardId::SeverArc => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
+                if bleeding && self.enemy_is_alive(enemy) {
+                    self.damage_enemy(Actor::Player, enemy, 8, events);
+                }
+            }
+            CardId::SeverArcPlus => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                self.damage_enemy(Actor::Player, enemy, 10, events);
+                if bleeding && self.enemy_is_alive(enemy) {
+                    self.damage_enemy(Actor::Player, enemy, 10, events);
+                }
+            }
+            CardId::Lockbreaker => {
+                let enemy = target_enemy.unwrap();
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 6, events);
+                if exposed {
+                    self.apply_enemy_status(enemy, StatusKind::Weak, 1, events);
+                    self.gain_block(Actor::Player, 6, events);
+                }
+            }
+            CardId::LockbreakerPlus => {
+                let enemy = target_enemy.unwrap();
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
+                if exposed {
+                    self.apply_enemy_status(enemy, StatusKind::Weak, 1, events);
+                    self.gain_block(Actor::Player, 8, events);
+                }
+            }
+            CardId::CounterLattice => {
+                let enemy = target_enemy.unwrap();
+                let weakened = self.has_status(Actor::Enemy(enemy), StatusKind::Weak);
+                self.damage_enemy(Actor::Player, enemy, 6, events);
+                if weakened {
+                    self.gain_energy(1);
+                }
+            }
+            CardId::CounterLatticePlus => {
+                let enemy = target_enemy.unwrap();
+                let weakened = self.has_status(Actor::Enemy(enemy), StatusKind::Weak);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
+                if weakened {
+                    self.gain_energy(1);
+                }
+            }
+            CardId::TerminalLoop => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 12, events);
+                if bleeding {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+                if exposed {
+                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                }
+            }
+            CardId::TerminalLoopPlus => {
+                let enemy = target_enemy.unwrap();
+                let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
+                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                self.damage_enemy(Actor::Player, enemy, 15, events);
+                if bleeding {
+                    queue.push_front(CombatCommand::DrawCards(1));
+                }
+                if exposed {
+                    self.apply_status(Actor::Player, StatusKind::Strength, 2, events);
+                }
             }
             CardId::ZeroPoint => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
@@ -1667,6 +1826,217 @@ mod tests {
         assert_eq!(state.deck.hand.len(), 2);
         assert!(state.deck.hand.contains(&CardId::GuardStep));
         assert!(state.deck.hand.contains(&CardId::FlareSlash));
+    }
+
+    #[test]
+    fn rift_dart_variants_respect_the_expose_draw_condition() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::RiftDart];
+        primed.deck.draw_pile = vec![CardId::FlareSlash];
+        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primary_enemy(&primed).fighter.statuses.bleed, 1);
+        assert_eq!(primed.deck.hand, vec![CardId::FlareSlash]);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::RiftDartPlus];
+        unprimed.deck.draw_pile = vec![CardId::FlareSlash];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primary_enemy(&unprimed).fighter.statuses.bleed, 1);
+        assert!(unprimed.deck.hand.is_empty());
+    }
+
+    #[test]
+    fn mark_pulse_variants_grant_block_only_against_bleeding_targets() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::MarkPulsePlus];
+        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primed.player.fighter.block, 6);
+        assert_eq!(primary_enemy(&primed).fighter.statuses.expose, 1);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::MarkPulse];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(unprimed.player.fighter.block, 0);
+        assert_eq!(primary_enemy(&unprimed).fighter.statuses.expose, 1);
+    }
+
+    #[test]
+    fn brace_circuit_variants_draw_only_when_block_already_exists() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::BraceCircuitPlus];
+        primed.deck.draw_pile = vec![CardId::GuardStep];
+        primed.player.fighter.block = 2;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: None,
+        });
+
+        assert_eq!(primed.player.fighter.block, 10);
+        assert_eq!(primed.deck.hand, vec![CardId::GuardStep]);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::BraceCircuit];
+        unprimed.deck.draw_pile = vec![CardId::GuardStep];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: None,
+        });
+
+        assert_eq!(unprimed.player.fighter.block, 6);
+        assert!(unprimed.deck.hand.is_empty());
+    }
+
+    #[test]
+    fn fault_shot_variants_gain_strength_only_against_debuffed_targets() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::FaultShotPlus];
+        primary_enemy_mut(&mut primed).fighter.statuses.weak = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primed.player.fighter.statuses.strength, 1);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::FaultShot];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(unprimed.player.fighter.statuses.strength, 0);
+    }
+
+    #[test]
+    fn sever_arc_variants_hit_twice_only_against_bleeding_targets() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::SeverArcPlus];
+        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primary_enemy(&primed).fighter.hp, 20);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::SeverArc];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primary_enemy(&unprimed).fighter.hp, 32);
+    }
+
+    #[test]
+    fn lockbreaker_variants_convert_expose_into_weak_and_block() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::LockbreakerPlus];
+        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primed.player.fighter.block, 8);
+        assert_eq!(primary_enemy(&primed).fighter.statuses.weak, 1);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::Lockbreaker];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(unprimed.player.fighter.block, 0);
+        assert_eq!(primary_enemy(&unprimed).fighter.statuses.weak, 0);
+    }
+
+    #[test]
+    fn counter_lattice_variants_refund_energy_only_against_weakened_targets() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::CounterLatticePlus];
+        primary_enemy_mut(&mut primed).fighter.statuses.weak = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primed.player.energy, 3);
+        assert_eq!(primary_enemy(&primed).fighter.hp, 32);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::CounterLattice];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(unprimed.player.energy, 2);
+        assert_eq!(primary_enemy(&unprimed).fighter.hp, 34);
+    }
+
+    #[test]
+    fn terminal_loop_variants_reward_bleed_and_expose_setup() {
+        let mut primed = blank_state();
+        primed.deck.hand = vec![CardId::TerminalLoopPlus];
+        primed.deck.draw_pile = vec![CardId::GuardStep];
+        primary_enemy_mut(&mut primed).fighter.statuses.bleed = 1;
+        primary_enemy_mut(&mut primed).fighter.statuses.expose = 1;
+
+        primed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primed.player.fighter.statuses.strength, 2);
+        assert_eq!(primed.deck.hand, vec![CardId::GuardStep]);
+
+        let mut unprimed = blank_state();
+        unprimed.deck.hand = vec![CardId::TerminalLoop];
+        unprimed.deck.draw_pile = vec![CardId::GuardStep];
+
+        unprimed.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(unprimed.player.fighter.statuses.strength, 0);
+        assert!(unprimed.deck.hand.is_empty());
     }
 
     #[test]

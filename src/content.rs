@@ -48,6 +48,22 @@ pub(crate) enum CardId {
     ChainBarragePlus,
     OverwatchGrid,
     OverwatchGridPlus,
+    RiftDart,
+    RiftDartPlus,
+    MarkPulse,
+    MarkPulsePlus,
+    BraceCircuit,
+    BraceCircuitPlus,
+    FaultShot,
+    FaultShotPlus,
+    SeverArc,
+    SeverArcPlus,
+    Lockbreaker,
+    LockbreakerPlus,
+    CounterLattice,
+    CounterLatticePlus,
+    TerminalLoop,
+    TerminalLoopPlus,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -540,6 +556,118 @@ pub(crate) fn card_def(id: CardId) -> CardDef {
             target: CardTarget::SelfOnly,
             description: "Gain 22 Shield. Draw 2.",
         },
+        CardId::RiftDart => CardDef {
+            id,
+            name: "Rift Dart",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 4 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
+        },
+        CardId::RiftDartPlus => CardDef {
+            id,
+            name: "Rift Dart+",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 6 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
+        },
+        CardId::MarkPulse => CardDef {
+            id,
+            name: "Mark Pulse",
+            cost: 0,
+            target: CardTarget::Enemy,
+            description: "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield.",
+        },
+        CardId::MarkPulsePlus => CardDef {
+            id,
+            name: "Mark Pulse+",
+            cost: 0,
+            target: CardTarget::Enemy,
+            description: "Apply 1 Vulnerable. If target has Bleed, gain 6 Shield.",
+        },
+        CardId::BraceCircuit => CardDef {
+            id,
+            name: "Brace Circuit",
+            cost: 1,
+            target: CardTarget::SelfOnly,
+            description: "Gain 6 Shield. If you already have Shield, draw 1.",
+        },
+        CardId::BraceCircuitPlus => CardDef {
+            id,
+            name: "Brace Circuit+",
+            cost: 1,
+            target: CardTarget::SelfOnly,
+            description: "Gain 8 Shield. If you already have Shield, draw 1.",
+        },
+        CardId::FaultShot => CardDef {
+            id,
+            name: "Fault Shot",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 5 damage. If target has Weak or Frail, gain Strength 1.",
+        },
+        CardId::FaultShotPlus => CardDef {
+            id,
+            name: "Fault Shot+",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 7 damage. If target has Weak or Frail, gain Strength 1.",
+        },
+        CardId::SeverArc => CardDef {
+            id,
+            name: "Sever Arc",
+            cost: 2,
+            target: CardTarget::Enemy,
+            description: "Deal 8 damage. If target has Bleed, deal 8 damage again.",
+        },
+        CardId::SeverArcPlus => CardDef {
+            id,
+            name: "Sever Arc+",
+            cost: 2,
+            target: CardTarget::Enemy,
+            description: "Deal 10 damage. If target has Bleed, deal 10 damage again.",
+        },
+        CardId::Lockbreaker => CardDef {
+            id,
+            name: "Lockbreaker",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield.",
+        },
+        CardId::LockbreakerPlus => CardDef {
+            id,
+            name: "Lockbreaker+",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 8 damage. If target has Vulnerable, apply Weak 1 and gain 8 Shield.",
+        },
+        CardId::CounterLattice => CardDef {
+            id,
+            name: "Counter Lattice",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 6 damage. If target has Weak, gain 1 Energy.",
+        },
+        CardId::CounterLatticePlus => CardDef {
+            id,
+            name: "Counter Lattice+",
+            cost: 1,
+            target: CardTarget::Enemy,
+            description: "Deal 8 damage. If target has Weak, gain 1 Energy.",
+        },
+        CardId::TerminalLoop => CardDef {
+            id,
+            name: "Terminal Loop",
+            cost: 2,
+            target: CardTarget::Enemy,
+            description: "Deal 12 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 1.",
+        },
+        CardId::TerminalLoopPlus => CardDef {
+            id,
+            name: "Terminal Loop+",
+            cost: 2,
+            target: CardTarget::Enemy,
+            description: "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2.",
+        },
         CardId::ZeroPoint => CardDef {
             id,
             name: "Zero Point",
@@ -582,6 +710,14 @@ pub(crate) fn upgraded_card(id: CardId) -> Option<CardId> {
         CardId::ChainBarrage => Some(CardId::ChainBarragePlus),
         CardId::FortressMatrix => Some(CardId::FortressMatrixPlus),
         CardId::OverwatchGrid => Some(CardId::OverwatchGridPlus),
+        CardId::RiftDart => Some(CardId::RiftDartPlus),
+        CardId::MarkPulse => Some(CardId::MarkPulsePlus),
+        CardId::BraceCircuit => Some(CardId::BraceCircuitPlus),
+        CardId::FaultShot => Some(CardId::FaultShotPlus),
+        CardId::SeverArc => Some(CardId::SeverArcPlus),
+        CardId::Lockbreaker => Some(CardId::LockbreakerPlus),
+        CardId::CounterLattice => Some(CardId::CounterLatticePlus),
+        CardId::TerminalLoop => Some(CardId::TerminalLoopPlus),
         CardId::ZeroPoint => Some(CardId::ZeroPointPlus),
         CardId::FlareSlashPlus
         | CardId::GuardStepPlus
@@ -606,6 +742,14 @@ pub(crate) fn upgraded_card(id: CardId) -> Option<CardId> {
         | CardId::ChainBarragePlus
         | CardId::FortressMatrixPlus
         | CardId::OverwatchGridPlus
+        | CardId::RiftDartPlus
+        | CardId::MarkPulsePlus
+        | CardId::BraceCircuitPlus
+        | CardId::FaultShotPlus
+        | CardId::SeverArcPlus
+        | CardId::LockbreakerPlus
+        | CardId::CounterLatticePlus
+        | CardId::TerminalLoopPlus
         | CardId::ZeroPointPlus => None,
     }
 }
@@ -635,6 +779,14 @@ const BASE_CARD_CATALOG: &[CardId] = &[
     CardId::FortressMatrix,
     CardId::OverwatchGrid,
     CardId::ZeroPoint,
+    CardId::RiftDart,
+    CardId::MarkPulse,
+    CardId::BraceCircuit,
+    CardId::FaultShot,
+    CardId::SeverArc,
+    CardId::Lockbreaker,
+    CardId::CounterLattice,
+    CardId::TerminalLoop,
 ];
 
 pub(crate) fn all_base_cards() -> &'static [CardId] {
@@ -771,6 +923,10 @@ fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
             CardId::PressurePoint,
             CardId::BurstArray,
             CardId::CoverPulse,
+            CardId::RiftDart,
+            CardId::MarkPulse,
+            CardId::BraceCircuit,
+            CardId::FaultShot,
         ],
         RewardTier::Elite => match level.clamp(1, 3) {
             1 => &[
@@ -781,6 +937,9 @@ fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
                 CardId::RazorNet,
                 CardId::FracturePulse,
                 CardId::VectorLock,
+                CardId::SeverArc,
+                CardId::Lockbreaker,
+                CardId::CounterLattice,
             ],
             2 => &[
                 CardId::SunderingArc,
@@ -790,6 +949,9 @@ fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
                 CardId::RazorNet,
                 CardId::FracturePulse,
                 CardId::VectorLock,
+                CardId::SeverArc,
+                CardId::Lockbreaker,
+                CardId::CounterLattice,
                 CardId::BreachSignal,
             ],
             _ => &[
@@ -800,6 +962,9 @@ fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
                 CardId::RazorNet,
                 CardId::FracturePulse,
                 CardId::VectorLock,
+                CardId::SeverArc,
+                CardId::Lockbreaker,
+                CardId::CounterLattice,
                 CardId::BreachSignal,
                 CardId::AnchorLoop,
             ],
@@ -809,6 +974,7 @@ fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
             CardId::ChainBarrage,
             CardId::FortressMatrix,
             CardId::OverwatchGrid,
+            CardId::TerminalLoop,
             CardId::ZeroPoint,
         ],
     }
@@ -1007,6 +1173,26 @@ pub(crate) fn localized_card_name(id: CardId, language: Language) -> &'static st
         CardId::OverwatchGridPlus => {
             localized_text(language, "Overwatch Grid+", "Red de Vigilancia+")
         }
+        CardId::RiftDart => localized_text(language, "Rift Dart", "Dardo de Brecha"),
+        CardId::RiftDartPlus => localized_text(language, "Rift Dart+", "Dardo de Brecha+"),
+        CardId::MarkPulse => localized_text(language, "Mark Pulse", "Pulso de Marca"),
+        CardId::MarkPulsePlus => localized_text(language, "Mark Pulse+", "Pulso de Marca+"),
+        CardId::BraceCircuit => localized_text(language, "Brace Circuit", "Circuito de Refuerzo"),
+        CardId::BraceCircuitPlus => {
+            localized_text(language, "Brace Circuit+", "Circuito de Refuerzo+")
+        }
+        CardId::FaultShot => localized_text(language, "Fault Shot", "Disparo de Falla"),
+        CardId::FaultShotPlus => localized_text(language, "Fault Shot+", "Disparo de Falla+"),
+        CardId::SeverArc => localized_text(language, "Sever Arc", "Arco de Corte"),
+        CardId::SeverArcPlus => localized_text(language, "Sever Arc+", "Arco de Corte+"),
+        CardId::Lockbreaker => localized_text(language, "Lockbreaker", "Rompebloqueo"),
+        CardId::LockbreakerPlus => localized_text(language, "Lockbreaker+", "Rompebloqueo+"),
+        CardId::CounterLattice => localized_text(language, "Counter Lattice", "Trama de Respuesta"),
+        CardId::CounterLatticePlus => {
+            localized_text(language, "Counter Lattice+", "Trama de Respuesta+")
+        }
+        CardId::TerminalLoop => localized_text(language, "Terminal Loop", "Bucle Terminal"),
+        CardId::TerminalLoopPlus => localized_text(language, "Terminal Loop+", "Bucle Terminal+"),
         CardId::ZeroPoint => localized_text(language, "Zero Point", "Punto Cero"),
         CardId::ZeroPointPlus => localized_text(language, "Zero Point+", "Punto Cero+"),
     }
@@ -1213,6 +1399,86 @@ pub(crate) fn localized_card_description(id: CardId, language: Language) -> &'st
             language,
             "Gain 22 Shield. Draw 2.",
             "Gana 22 de Escudo. Roba 2.",
+        ),
+        CardId::RiftDart => localized_text(
+            language,
+            "Deal 4 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
+            "Inflige 4 de daño. Aplica Sangrado 1. Si el objetivo tiene Vulnerable, roba 1.",
+        ),
+        CardId::RiftDartPlus => localized_text(
+            language,
+            "Deal 6 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
+            "Inflige 6 de daño. Aplica Sangrado 1. Si el objetivo tiene Vulnerable, roba 1.",
+        ),
+        CardId::MarkPulse => localized_text(
+            language,
+            "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield.",
+            "Aplica Vulnerable 1. Si el objetivo tiene Sangrado, gana 4 de Escudo.",
+        ),
+        CardId::MarkPulsePlus => localized_text(
+            language,
+            "Apply 1 Vulnerable. If target has Bleed, gain 6 Shield.",
+            "Aplica Vulnerable 1. Si el objetivo tiene Sangrado, gana 6 de Escudo.",
+        ),
+        CardId::BraceCircuit => localized_text(
+            language,
+            "Gain 6 Shield. If you already have Shield, draw 1.",
+            "Gana 6 de Escudo. Si ya tienes Escudo, roba 1.",
+        ),
+        CardId::BraceCircuitPlus => localized_text(
+            language,
+            "Gain 8 Shield. If you already have Shield, draw 1.",
+            "Gana 8 de Escudo. Si ya tienes Escudo, roba 1.",
+        ),
+        CardId::FaultShot => localized_text(
+            language,
+            "Deal 5 damage. If target has Weak or Frail, gain Strength 1.",
+            "Inflige 5 de daño. Si el objetivo tiene Débil o Frágil, gana Fuerza 1.",
+        ),
+        CardId::FaultShotPlus => localized_text(
+            language,
+            "Deal 7 damage. If target has Weak or Frail, gain Strength 1.",
+            "Inflige 7 de daño. Si el objetivo tiene Débil o Frágil, gana Fuerza 1.",
+        ),
+        CardId::SeverArc => localized_text(
+            language,
+            "Deal 8 damage. If target has Bleed, deal 8 damage again.",
+            "Inflige 8 de daño. Si el objetivo tiene Sangrado, inflige 8 de daño otra vez.",
+        ),
+        CardId::SeverArcPlus => localized_text(
+            language,
+            "Deal 10 damage. If target has Bleed, deal 10 damage again.",
+            "Inflige 10 de daño. Si el objetivo tiene Sangrado, inflige 10 de daño otra vez.",
+        ),
+        CardId::Lockbreaker => localized_text(
+            language,
+            "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield.",
+            "Inflige 6 de daño. Si el objetivo tiene Vulnerable, aplica Débil 1 y gana 6 de Escudo.",
+        ),
+        CardId::LockbreakerPlus => localized_text(
+            language,
+            "Deal 8 damage. If target has Vulnerable, apply Weak 1 and gain 8 Shield.",
+            "Inflige 8 de daño. Si el objetivo tiene Vulnerable, aplica Débil 1 y gana 8 de Escudo.",
+        ),
+        CardId::CounterLattice => localized_text(
+            language,
+            "Deal 6 damage. If target has Weak, gain 1 Energy.",
+            "Inflige 6 de daño. Si el objetivo tiene Débil, gana 1 de Energía.",
+        ),
+        CardId::CounterLatticePlus => localized_text(
+            language,
+            "Deal 8 damage. If target has Weak, gain 1 Energy.",
+            "Inflige 8 de daño. Si el objetivo tiene Débil, gana 1 de Energía.",
+        ),
+        CardId::TerminalLoop => localized_text(
+            language,
+            "Deal 12 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 1.",
+            "Inflige 12 de daño. Si el objetivo tiene Sangrado, roba 1. Si el objetivo tiene Vulnerable, gana Fuerza 1.",
+        ),
+        CardId::TerminalLoopPlus => localized_text(
+            language,
+            "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2.",
+            "Inflige 15 de daño. Si el objetivo tiene Sangrado, roba 1. Si el objetivo tiene Vulnerable, gana Fuerza 2.",
         ),
         CardId::ZeroPoint => localized_text(
             language,
@@ -4003,13 +4269,17 @@ mod tests {
     }
 
     #[test]
-    fn combat_rewards_include_the_new_staples() {
+    fn combat_rewards_include_the_expanded_staples() {
         let pool = reward_pool(RewardTier::Combat, 1);
 
         assert!(pool.contains(&CardId::PinpointJab));
         assert!(pool.contains(&CardId::SignalTap));
         assert!(pool.contains(&CardId::BurstArray));
         assert!(pool.contains(&CardId::CoverPulse));
+        assert!(pool.contains(&CardId::RiftDart));
+        assert!(pool.contains(&CardId::MarkPulse));
+        assert!(pool.contains(&CardId::BraceCircuit));
+        assert!(pool.contains(&CardId::FaultShot));
     }
 
     #[test]
@@ -4022,6 +4292,7 @@ mod tests {
         assert!(pool.contains(&CardId::ChainBarrage));
         assert!(pool.contains(&CardId::FortressMatrix));
         assert!(pool.contains(&CardId::OverwatchGrid));
+        assert!(pool.contains(&CardId::TerminalLoop));
         assert!(pool.contains(&CardId::ZeroPoint));
         assert!(choices.iter().all(|card| pool.contains(card)));
     }
@@ -4064,18 +4335,27 @@ mod tests {
         assert!(act_one_pool.contains(&CardId::RazorNet));
         assert!(act_one_pool.contains(&CardId::FracturePulse));
         assert!(act_one_pool.contains(&CardId::VectorLock));
+        assert!(act_one_pool.contains(&CardId::SeverArc));
+        assert!(act_one_pool.contains(&CardId::Lockbreaker));
+        assert!(act_one_pool.contains(&CardId::CounterLattice));
         assert!(!act_one_pool.contains(&CardId::BreachSignal));
         assert!(!act_one_pool.contains(&CardId::AnchorLoop));
 
         assert!(act_two_pool.contains(&CardId::RazorNet));
         assert!(act_two_pool.contains(&CardId::FracturePulse));
         assert!(act_two_pool.contains(&CardId::VectorLock));
+        assert!(act_two_pool.contains(&CardId::SeverArc));
+        assert!(act_two_pool.contains(&CardId::Lockbreaker));
+        assert!(act_two_pool.contains(&CardId::CounterLattice));
         assert!(act_two_pool.contains(&CardId::BreachSignal));
         assert!(!act_two_pool.contains(&CardId::AnchorLoop));
 
         assert!(act_three_pool.contains(&CardId::RazorNet));
         assert!(act_three_pool.contains(&CardId::FracturePulse));
         assert!(act_three_pool.contains(&CardId::VectorLock));
+        assert!(act_three_pool.contains(&CardId::SeverArc));
+        assert!(act_three_pool.contains(&CardId::Lockbreaker));
+        assert!(act_three_pool.contains(&CardId::CounterLattice));
         assert!(act_three_pool.contains(&CardId::BreachSignal));
         assert!(act_three_pool.contains(&CardId::AnchorLoop));
     }
@@ -4132,9 +4412,15 @@ mod tests {
             upgraded_card(CardId::ChainBarrage),
             Some(CardId::ChainBarragePlus)
         );
+        assert_eq!(upgraded_card(CardId::RiftDart), Some(CardId::RiftDartPlus));
+        assert_eq!(
+            upgraded_card(CardId::TerminalLoop),
+            Some(CardId::TerminalLoopPlus)
+        );
         assert_eq!(upgraded_card(CardId::FlareSlashPlus), None);
         assert_eq!(upgraded_card(CardId::ZeroPointPlus), None);
         assert_eq!(upgraded_card(CardId::OverwatchGridPlus), None);
+        assert_eq!(upgraded_card(CardId::TerminalLoopPlus), None);
     }
 
     #[test]
@@ -4144,7 +4430,7 @@ mod tests {
         unique_cards.sort_by_key(|card| *card as u8);
         unique_cards.dedup();
 
-        assert_eq!(cards.len(), 24);
+        assert_eq!(cards.len(), 32);
         assert_eq!(unique_cards.len(), cards.len());
         assert!(cards.iter().all(|card| upgraded_card(*card).is_some()));
         assert!(
@@ -4156,29 +4442,74 @@ mod tests {
     }
 
     #[test]
-    fn new_cards_expose_expected_defs() {
-        let pinpoint = card_def(CardId::PinpointJab);
-        let signal = card_def(CardId::SignalTap);
-        let pressure = card_def(CardId::PressurePoint);
-        let barrier = card_def(CardId::BarrierField);
-        let tactical = card_def(CardId::TacticalBurst);
-        let fracture = card_def(CardId::FracturePulse);
-        let overwatch = card_def(CardId::OverwatchGrid);
+    fn expanded_cards_expose_expected_defs() {
+        let rift = card_def(CardId::RiftDart);
+        let mark = card_def(CardId::MarkPulse);
+        let brace = card_def(CardId::BraceCircuit);
+        let fault = card_def(CardId::FaultShot);
+        let sever = card_def(CardId::SeverArc);
+        let lockbreaker = card_def(CardId::Lockbreaker);
+        let counter = card_def(CardId::CounterLattice);
+        let terminal = card_def(CardId::TerminalLoop);
 
-        assert_eq!(pinpoint.name, "Pinpoint Jab");
-        assert_eq!(pinpoint.cost, 1);
-        assert_eq!(pinpoint.target, CardTarget::Enemy);
-        assert_eq!(signal.cost, 0);
-        assert_eq!(signal.target, CardTarget::Enemy);
-        assert_eq!(pressure.description, "Deal 4 damage. Apply Weak 1.");
-        assert_eq!(barrier.target, CardTarget::Enemy);
-        assert_eq!(barrier.description, "Gain 10 Shield. Apply Frail 1.");
-        assert_eq!(tactical.target, CardTarget::SelfOnly);
-        assert_eq!(tactical.description, "Draw 2. Gain Strength 1.");
-        assert_eq!(fracture.cost, 2);
-        assert_eq!(fracture.target, CardTarget::Enemy);
-        assert_eq!(overwatch.cost, 2);
-        assert_eq!(overwatch.target, CardTarget::SelfOnly);
+        assert_eq!(rift.name, "Rift Dart");
+        assert_eq!(rift.cost, 1);
+        assert_eq!(rift.target, CardTarget::Enemy);
+        assert_eq!(mark.cost, 0);
+        assert_eq!(
+            mark.description,
+            "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield."
+        );
+        assert_eq!(brace.target, CardTarget::SelfOnly);
+        assert_eq!(
+            brace.description,
+            "Gain 6 Shield. If you already have Shield, draw 1."
+        );
+        assert_eq!(
+            fault.description,
+            "Deal 5 damage. If target has Weak or Frail, gain Strength 1."
+        );
+        assert_eq!(sever.cost, 2);
+        assert_eq!(sever.target, CardTarget::Enemy);
+        assert_eq!(
+            lockbreaker.description,
+            "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield."
+        );
+        assert_eq!(counter.target, CardTarget::Enemy);
+        assert_eq!(
+            counter.description,
+            "Deal 6 damage. If target has Weak, gain 1 Energy."
+        );
+        assert_eq!(terminal.cost, 2);
+        assert_eq!(terminal.target, CardTarget::Enemy);
+    }
+
+    #[test]
+    fn expanded_cards_ship_with_english_and_spanish_localization() {
+        assert_eq!(
+            localized_card_name(CardId::RiftDart, Language::English),
+            "Rift Dart"
+        );
+        assert_eq!(
+            localized_card_name(CardId::RiftDart, Language::Spanish),
+            "Dardo de Brecha"
+        );
+        assert_eq!(
+            localized_card_name(CardId::CounterLattice, Language::Spanish),
+            "Trama de Respuesta"
+        );
+        assert_eq!(
+            localized_card_description(CardId::BraceCircuit, Language::Spanish),
+            "Gana 6 de Escudo. Si ya tienes Escudo, roba 1."
+        );
+        assert_eq!(
+            localized_card_description(CardId::CounterLatticePlus, Language::Spanish),
+            "Inflige 8 de daño. Si el objetivo tiene Débil, gana 1 de Energía."
+        );
+        assert_eq!(
+            localized_card_description(CardId::TerminalLoopPlus, Language::English),
+            "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2."
+        );
     }
 
     #[test]
