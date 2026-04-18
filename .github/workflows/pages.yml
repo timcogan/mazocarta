@@ -1,6 +1,16 @@
 name: Deploy GitHub Pages
 
 on:
+  workflow_dispatch:
+    inputs:
+      stable_ref:
+        description: "Git ref to package as the stable site"
+        required: false
+        type: string
+      preview_ref:
+        description: "Git ref to package as the preview site"
+        required: false
+        type: string
   push:
     branches:
       - master
@@ -44,11 +54,24 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - name: Fetch refs for stable and preview builds
-        run: git fetch origin master --tags --force
+        run: git fetch origin --force --prune "+refs/heads/*:refs/remotes/origin/*" --tags
 
       - name: Resolve Pages refs
+        env:
+          DISPATCH_STABLE_REF: ${{ github.event.inputs.stable_ref }}
+          DISPATCH_PREVIEW_REF: ${{ github.event.inputs.preview_ref }}
         run: |
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ -n "$DISPATCH_PREVIEW_REF" ]]; then
+              echo "MAZOCARTA_PAGES_PREVIEW_REF=$DISPATCH_PREVIEW_REF" >> "$GITHUB_ENV"
+            else
+              echo "MAZOCARTA_PAGES_PREVIEW_REF=HEAD" >> "$GITHUB_ENV"
+            fi
+
+            if [[ -n "$DISPATCH_STABLE_REF" ]]; then
+              echo "MAZOCARTA_PAGES_STABLE_REF=$DISPATCH_STABLE_REF" >> "$GITHUB_ENV"
+            fi
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             echo "MAZOCARTA_PAGES_PREVIEW_REF=origin/master" >> "$GITHUB_ENV"
             echo "MAZOCARTA_PAGES_STABLE_REF=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
           else

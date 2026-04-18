@@ -97,8 +97,11 @@ pub(crate) struct ShopOffer {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventId {
     SalvageCache,
+    RelayTerminal,
     ClinicPod,
+    ExchangeConsole,
     PrototypeRack,
+    CoolingVault,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1003,15 +1006,30 @@ pub(crate) fn event_def(id: EventId) -> EventDef {
             title: "Salvage Cache",
             flavor: "A drift crate hums beneath a half-collapsed service gantry.",
         },
+        EventId::RelayTerminal => EventDef {
+            id,
+            title: "Relay Terminal",
+            flavor: "A damaged relay terminal still shows a few readable combat routines.",
+        },
         EventId::ClinicPod => EventDef {
             id,
             title: "Clinic Pod",
             flavor: "An intact med pod still cycles a pale diagnostic glow.",
         },
+        EventId::ExchangeConsole => EventDef {
+            id,
+            title: "Exchange Console",
+            flavor: "An exchange console still lets you trade useful parts for credits.",
+        },
         EventId::PrototypeRack => EventDef {
             id,
             title: "Prototype Rack",
             flavor: "A sealed rack flickers between proven gear and live-fire prototypes.",
+        },
+        EventId::CoolingVault => EventDef {
+            id,
+            title: "Cooling Vault",
+            flavor: "A cooling vault is still running, though the temperature controls are unstable.",
         },
     }
 }
@@ -1021,10 +1039,16 @@ pub(crate) fn event_choice_title(event: EventId, choice_index: usize) -> Option<
     match (event, choice_index) {
         (EventId::SalvageCache, 0) => Some("Take the clean parts"),
         (EventId::SalvageCache, 1) => Some("Cut the safety seals"),
+        (EventId::RelayTerminal, 0) => Some("Copy the shield routine"),
+        (EventId::RelayTerminal, 1) => Some("Pull the attack routine"),
         (EventId::ClinicPod, 0) => Some("Run the recovery cycle"),
         (EventId::ClinicPod, 1) => Some("Overclock the chassis"),
+        (EventId::ExchangeConsole, 0) => Some("Sell the spare plating"),
+        (EventId::ExchangeConsole, 1) => Some("Sell the coolant reserve"),
         (EventId::PrototypeRack, 0) => Some("Take the stable shell"),
         (EventId::PrototypeRack, 1) => Some("Take the live prototype"),
+        (EventId::CoolingVault, 0) => Some("Rest by the coolant vent"),
+        (EventId::CoolingVault, 1) => Some("Endure the freezing chamber"),
         _ => None,
     }
 }
@@ -1049,6 +1073,11 @@ pub(crate) fn event_choice_effect(
                 _ => 40,
             },
         }),
+        (EventId::RelayTerminal, 0) => Some(EventChoiceEffect::AddCard(CardId::CoverPulse)),
+        (EventId::RelayTerminal, 1) => Some(EventChoiceEffect::LoseHpAddCard {
+            lose_hp: 4,
+            card: CardId::TacticalBurst,
+        }),
         (EventId::ClinicPod, 0) => Some(EventChoiceEffect::Heal(match level {
             1 => 8,
             2 => 10,
@@ -1057,6 +1086,11 @@ pub(crate) fn event_choice_effect(
         (EventId::ClinicPod, 1) => Some(EventChoiceEffect::LoseHpGainMaxHp {
             lose_hp: 5,
             gain_max_hp: 4,
+        }),
+        (EventId::ExchangeConsole, 0) => Some(EventChoiceEffect::GainCredits(22)),
+        (EventId::ExchangeConsole, 1) => Some(EventChoiceEffect::LoseHpGainCredits {
+            lose_hp: 5,
+            gain_credits: 36,
         }),
         (EventId::PrototypeRack, 0) => Some(EventChoiceEffect::AddCard(match level {
             1 => CardId::CoverPulse,
@@ -1070,6 +1104,11 @@ pub(crate) fn event_choice_effect(
                 2 => CardId::VectorLock,
                 _ => CardId::ZeroPoint,
             },
+        }),
+        (EventId::CoolingVault, 0) => Some(EventChoiceEffect::Heal(12)),
+        (EventId::CoolingVault, 1) => Some(EventChoiceEffect::LoseHpGainMaxHp {
+            lose_hp: 6,
+            gain_max_hp: 5,
         }),
         _ => None,
     }
@@ -1577,10 +1616,15 @@ pub(crate) fn localized_event_def(id: EventId, language: Language) -> EventDef {
 pub(crate) fn localized_event_title(id: EventId, language: Language) -> &'static str {
     match id {
         EventId::SalvageCache => localized_text(language, "Salvage Cache", "Alijo de Chatarra"),
+        EventId::RelayTerminal => localized_text(language, "Relay Terminal", "Terminal de Relé"),
         EventId::ClinicPod => localized_text(language, "Clinic Pod", "Cápsula Clínica"),
+        EventId::ExchangeConsole => {
+            localized_text(language, "Exchange Console", "Consola de Intercambio")
+        }
         EventId::PrototypeRack => {
             localized_text(language, "Prototype Rack", "Bastidor de Prototipos")
         }
+        EventId::CoolingVault => localized_text(language, "Cooling Vault", "Bóveda Criogénica"),
     }
 }
 
@@ -1591,15 +1635,30 @@ pub(crate) fn localized_event_flavor(id: EventId, language: Language) -> &'stati
             "A drift crate hums beneath a half-collapsed service gantry.",
             "Un contenedor a la deriva zumba bajo una pasarela de servicio medio derrumbada.",
         ),
+        EventId::RelayTerminal => localized_text(
+            language,
+            "A damaged relay terminal still shows a few readable combat routines.",
+            "Un terminal de relé dañado aún muestra algunas rutinas de combate legibles.",
+        ),
         EventId::ClinicPod => localized_text(
             language,
             "An intact med pod still cycles a pale diagnostic glow.",
             "Una cápsula médica intacta aún emite un tenue resplandor de diagnóstico.",
         ),
+        EventId::ExchangeConsole => localized_text(
+            language,
+            "An exchange console still lets you trade useful parts for credits.",
+            "Una consola de intercambio aún te deja cambiar piezas útiles por créditos.",
+        ),
         EventId::PrototypeRack => localized_text(
             language,
             "A sealed rack flickers between proven gear and live-fire prototypes.",
             "Un bastidor sellado alterna entre equipo probado y prototipos de fuego real.",
+        ),
+        EventId::CoolingVault => localized_text(
+            language,
+            "A cooling vault is still running, though the temperature controls are unstable.",
+            "Una bóveda de enfriamiento aún funciona, aunque los controles de temperatura son inestables.",
         ),
     }
 }
@@ -1618,6 +1677,16 @@ pub(crate) fn localized_event_choice_title(
             "Cut the safety seals",
             "Abrir los sellos de seguridad",
         ),
+        (EventId::RelayTerminal, 0) => localized_text(
+            language,
+            "Copy the shield routine",
+            "Copiar la rutina de escudo",
+        ),
+        (EventId::RelayTerminal, 1) => localized_text(
+            language,
+            "Pull the attack routine",
+            "Extraer la rutina de ataque",
+        ),
         (EventId::ClinicPod, 0) => localized_text(
             language,
             "Run the recovery cycle",
@@ -1626,6 +1695,16 @@ pub(crate) fn localized_event_choice_title(
         (EventId::ClinicPod, 1) => {
             localized_text(language, "Overclock the chassis", "Sobrecargar el armazón")
         }
+        (EventId::ExchangeConsole, 0) => localized_text(
+            language,
+            "Sell the spare plating",
+            "Vender las placas sobrantes",
+        ),
+        (EventId::ExchangeConsole, 1) => localized_text(
+            language,
+            "Sell the coolant reserve",
+            "Vender la reserva de refrigerante",
+        ),
         (EventId::PrototypeRack, 0) => localized_text(
             language,
             "Take the stable shell",
@@ -1635,6 +1714,16 @@ pub(crate) fn localized_event_choice_title(
             language,
             "Take the live prototype",
             "Tomar el prototipo en pruebas",
+        ),
+        (EventId::CoolingVault, 0) => localized_text(
+            language,
+            "Rest by the coolant vent",
+            "Descansar junto al conducto frío",
+        ),
+        (EventId::CoolingVault, 1) => localized_text(
+            language,
+            "Endure the freezing chamber",
+            "Aguantar la cámara helada",
         ),
         _ => return None,
     })
@@ -2043,14 +2132,18 @@ pub(crate) fn localized_enemy_intent(
     intent
 }
 
-pub(crate) fn event_for_level(seed: u64, level: usize) -> EventId {
-    let mut events = [
-        EventId::SalvageCache,
-        EventId::ClinicPod,
-        EventId::PrototypeRack,
-    ];
+pub(crate) fn event_pool_for_level(level: usize) -> [EventId; 2] {
+    match level.clamp(1, 3) {
+        1 => [EventId::SalvageCache, EventId::RelayTerminal],
+        2 => [EventId::ClinicPod, EventId::ExchangeConsole],
+        _ => [EventId::PrototypeRack, EventId::CoolingVault],
+    }
+}
+
+pub(crate) fn ordered_events_for_level(seed: u64, level: usize) -> [EventId; 2] {
+    let mut events = event_pool_for_level(level);
     events.sort_by_key(|event| event_roll_key(seed, *event));
-    events[level.clamp(1, events.len()) - 1]
+    events
 }
 
 fn reward_roll_key(seed: u64, card: CardId) -> u64 {
@@ -4178,23 +4271,30 @@ mod tests {
     const TEST_SHOP_SEED: u64 = 0xD15C_A11C;
 
     #[test]
-    fn event_order_is_deterministic_and_non_repeating() {
-        let a = [
-            event_for_level(TEST_PRIMARY_SEED, 1),
-            event_for_level(TEST_PRIMARY_SEED, 2),
-            event_for_level(TEST_PRIMARY_SEED, 3),
-        ];
-        let b = [
-            event_for_level(TEST_PRIMARY_SEED, 1),
-            event_for_level(TEST_PRIMARY_SEED, 2),
-            event_for_level(TEST_PRIMARY_SEED, 3),
-        ];
-        let mut unique = a.to_vec();
-        unique.sort_by_key(|event| *event as u8);
-        unique.dedup();
+    fn event_order_is_deterministic_and_non_repeating_within_each_level() {
+        for level in 1..=3 {
+            let a = ordered_events_for_level(TEST_PRIMARY_SEED, level);
+            let b = ordered_events_for_level(TEST_PRIMARY_SEED, level);
 
-        assert_eq!(a, b);
-        assert_eq!(unique.len(), 3);
+            assert_eq!(a, b);
+            assert_ne!(a[0], a[1]);
+        }
+    }
+
+    #[test]
+    fn event_pools_are_fixed_per_level() {
+        assert_eq!(
+            event_pool_for_level(1),
+            [EventId::SalvageCache, EventId::RelayTerminal]
+        );
+        assert_eq!(
+            event_pool_for_level(2),
+            [EventId::ClinicPod, EventId::ExchangeConsole]
+        );
+        assert_eq!(
+            event_pool_for_level(3),
+            [EventId::PrototypeRack, EventId::CoolingVault]
+        );
     }
 
     #[test]
@@ -4217,6 +4317,83 @@ mod tests {
                 lose_hp: 5,
                 card: CardId::ZeroPoint,
             })
+        );
+    }
+
+    #[test]
+    fn new_event_choices_have_expected_effects() {
+        assert_eq!(
+            event_choice_effect(EventId::RelayTerminal, 0, 1),
+            Some(EventChoiceEffect::AddCard(CardId::CoverPulse))
+        );
+        assert_eq!(
+            event_choice_effect(EventId::RelayTerminal, 1, 3),
+            Some(EventChoiceEffect::LoseHpAddCard {
+                lose_hp: 4,
+                card: CardId::TacticalBurst,
+            })
+        );
+        assert_eq!(
+            event_choice_effect(EventId::ExchangeConsole, 0, 2),
+            Some(EventChoiceEffect::GainCredits(22))
+        );
+        assert_eq!(
+            event_choice_effect(EventId::ExchangeConsole, 1, 1),
+            Some(EventChoiceEffect::LoseHpGainCredits {
+                lose_hp: 5,
+                gain_credits: 36,
+            })
+        );
+        assert_eq!(
+            event_choice_effect(EventId::CoolingVault, 0, 3),
+            Some(EventChoiceEffect::Heal(12))
+        );
+        assert_eq!(
+            event_choice_effect(EventId::CoolingVault, 1, 2),
+            Some(EventChoiceEffect::LoseHpGainMaxHp {
+                lose_hp: 6,
+                gain_max_hp: 5,
+            })
+        );
+    }
+
+    #[test]
+    fn new_events_are_localized() {
+        assert_eq!(
+            localized_event_title(EventId::RelayTerminal, Language::Spanish),
+            "Terminal de Relé"
+        );
+        assert_eq!(
+            localized_event_title(EventId::ExchangeConsole, Language::Spanish),
+            "Consola de Intercambio"
+        );
+        assert_eq!(
+            localized_event_title(EventId::CoolingVault, Language::Spanish),
+            "Bóveda Criogénica"
+        );
+        assert_eq!(
+            localized_event_flavor(EventId::ExchangeConsole, Language::Spanish),
+            "Una consola de intercambio aún te deja cambiar piezas útiles por créditos."
+        );
+        assert_eq!(
+            localized_event_choice_title(EventId::RelayTerminal, 0, Language::Spanish),
+            Some("Copiar la rutina de escudo")
+        );
+        assert_eq!(
+            localized_event_choice_title(EventId::ExchangeConsole, 1, Language::Spanish),
+            Some("Vender la reserva de refrigerante")
+        );
+        assert_eq!(
+            localized_event_choice_title(EventId::CoolingVault, 1, Language::Spanish),
+            Some("Aguantar la cámara helada")
+        );
+        assert_eq!(
+            localized_event_choice_body(EventId::RelayTerminal, 1, 2, Language::Spanish),
+            Some("Pierde 4 HP. Añade Impulso Táctico a tu mazo.".to_string())
+        );
+        assert_eq!(
+            localized_event_choice_body(EventId::ExchangeConsole, 0, 2, Language::English),
+            Some("Gain 22 Credits.".to_string())
         );
     }
 

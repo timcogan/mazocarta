@@ -31,5 +31,8 @@ jobs:
       - name: Install Rust target
         run: rustup target add wasm32-unknown-unknown
 
+      - name: Run Gitleaks
+        run: bash ./scripts/run-gitleaks.sh
+
       - name: Run publish checks
         run: bash ./scripts/publish-check.sh

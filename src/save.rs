@@ -5,7 +5,9 @@ use crate::combat::{CombatOutcome, EncounterEnemySetup, EncounterSetup, TurnPhas
 use crate::content::{CardId, EnemyProfileId, EventId, ModuleId, RewardTier};
 use crate::dungeon::RoomKind;
 
-pub(crate) const SAVE_FORMAT_VERSION: u32 = 1;
+// Save v2 changes serialized event ids and the combat hand-size semantics, so older
+// snapshots are intentionally rejected by the exact-version restore policy.
+pub(crate) const SAVE_FORMAT_VERSION: u32 = 2;
 const CURRENT_GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 
@@ -475,16 +477,22 @@ pub(crate) fn serialize_reward_tier(tier: RewardTier) -> &'static str {
 pub(crate) fn serialize_event_id(id: EventId) -> &'static str {
     match id {
         EventId::SalvageCache => "salvage_cache",
+        EventId::RelayTerminal => "relay_terminal",
         EventId::ClinicPod => "clinic_pod",
+        EventId::ExchangeConsole => "exchange_console",
         EventId::PrototypeRack => "prototype_rack",
+        EventId::CoolingVault => "cooling_vault",
     }
 }
 
 pub(crate) fn resolve_event_id(id: &str) -> Option<EventId> {
     match id {
         "salvage_cache" => Some(EventId::SalvageCache),
+        "relay_terminal" => Some(EventId::RelayTerminal),
         "clinic_pod" => Some(EventId::ClinicPod),
+        "exchange_console" => Some(EventId::ExchangeConsole),
         "prototype_rack" => Some(EventId::PrototypeRack),
+        "cooling_vault" => Some(EventId::CoolingVault),
         _ => None,
     }
 }

@@ -155,6 +155,8 @@ function fontFor(token, size) {
       return `700 ${size}px ${MONO_STACK}`;
     case "label":
       return `700 ${size}px ${MONO_STACK}`;
+    case "body-italic":
+      return `italic 400 ${size}px ${MONO_STACK}`;
     default:
       return `400 ${size}px ${MONO_STACK}`;
   }

@@ -25,14 +25,30 @@ fi
 export_png_icon() {
   local size="$1"
   local output="$2"
-  inkscape "$SVG_ICON" \
+  local stderr_file cleanup_cmd
+  stderr_file="$(mktemp)"
+  printf -v cleanup_cmd 'rm -f %q' "$stderr_file"
+  trap "$cleanup_cmd" RETURN EXIT INT TERM
+
+  if ! inkscape "$SVG_ICON" \
     --export-type=png \
     --export-filename="$output" \
     --export-width="$size" \
     --export-height="$size" \
     --export-background-opacity=0 \
     "${INKSCAPE_COLOR_MODE_ARGS[@]}" \
-    >/dev/null
+    >/dev/null 2>"$stderr_file"; then
+    cat "$stderr_file" >&2
+    rm -f "$stderr_file"
+    trap - RETURN EXIT INT TERM
+    return 1
+  fi
+
+  # Some headless Inkscape builds emit a benign GtkRecentManager warning on stderr
+  # even when export succeeds. Keep all other stderr so real export problems stay visible.
+  sed '/GtkRecentManager/d' "$stderr_file" >&2
+  rm -f "$stderr_file"
+  trap - RETURN EXIT INT TERM
 }
 
 cargo build --release --target wasm32-unknown-unknown --manifest-path "$ROOT_DIR/Cargo.toml"
