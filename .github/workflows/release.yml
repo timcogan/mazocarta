@@ -57,6 +57,7 @@ jobs:
           REF_NAME: ${{ github.ref_name }}
           TARGET_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -220,6 +221,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_COMMIT: ${{ github.sha }}
           TAG_EXISTS: ${{ needs.prepare.outputs.tag_exists }}
@@ -254,6 +256,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -euo pipefail
