@@ -5,7 +5,9 @@ use crate::combat::{CombatOutcome, EncounterEnemySetup, EncounterSetup, TurnPhas
 use crate::content::{CardId, EnemyProfileId, EventId, ModuleId, RewardTier};
 use crate::dungeon::RoomKind;
 
-pub(crate) const SAVE_FORMAT_VERSION: u32 = 1;
+// Save v2 changes serialized event ids and the combat hand-size semantics, so older
+// snapshots are intentionally rejected by the exact-version restore policy.
+pub(crate) const SAVE_FORMAT_VERSION: u32 = 2;
 const CURRENT_GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 

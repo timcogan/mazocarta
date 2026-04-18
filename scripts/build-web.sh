@@ -25,8 +25,10 @@ fi
 export_png_icon() {
   local size="$1"
   local output="$2"
-  local stderr_file
+  local stderr_file cleanup_cmd
   stderr_file="$(mktemp)"
+  printf -v cleanup_cmd 'rm -f %q' "$stderr_file"
+  trap "$cleanup_cmd" RETURN EXIT INT TERM
 
   if ! inkscape "$SVG_ICON" \
     --export-type=png \
@@ -38,6 +40,7 @@ export_png_icon() {
     >/dev/null 2>"$stderr_file"; then
     cat "$stderr_file" >&2
     rm -f "$stderr_file"
+    trap - RETURN EXIT INT TERM
     return 1
   fi
 
@@ -45,6 +48,7 @@ export_png_icon() {
   # even when export succeeds. Keep all other stderr so real export problems stay visible.
   sed '/GtkRecentManager/d' "$stderr_file" >&2
   rm -f "$stderr_file"
+  trap - RETURN EXIT INT TERM
 }
 
 cargo build --release --target wasm32-unknown-unknown --manifest-path "$ROOT_DIR/Cargo.toml"

@@ -422,9 +422,7 @@ impl DungeonRun {
         }
 
         let node = self.node(node_id)?.clone();
-        self.current_node = Some(node_id);
-
-        match node.kind {
+        let selection = match node.kind {
             RoomKind::Start => None,
             RoomKind::Rest => Some(NodeSelection::Rest),
             RoomKind::Shop => Some(NodeSelection::Shop),
@@ -432,14 +430,16 @@ impl DungeonRun {
             RoomKind::Combat | RoomKind::Elite | RoomKind::Boss => {
                 Some(NodeSelection::Encounter(self.encounter_setup_for(&node)))
             }
+        };
+        if selection.is_some() {
+            self.current_node = Some(node_id);
         }
+        selection
     }
 
     pub(crate) fn debug_select_node(&mut self, node_id: usize) -> Option<NodeSelection> {
         let node = self.node(node_id)?.clone();
-        self.current_node = Some(node_id);
-
-        match node.kind {
+        let selection = match node.kind {
             RoomKind::Start => None,
             RoomKind::Rest => Some(NodeSelection::Rest),
             RoomKind::Shop => Some(NodeSelection::Shop),
@@ -447,7 +447,11 @@ impl DungeonRun {
             RoomKind::Combat | RoomKind::Elite | RoomKind::Boss => {
                 Some(NodeSelection::Encounter(self.encounter_setup_for(&node)))
             }
+        };
+        if selection.is_some() {
+            self.current_node = Some(node_id);
         }
+        selection
     }
 
     pub(crate) fn resolve_rest_heal(&mut self) -> Option<(i32, DungeonProgress)> {
@@ -505,7 +509,15 @@ impl DungeonRun {
             return None;
         }
 
-        let effect = crate::content::event_choice_effect(event, choice_index, self.current_level)?;
+        let current_event = self
+            .current_node
+            .and_then(|node_id| self.event_for_node(node_id))?;
+        if current_event != event {
+            return None;
+        }
+
+        let effect =
+            crate::content::event_choice_effect(current_event, choice_index, self.current_level)?;
         let resolution = match effect {
             EventChoiceEffect::GainCredits(credits) => {
                 self.credits = self.credits.saturating_add(credits);
@@ -1082,8 +1094,8 @@ fn ensure_event_count(
         return;
     }
 
-    let fallback_min_depth = min_depth.clamp(1, 2);
-    let fallback_max_depth = max_depth.max(fallback_min_depth);
+    let fallback_min_depth = min_depth;
+    let fallback_max_depth = max_depth;
     let mut preferred_candidates: Vec<usize> = nodes
         .iter()
         .enumerate()
@@ -1687,6 +1699,85 @@ mod tests {
     }
 
     #[test]
+    fn selecting_an_unmapped_event_node_does_not_change_current_node() {
+        let mut run = DungeonRun::new(TEST_RUN_SEED);
+        run.nodes = vec![
+            DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 0,
+                kind: RoomKind::Start,
+                next: vec![3],
+            },
+            DungeonNode {
+                id: 1,
+                depth: 3,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+            DungeonNode {
+                id: 2,
+                depth: 4,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+            DungeonNode {
+                id: 3,
+                depth: 5,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+        ];
+        run.current_node = Some(0);
+        run.available_nodes = vec![3];
+
+        assert_eq!(run.select_node(3), None);
+        assert_eq!(run.current_node, Some(0));
+    }
+
+    #[test]
+    fn debug_selecting_an_unmapped_event_node_does_not_change_current_node() {
+        let mut run = DungeonRun::new(TEST_RUN_SEED);
+        run.nodes = vec![
+            DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 0,
+                kind: RoomKind::Start,
+                next: vec![3],
+            },
+            DungeonNode {
+                id: 1,
+                depth: 3,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+            DungeonNode {
+                id: 2,
+                depth: 4,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+            DungeonNode {
+                id: 3,
+                depth: 5,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+        ];
+        run.current_node = Some(0);
+
+        assert_eq!(run.debug_select_node(3), None);
+        assert_eq!(run.current_node, Some(0));
+    }
+
+    #[test]
     fn selecting_a_shop_node_returns_the_shop_selection() {
         let mut run = DungeonRun::new(TEST_RUN_SEED);
         run.nodes = vec![
@@ -1747,6 +1838,36 @@ mod tests {
                 credits_gained: 28,
             }
         );
+    }
+
+    #[test]
+    fn event_choice_rejects_a_mismatched_event_id() {
+        let mut run = DungeonRun::new(TEST_RUN_SEED);
+        run.player_hp = 20;
+        run.current_level = 1;
+        run.nodes = vec![
+            DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 0,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            DungeonNode {
+                id: 1,
+                depth: 3,
+                lane: 0,
+                kind: RoomKind::Event,
+                next: vec![],
+            },
+        ];
+        run.current_node = Some(1);
+        let wrong_event = ordered_events_for_level(TEST_RUN_SEED, 1)[1];
+
+        assert_eq!(run.resolve_event_choice(wrong_event, 0), None);
+        assert_eq!(run.player_hp, 20);
+        assert_eq!(run.credits, 0);
+        assert_eq!(run.current_node, Some(1));
     }
 
     #[test]

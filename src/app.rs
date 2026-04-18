@@ -3600,6 +3600,7 @@ impl App {
         self.enemy_vfx_rects.clear();
         self.enemy_defeat_vfx_started = vec![false; self.combat.enemy_count()];
         self.layout_transition = None;
+        self.combat_layout_target = None;
         self.screen_transition = None;
         self.share_request = None;
         self.victory_burst_cooldown_ms = 0.0;
@@ -6027,6 +6028,7 @@ impl App {
         );
         let initial_bounds = combat_layout_bounds(&initial_layout);
         let mut high = if initial_bounds.w > 0.0 && initial_bounds.h > 0.0 {
+            let max_search_scale = max_search_scale.max(1.0);
             (available_w / initial_bounds.w)
                 .min(available_h / initial_bounds.h)
                 .clamp(1.0, max_search_scale)
@@ -13046,6 +13048,17 @@ mod tests {
     }
 
     #[test]
+    fn combat_layout_handles_tiny_viewports_without_panicking() {
+        let mut app = active_combat_fixture();
+        app.resize(40.0, 40.0);
+
+        let layout = app.layout();
+
+        assert!(layout.player_rect.w.is_finite());
+        assert!(layout.player_rect.h.is_finite());
+    }
+
+    #[test]
     fn combat_layout_prefers_single_enemy_row_in_landscape() {
         let mut app = active_two_enemy_combat_fixture();
         app.resize(1280.0, 720.0);
@@ -14981,7 +14994,8 @@ mod tests {
         let mut app = combat_save_fixture();
         let snapshot = app.serialize_current_run().unwrap();
         let mut value: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        value["save_format_version"] = serde_json::Value::from(2);
+        value["save_format_version"] =
+            serde_json::Value::from(crate::save::SAVE_FORMAT_VERSION + 1);
         let invalid_snapshot = serde_json::to_string(&value).unwrap();
         app.set_run_save_snapshot(Some(invalid_snapshot.clone()));
         app.resume_request_pending = true;
@@ -14993,6 +15007,24 @@ mod tests {
         assert!(!app.resume_request_pending);
         assert!(app.run_save_snapshot.is_none());
         assert!(!app.has_saved_run);
+    }
+
+    #[test]
+    fn restore_from_save_clears_stale_combat_layout_target() {
+        let mut app = combat_save_fixture();
+        let snapshot = app.serialize_current_run().unwrap();
+        let mut stale_target = app.layout_target();
+        stale_target.player_rect.x += 100.0;
+        app.combat_layout_target = Some(stale_target);
+
+        app.restore_from_save_raw(&snapshot).unwrap();
+
+        assert!(matches!(app.screen, AppScreen::Combat));
+        assert!(app.layout_transition.is_none());
+        assert!(combat_layouts_match(
+            app.combat_layout_target.as_ref().unwrap(),
+            &app.layout_target()
+        ));
     }
 
     #[test]

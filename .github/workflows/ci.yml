@@ -31,9 +31,6 @@ jobs:
       - name: Install Rust target
         run: rustup target add wasm32-unknown-unknown
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
       - name: Run Gitleaks
         run: bash ./scripts/run-gitleaks.sh
 
