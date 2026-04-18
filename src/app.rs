@@ -41,7 +41,7 @@ const PLAYER_NAME: &str = "Player";
 const SHIELD_LABEL: &str = "HP";
 const GUARD_LABEL: &str = "Shield";
 const ENERGY_LABEL: &str = "Energy";
-const STACK_LABEL: &str = "Stack";
+const STACK_LABEL: &str = "Deck";
 const PANEL_TEXT_GAP: &str = "  ";
 const NEXT_SIGNAL_LABEL: &str = "NEXT SIGNAL";
 const TERM_GREEN: &str = "#33ff66";
@@ -473,6 +473,7 @@ struct MapEdgeLayout {
 #[derive(Clone, Debug)]
 struct LayoutTransition {
     from_layout: Layout,
+    to_layout: Layout,
     hand_from_rects: Vec<Option<Rect>>,
     ttl_ms: f32,
     total_ms: f32,
@@ -5216,7 +5217,7 @@ impl App {
                 .or(fallback_rect);
         }
 
-        self.set_layout_transition(from_layout, hand_from_rects);
+        self.set_layout_transition(from_layout, self.base_layout(), hand_from_rects);
     }
 
     fn begin_hand_reveal_transition(&mut self, from_layout: Layout) {
@@ -5249,12 +5250,18 @@ impl App {
             })
             .collect();
 
-        self.set_layout_transition(from_layout, hand_from_rects);
+        self.set_layout_transition(from_layout, to_layout, hand_from_rects);
     }
 
-    fn set_layout_transition(&mut self, from_layout: Layout, hand_from_rects: Vec<Option<Rect>>) {
+    fn set_layout_transition(
+        &mut self,
+        from_layout: Layout,
+        to_layout: Layout,
+        hand_from_rects: Vec<Option<Rect>>,
+    ) {
         self.layout_transition = Some(LayoutTransition {
             from_layout,
+            to_layout,
             hand_from_rects,
             ttl_ms: LAYOUT_TRANSITION_MS,
             total_ms: LAYOUT_TRANSITION_MS,
@@ -5706,18 +5713,18 @@ impl App {
         let stable_enemy_count =
             previous_target.enemy_indices.len() == target_layout.enemy_indices.len();
         if stable_hand_count && stable_enemy_count {
-            let from_layout = if self.layout_transition.is_some() {
-                self.layout()
-            } else {
-                previous_target.clone()
-            };
+            let from_layout = self
+                .layout_transition
+                .as_ref()
+                .map(interpolated_transition_layout)
+                .unwrap_or_else(|| previous_target.clone());
             let hand_from_rects = target_layout
                 .hand_rects
                 .iter()
                 .enumerate()
                 .map(|(index, _)| from_layout.hand_rects.get(index).copied())
                 .collect();
-            self.set_layout_transition(from_layout, hand_from_rects);
+            self.set_layout_transition(from_layout, target_layout.clone(), hand_from_rects);
         }
 
         self.combat_layout_target = Some(target_layout);
@@ -5733,25 +5740,14 @@ impl App {
     }
 
     fn layout(&self) -> Layout {
-        let base_layout = self.layout_target();
         if !matches!(self.screen, AppScreen::Combat) {
-            return base_layout;
+            return self.layout_target();
         }
 
         let Some(transition) = self.layout_transition.as_ref() else {
-            return base_layout;
+            return self.layout_target();
         };
-        if transition.total_ms <= 0.0 {
-            return base_layout;
-        }
-
-        let progress = 1.0 - (transition.ttl_ms / transition.total_ms).clamp(0.0, 1.0);
-        interpolate_layout(
-            &transition.from_layout,
-            &base_layout,
-            &transition.hand_from_rects,
-            ease_out_cubic(progress),
-        )
+        interpolated_transition_layout(transition)
     }
 
     fn layout_with_scale(
@@ -7286,8 +7282,6 @@ impl App {
     }
 
     fn hit_test(&self, x: f32, y: f32) -> Option<HitTarget> {
-        let layout = self.layout();
-
         match self.screen {
             AppScreen::Boot => {
                 let buttons = self.boot_buttons_layout(self.has_saved_run);
@@ -7504,6 +7498,7 @@ impl App {
                 if self.combat_input_locked() {
                     return None;
                 }
+                let layout = self.layout();
                 if self.run_info_visible() || self.ui.run_info_open {
                     let run_info_layout = self.run_info_layout()?;
                     if run_info_layout.modal_rect.contains(x, y) {
@@ -11314,6 +11309,20 @@ fn interpolate_layout(
     layout
 }
 
+fn interpolated_transition_layout(transition: &LayoutTransition) -> Layout {
+    if transition.total_ms <= 0.0 {
+        return transition.to_layout.clone();
+    }
+
+    let progress = 1.0 - (transition.ttl_ms / transition.total_ms).clamp(0.0, 1.0);
+    interpolate_layout(
+        &transition.from_layout,
+        &transition.to_layout,
+        &transition.hand_from_rects,
+        ease_out_cubic(progress),
+    )
+}
+
 fn lerp_optional_rect(from: Option<Rect>, to: Option<Rect>, t: f32) -> Option<Rect> {
     match (from, to) {
         (Some(from_rect), Some(to_rect)) => Some(lerp_rect(from_rect, to_rect, t)),
@@ -13235,6 +13244,46 @@ mod tests {
         let final_layout = app.layout();
 
         assert!(combat_layouts_match(&final_layout, &target));
+    }
+
+    #[test]
+    fn combat_layout_retarget_preserves_the_in_flight_interpolated_layout() {
+        let mut app = active_combat_fixture();
+        app.set_language(Language::Spanish);
+        app.resize(320.0, 568.0);
+
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 2);
+        app.sync_combat_feedback_to_combat();
+        let initial_layout = app.layout();
+
+        app.snapshot_combat_layout_target();
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 1);
+        app.sync_combat_feedback_to_combat();
+        app.refresh_combat_layout_transition();
+
+        let first_target = app.layout_target();
+        assert!(app.layout_transition.is_some());
+        assert!(!combat_layouts_match(&initial_layout, &first_target));
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS * 0.5);
+        let mid = app.layout();
+
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 2);
+        app.sync_combat_feedback_to_combat();
+        app.refresh_combat_layout_transition();
+
+        let second_target = app.layout_target();
+        let transition = app.layout_transition.as_ref().unwrap();
+
+        assert!(!combat_layouts_match(&first_target, &second_target));
+        assert!(combat_layouts_match(&transition.from_layout, &mid));
+        assert!(combat_layouts_match(&transition.to_layout, &second_target));
+        assert!(combat_layouts_match(&app.layout(), &mid));
+
+        advance_time(&mut app, LAYOUT_TRANSITION_MS);
+        let final_layout = app.layout();
+
+        assert!(combat_layouts_match(&final_layout, &second_target));
     }
 
     #[test]
@@ -15570,8 +15619,8 @@ mod tests {
         app.tick(0.0);
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(frame.contains("Stack 2→1"));
-        assert!(!frame.contains("Stack 2->1"));
+        assert!(frame.contains("Deck 2→1"));
+        assert!(!frame.contains("Deck 2->1"));
 
         app.language = Language::Spanish;
         app.sync_combat_feedback_to_combat();

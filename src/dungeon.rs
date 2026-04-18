@@ -1094,9 +1094,7 @@ fn ensure_event_count(
         return;
     }
 
-    let fallback_min_depth = min_depth;
-    let fallback_max_depth = max_depth;
-    let mut preferred_candidates: Vec<usize> = nodes
+    let mut candidates: Vec<usize> = nodes
         .iter()
         .enumerate()
         .filter_map(|(index, node)| {
@@ -1106,31 +1104,11 @@ fn ensure_event_count(
             .then_some(index)
         })
         .collect();
-    let mut fallback_candidates: Vec<usize> = nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| {
-            (node.depth >= fallback_min_depth
-                && node.depth <= fallback_max_depth
-                && matches!(node.kind, RoomKind::Combat))
-            .then_some(index)
-        })
-        .collect();
 
-    while current_count < desired_count {
-        let pool = if !preferred_candidates.is_empty() {
-            &mut preferred_candidates
-        } else if !fallback_candidates.is_empty() {
-            &mut fallback_candidates
-        } else {
-            break;
-        };
-
-        let choice = rng.next_index(pool.len());
-        let node_index = pool.swap_remove(choice);
+    while current_count < desired_count && !candidates.is_empty() {
+        let choice = rng.next_index(candidates.len());
+        let node_index = candidates.swap_remove(choice);
         nodes[node_index].kind = RoomKind::Event;
-        preferred_candidates.retain(|candidate| *candidate != node_index);
-        fallback_candidates.retain(|candidate| *candidate != node_index);
         current_count += 1;
     }
 }
