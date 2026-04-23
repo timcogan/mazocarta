@@ -1978,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn expected_enemy_threat_scales_needler_bleed_and_damage_with_focus() {
+    fn expected_enemy_threat_focus_only_affects_damage() {
         let neutral = threat_test_combat(EnemyProfileId::NeedlerDrone, 0);
         let mut boosted = neutral.clone();
         let mut broken = neutral.clone();
