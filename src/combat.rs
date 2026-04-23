@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use crate::content::{
-    AxisKind, CardId, CardTarget, EnemyIntent, EnemyProfileId, card_def, card_requirement,
-    enemy_intent, starter_deck,
+    AxisKind, CardId, CardTarget, EnemyIntent, EnemyProfileId, ModuleId, card_def,
+    card_requirement, enemy_intent, starter_deck,
 };
 use crate::rng::XorShift64;
 
@@ -388,6 +388,75 @@ impl CombatState {
         self.enemy(index)
             .map(|enemy| enemy.fighter.hp > 0)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn apply_module_start_of_combat(&mut self, module: ModuleId) -> bool {
+        match module {
+            ModuleId::AegisDrive => {
+                self.player.fighter.block = self.player.fighter.block.saturating_add(5);
+                true
+            }
+            ModuleId::TargetingRelay => {
+                self.player.fighter.statuses.focus = self
+                    .player
+                    .fighter
+                    .statuses
+                    .focus
+                    .saturating_add(1)
+                    .clamp(-4, 4);
+                true
+            }
+            ModuleId::Nanoforge => false,
+            ModuleId::CapacitorBank => {
+                self.player.fighter.statuses.momentum = self
+                    .player
+                    .fighter
+                    .statuses
+                    .momentum
+                    .saturating_add(1)
+                    .clamp(-4, 4);
+                true
+            }
+            ModuleId::PrismScope => {
+                let mut changed = false;
+                for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
+                    enemy.fighter.statuses.rhythm =
+                        enemy.fighter.statuses.rhythm.saturating_sub(1).clamp(-4, 4);
+                    changed = true;
+                }
+                changed
+            }
+            ModuleId::SalvageLedger => false,
+            ModuleId::OverclockCore => {
+                self.player.max_energy = self.player.max_energy.saturating_add(1);
+                self.player.energy = self
+                    .player
+                    .energy
+                    .saturating_add(1)
+                    .min(self.player.max_energy);
+                true
+            }
+            ModuleId::SuppressionField => {
+                let mut changed = false;
+                for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
+                    enemy.fighter.statuses.focus =
+                        enemy.fighter.statuses.focus.saturating_sub(1).clamp(-4, 4);
+                    changed = true;
+                }
+                changed
+            }
+            ModuleId::RecoveryMatrix => false,
+        }
+    }
+
+    pub(crate) fn apply_start_of_combat_modules(&mut self, modules: &[ModuleId]) -> Vec<ModuleId> {
+        let mut applied = Vec::new();
+        for &module in modules {
+            if self.apply_module_start_of_combat(module) {
+                applied.push(module);
+            }
+        }
+        applied
     }
 
     pub(crate) fn from_persisted_parts(
@@ -1779,21 +1848,17 @@ fn axis_multiplier_basis_points(value: i8) -> i32 {
 }
 
 pub(crate) fn scale_axis_value(amount: i32, axis_value: i8) -> i32 {
-    if amount <= 0 {
+    if amount == 0 {
         return 0;
     }
     let basis_points = axis_multiplier_basis_points(axis_value);
-    (amount.saturating_mul(basis_points) + 5_000) / 10_000
+    let magnitude = amount.saturating_abs();
+    let scaled = (magnitude.saturating_mul(basis_points) + 5_000) / 10_000;
+    amount.signum().saturating_mul(scaled)
 }
 
 fn scale_intent_axis_delta(delta: i8, momentum: i8) -> i8 {
-    if delta == 0 {
-        return 0;
-    }
-    let sign = delta.signum();
-    let magnitude =
-        ((delta.abs() as i32).saturating_mul(axis_multiplier_basis_points(momentum))) / 10_000;
-    (sign as i32 * magnitude.max(0)) as i8
+    scale_axis_value(delta as i32, momentum) as i8
 }
 
 fn clamp_axis_value(value: i8) -> i8 {
@@ -2645,9 +2710,10 @@ mod tests {
     }
 
     #[test]
-    fn scout_drone_brace_cycle_grants_focus_and_block() {
+    fn scout_drone_brace_cycle_keeps_focus_gain_under_negative_momentum() {
         let mut state = blank_state();
         set_primary_enemy_intent(&mut state, EnemyProfileId::ScoutDrone, 2);
+        primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
 
         let mut events = Vec::new();
         state.resolve_enemy_intent(&mut events);
@@ -2662,9 +2728,10 @@ mod tests {
     }
 
     #[test]
-    fn rampart_drone_pressure_clamp_applies_focus_loss() {
+    fn rampart_drone_pressure_clamp_keeps_focus_loss_under_negative_momentum() {
         let mut state = blank_state();
         set_primary_enemy_intent(&mut state, EnemyProfileId::RampartDrone, 1);
+        primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
 
         state.resolve_enemy_intent(&mut Vec::new());
 

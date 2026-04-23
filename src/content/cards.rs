@@ -594,6 +594,187 @@ fn shop_price_for_tier(tier: RewardTier) -> u32 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_COMBAT_REWARD_SEED: u64 = 0x0BAD_5EED;
+    const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
+    const TEST_ELITE_REWARD_SEED: u64 = 0xFACE_FEED;
+    const TEST_SHOP_SEED: u64 = 0xD15C_A11C;
+
+    #[test]
+    fn reward_choices_keep_stable_order_for_fixed_seeds() {
+        assert_eq!(
+            reward_choices(TEST_COMBAT_REWARD_SEED, RewardTier::Combat, 1),
+            vec![CardId::HardReset, CardId::PinpointJab, CardId::NeedleNest]
+        );
+        assert_eq!(
+            reward_choices(TEST_ELITE_REWARD_SEED, RewardTier::Elite, 2),
+            vec![
+                CardId::CounterLattice,
+                CardId::ReservoirGuard,
+                CardId::ToolCache,
+            ]
+        );
+        assert_eq!(
+            reward_choices(TEST_BOSS_REWARD_SEED, RewardTier::Boss, 3),
+            vec![
+                CardId::LastProtocol,
+                CardId::OverwatchGrid,
+                CardId::ZeroPoint,
+            ]
+        );
+    }
+
+    #[test]
+    fn choose_distinct_archetypes_prefers_unique_archetypes_first() {
+        assert_eq!(
+            choose_distinct_archetypes(
+                vec![
+                    CardId::FlareSlash,
+                    CardId::GuardStep,
+                    CardId::Slipstream,
+                    CardId::QuickStrike,
+                ],
+                3,
+            ),
+            vec![CardId::FlareSlash, CardId::GuardStep, CardId::Slipstream]
+        );
+    }
+
+    #[test]
+    fn choose_distinct_archetypes_falls_back_to_duplicates_when_needed() {
+        assert_eq!(
+            choose_distinct_archetypes(
+                vec![
+                    CardId::FlareSlash,
+                    CardId::PressurePoint,
+                    CardId::SunderingArc,
+                    CardId::GuardStep,
+                ],
+                3,
+            ),
+            vec![
+                CardId::FlareSlash,
+                CardId::PressurePoint,
+                CardId::SunderingArc
+            ]
+        );
+    }
+
+    #[test]
+    fn elite_reward_pool_respects_unlock_levels() {
+        let level_one_pool = reward_pool(RewardTier::Elite, 1);
+        let level_two_pool = reward_pool(RewardTier::Elite, 2);
+        let level_three_pool = reward_pool(RewardTier::Elite, 3);
+
+        assert!(!level_one_pool.contains(&CardId::BreachSignal));
+        assert!(!level_one_pool.contains(&CardId::VoltaicDrive));
+        assert!(!level_one_pool.contains(&CardId::AnchorLoop));
+        assert!(!level_one_pool.contains(&CardId::ImprovisedArsenal));
+
+        assert!(level_two_pool.contains(&CardId::BreachSignal));
+        assert!(level_two_pool.contains(&CardId::VoltaicDrive));
+        assert!(!level_two_pool.contains(&CardId::AnchorLoop));
+        assert!(!level_two_pool.contains(&CardId::ImprovisedArsenal));
+
+        assert!(level_three_pool.contains(&CardId::BreachSignal));
+        assert!(level_three_pool.contains(&CardId::VoltaicDrive));
+        assert!(level_three_pool.contains(&CardId::AnchorLoop));
+        assert!(level_three_pool.contains(&CardId::ImprovisedArsenal));
+    }
+
+    #[test]
+    fn shop_offer_tiers_clamp_by_level() {
+        assert_eq!(
+            shop_offer_tiers(1),
+            [RewardTier::Combat, RewardTier::Elite, RewardTier::Elite]
+        );
+        assert_eq!(
+            shop_offer_tiers(2),
+            [RewardTier::Combat, RewardTier::Elite, RewardTier::Boss]
+        );
+        assert_eq!(
+            shop_offer_tiers(3),
+            [RewardTier::Elite, RewardTier::Elite, RewardTier::Boss]
+        );
+        assert_eq!(
+            shop_offer_tiers(4),
+            [RewardTier::Elite, RewardTier::Elite, RewardTier::Boss]
+        );
+    }
+
+    #[test]
+    fn shop_offers_keep_stable_order_for_fixed_seeds() {
+        assert_eq!(
+            shop_offers(TEST_SHOP_SEED, 1),
+            vec![
+                ShopOffer {
+                    card: CardId::PinpointJab,
+                    price: 16,
+                },
+                ShopOffer {
+                    card: CardId::Linebreaker,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::CounterLattice,
+                    price: 24,
+                },
+            ]
+        );
+        assert_eq!(
+            shop_offers(TEST_BOSS_REWARD_SEED, 2),
+            vec![
+                ShopOffer {
+                    card: CardId::HardReset,
+                    price: 16,
+                },
+                ShopOffer {
+                    card: CardId::AssemblyLine,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::FortressMatrix,
+                    price: 40,
+                },
+            ]
+        );
+        assert_eq!(
+            shop_offers(TEST_BOSS_REWARD_SEED, 3),
+            vec![
+                ShopOffer {
+                    card: CardId::CollapsePattern,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::AssemblyLine,
+                    price: 24,
+                },
+                ShopOffer {
+                    card: CardId::FortressMatrix,
+                    price: 40,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shop_offers_always_return_three_cards_with_tier_prices() {
+        for level in 1..=4 {
+            let offers = shop_offers(TEST_SHOP_SEED ^ level as u64, level);
+            let tiers = shop_offer_tiers(level);
+
+            assert_eq!(offers.len(), 3);
+            for (offer, tier) in offers.iter().zip(tiers) {
+                assert_eq!(offer.price, shop_price_for_tier(tier));
+                assert!(reward_pool(tier, level).contains(&offer.card));
+            }
+        }
+    }
+}
+
 fn card_data(id: CardId) -> CardData {
     match id {
         CardId::FlareSlash => CardData {

@@ -7,10 +7,10 @@ use crate::content::{
 };
 use crate::dungeon::RoomKind;
 
-// Save v4 expands the usable Focus/Rhythm/Momentum range and changes their
-// per-stack scaling, so older snapshots are intentionally rejected by the
+// Save v3 replaces the serialized combat status fields with
+// Focus/Rhythm/Momentum, so older snapshots are intentionally rejected by the
 // exact-version restore policy.
-pub(crate) const SAVE_FORMAT_VERSION: u32 = 4;
+pub(crate) const SAVE_FORMAT_VERSION: u32 = 3;
 const CURRENT_GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 
@@ -117,10 +117,16 @@ pub(crate) struct SavedDungeonRun {
     pub(crate) available_nodes: Vec<usize>,
     pub(crate) visited_nodes: Vec<usize>,
     pub(crate) deck: Vec<String>,
+    // MIGRATION(save v3): Supports saves where the legacy `modules` field is
+    // missing. Missing `modules` restores as the default starter module.
+    // Remove when minimum supported save format > 3.
     #[serde(default)]
     pub(crate) modules: Option<Vec<String>>,
     pub(crate) player_hp: i32,
     pub(crate) player_max_hp: i32,
+    // MIGRATION(save v3): Supports saves where the legacy `credits` field is
+    // missing. Missing `credits` restores as 0. Remove when minimum supported
+    // save format > 3.
     #[serde(default)]
     pub(crate) credits: u32,
     pub(crate) combats_cleared: usize,
@@ -150,8 +156,15 @@ pub(crate) struct SavedRewardState {
 pub(crate) struct SavedModuleSelectState {
     pub(crate) options: Vec<String>,
     pub(crate) seed: u64,
+    // MIGRATION(save v3): Supports saves where the legacy `kind` field is
+    // missing. Missing `kind` restores as the starter module-select context.
+    // Remove when minimum supported save format > 3.
     #[serde(default)]
     pub(crate) kind: Option<String>,
+    // MIGRATION(save v3): Supports saves where the legacy `boss_level` field is
+    // missing. Missing `boss_level` deserializes as `None`; fallback restore
+    // uses boss level 1, while exact restore still errors if a boss reward
+    // requires it. Remove when minimum supported save format > 3.
     #[serde(default)]
     pub(crate) boss_level: Option<usize>,
 }

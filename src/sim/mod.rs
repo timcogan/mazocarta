@@ -1198,9 +1198,15 @@ fn expected_enemy_threat(combat: &CombatState) -> i32 {
         let Some(intent) = combat.current_intent(enemy_index) else {
             continue;
         };
-        let damage = scale_axis_value(intent.damage, enemy.fighter.statuses.momentum);
+        let damage = scale_axis_value(
+            scale_axis_value(intent.damage, enemy.fighter.statuses.momentum),
+            enemy.fighter.statuses.focus,
+        );
         total += damage * intent.hits as i32;
-        total += scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum) * 3;
+        total += scale_axis_value(
+            scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum),
+            enemy.fighter.statuses.focus,
+        ) * 3;
         total += enemy.on_hit_bleed as i32 * 3;
     }
     total
@@ -1857,8 +1863,9 @@ impl From<&CombatState> for CombatSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        SimulationConfig, choose_combat_action, hp_percent, map_node_score, pick_event_choice,
-        pick_map_node, pick_rest_upgrade, pick_reward_card, pick_starter_module, run_simulations,
+        SimulationConfig, choose_combat_action, expected_enemy_threat, hp_percent, map_node_score,
+        pick_event_choice, pick_map_node, pick_rest_upgrade, pick_reward_card, pick_starter_module,
+        run_simulations,
     };
     use crate::combat::{
         CombatAction, CombatState, DeckState, EnemyState, FighterState, PlayerState, StatusSet,
@@ -1907,6 +1914,40 @@ mod tests {
         )
     }
 
+    fn threat_test_combat(profile: EnemyProfileId, intent_index: usize) -> CombatState {
+        CombatState::from_persisted_parts(
+            PlayerState {
+                fighter: FighterState {
+                    hp: 20,
+                    max_hp: 20,
+                    block: 0,
+                    statuses: StatusSet::default(),
+                },
+                energy: 3,
+                max_energy: 3,
+            },
+            vec![EnemyState {
+                fighter: FighterState {
+                    hp: 20,
+                    max_hp: 20,
+                    block: 0,
+                    statuses: StatusSet::default(),
+                },
+                profile,
+                intent_index,
+                on_hit_bleed: 0,
+            }],
+            DeckState {
+                draw_pile: Vec::new(),
+                hand: Vec::new(),
+                discard_pile: Vec::new(),
+            },
+            TurnPhase::PlayerTurn,
+            1,
+            TEST_SEED,
+        )
+    }
+
     fn assert_chosen_action(combat: &CombatState, expected: CombatAction) {
         assert_eq!(choose_combat_action(combat).action, expected);
     }
@@ -1943,6 +1984,20 @@ mod tests {
 
         assert_eq!(stats.runs, 10);
         assert_eq!(stats.wins + stats.losses + stats.aborts, stats.runs);
+    }
+
+    #[test]
+    fn expected_enemy_threat_scales_needler_bleed_and_damage_with_focus() {
+        let neutral = threat_test_combat(EnemyProfileId::NeedlerDrone, 0);
+        let mut boosted = neutral.clone();
+        let mut broken = neutral.clone();
+
+        boosted.enemies[0].fighter.statuses.focus = 5;
+        broken.enemies[0].fighter.statuses.focus = -7;
+
+        assert_eq!(expected_enemy_threat(&neutral), 7);
+        assert_eq!(expected_enemy_threat(&boosted), 12);
+        assert_eq!(expected_enemy_threat(&broken), 2);
     }
 
     #[test]

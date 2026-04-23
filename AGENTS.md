@@ -48,4 +48,4 @@
 
 - Run the relevant validation for your change and note it in the PR, at minimum `cargo test`.
 - If you changed save/load behavior or saved-data semantics, confirm `SAVE_FORMAT_VERSION` and any migration or compatibility code are updated appropriately.
-- Double check that local paths, personal information, or other private data has been removed from files included in the PR.
+- Double-check that local paths, personal information, or other private data has been removed from files included in the PR.

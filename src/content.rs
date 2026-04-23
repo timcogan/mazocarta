@@ -3105,8 +3105,6 @@ mod tests {
     const TEST_PRIMARY_SEED: u64 = 0x0BAD_5EED;
     const TEST_ALT_SEED: u64 = 0xDEAD_BEEF;
     const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
-    const TEST_ELITE_REWARD_SEED: u64 = 0xFACE_FEED;
-    const TEST_SHOP_SEED: u64 = 0xD15C_A11C;
 
     #[test]
     fn event_order_is_deterministic_and_non_repeating_within_each_level() {
@@ -3328,77 +3326,6 @@ mod tests {
         }
 
         assert!(seen.len() > 1);
-    }
-
-    #[test]
-    fn elite_rewards_are_distinct() {
-        let choices = reward_choices(TEST_ELITE_REWARD_SEED, RewardTier::Elite, 2);
-        let mut sorted = choices.clone();
-        sorted.sort_by_key(|card| *card as u8);
-        sorted.dedup();
-
-        assert_eq!(choices.len(), 3);
-        assert_eq!(sorted.len(), 3);
-    }
-
-    #[test]
-    fn elite_rewards_scale_by_level() {
-        let act_one_pool = reward_pool(RewardTier::Elite, 1);
-        let act_two_pool = reward_pool(RewardTier::Elite, 2);
-        let act_three_pool = reward_pool(RewardTier::Elite, 3);
-
-        assert!(act_one_pool.contains(&CardId::RazorNet));
-        assert!(act_one_pool.contains(&CardId::FracturePulse));
-        assert!(act_one_pool.contains(&CardId::VectorLock));
-        assert!(act_one_pool.contains(&CardId::SeverArc));
-        assert!(act_one_pool.contains(&CardId::Lockbreaker));
-        assert!(act_one_pool.contains(&CardId::CounterLattice));
-        assert!(!act_one_pool.contains(&CardId::BreachSignal));
-        assert!(!act_one_pool.contains(&CardId::AnchorLoop));
-
-        assert!(act_two_pool.contains(&CardId::RazorNet));
-        assert!(act_two_pool.contains(&CardId::FracturePulse));
-        assert!(act_two_pool.contains(&CardId::VectorLock));
-        assert!(act_two_pool.contains(&CardId::SeverArc));
-        assert!(act_two_pool.contains(&CardId::Lockbreaker));
-        assert!(act_two_pool.contains(&CardId::CounterLattice));
-        assert!(act_two_pool.contains(&CardId::BreachSignal));
-        assert!(!act_two_pool.contains(&CardId::AnchorLoop));
-
-        assert!(act_three_pool.contains(&CardId::RazorNet));
-        assert!(act_three_pool.contains(&CardId::FracturePulse));
-        assert!(act_three_pool.contains(&CardId::VectorLock));
-        assert!(act_three_pool.contains(&CardId::SeverArc));
-        assert!(act_three_pool.contains(&CardId::Lockbreaker));
-        assert!(act_three_pool.contains(&CardId::CounterLattice));
-        assert!(act_three_pool.contains(&CardId::BreachSignal));
-        assert!(act_three_pool.contains(&CardId::AnchorLoop));
-    }
-
-    #[test]
-    fn shop_offers_stay_distinct_when_act_one_repeats_elite_tiers() {
-        let offers = shop_offers(TEST_SHOP_SEED, 1);
-        let mut cards: Vec<_> = offers.iter().map(|offer| offer.card).collect();
-        cards.sort_by_key(|card| *card as u8);
-        cards.dedup();
-
-        assert_eq!(offers.len(), 3);
-        assert_eq!(cards.len(), 3);
-        assert_eq!(offers[0].price, 16);
-        assert_eq!(offers[1].price, 24);
-        assert_eq!(offers[2].price, 24);
-    }
-
-    #[test]
-    fn later_act_shop_offers_include_boss_cards() {
-        let act_two_offers = shop_offers(TEST_BOSS_REWARD_SEED, 2);
-        let act_three_offers = shop_offers(TEST_BOSS_REWARD_SEED, 3);
-        let boss_pool = reward_pool(RewardTier::Boss, 3);
-
-        assert!(boss_pool.contains(&act_two_offers[2].card));
-        assert!(boss_pool.contains(&act_three_offers[2].card));
-        assert_eq!(act_two_offers[2].price, 40);
-        assert_eq!(act_three_offers[2].price, 40);
     }
 
     #[test]

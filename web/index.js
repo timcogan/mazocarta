@@ -1507,7 +1507,7 @@ async function registerServiceWorker() {
 async function loadWasm() {
   resizeCanvas();
   try {
-    const preloadImagesPromise = preloadShellImages();
+    void preloadShellImages();
     const debugEnabled = await resolveDebugEnabled();
     const response = await fetch("./mazocarta.wasm", { cache: "no-store" });
     if (!response.ok) {
@@ -1535,8 +1535,7 @@ async function loadWasm() {
       typeof wasm.app_language_generation === "function" ? wasm.app_language_generation() : 0;
     lastRunSaveGeneration =
       typeof wasm.run_save_generation === "function" ? wasm.run_save_generation() : 0;
-    document.title = "Mazocarta";
-    await preloadImagesPromise;
+    document.title = GAME_TITLE;
     drawFrame();
 
     const loop = (timestamp) => {
@@ -1552,7 +1551,7 @@ async function loadWasm() {
 
     rafId = window.requestAnimationFrame(loop);
   } catch (error) {
-    document.title = "Mazocarta";
+    document.title = GAME_TITLE;
     console.error(error);
   }
 }
