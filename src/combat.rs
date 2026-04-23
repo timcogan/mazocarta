@@ -397,31 +397,25 @@ impl CombatState {
                 true
             }
             ModuleId::TargetingRelay => {
-                self.player.fighter.statuses.focus = self
-                    .player
-                    .fighter
-                    .statuses
-                    .focus
-                    .saturating_add(1)
-                    .clamp(-4, 4);
+                self.player.fighter.statuses.focus =
+                    self.player.fighter.statuses.focus.saturating_add(1);
+                self.player.fighter.statuses.focus =
+                    clamp_axis_value(self.player.fighter.statuses.focus);
                 true
             }
             ModuleId::Nanoforge => false,
             ModuleId::CapacitorBank => {
-                self.player.fighter.statuses.momentum = self
-                    .player
-                    .fighter
-                    .statuses
-                    .momentum
-                    .saturating_add(1)
-                    .clamp(-4, 4);
+                self.player.fighter.statuses.momentum =
+                    self.player.fighter.statuses.momentum.saturating_add(1);
+                self.player.fighter.statuses.momentum =
+                    clamp_axis_value(self.player.fighter.statuses.momentum);
                 true
             }
             ModuleId::PrismScope => {
                 let mut changed = false;
                 for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
                     enemy.fighter.statuses.rhythm =
-                        enemy.fighter.statuses.rhythm.saturating_sub(1).clamp(-4, 4);
+                        clamp_axis_value(enemy.fighter.statuses.rhythm.saturating_sub(1));
                     changed = true;
                 }
                 changed
@@ -440,7 +434,7 @@ impl CombatState {
                 let mut changed = false;
                 for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
                     enemy.fighter.statuses.focus =
-                        enemy.fighter.statuses.focus.saturating_sub(1).clamp(-4, 4);
+                        clamp_axis_value(enemy.fighter.statuses.focus.saturating_sub(1));
                     changed = true;
                 }
                 changed
@@ -528,6 +522,8 @@ impl CombatState {
         if amount == 0 {
             return;
         }
+        // Energy refunds intentionally share momentum scaling with other gains,
+        // so a gain of 1 can still round down to 0 under sufficiently negative momentum.
         let scaled = scale_axis_value(amount as i32, self.player.fighter.statuses.momentum);
         self.player.energy = self.player.energy.saturating_add(scaled.max(0) as u8);
     }
@@ -1851,6 +1847,8 @@ pub(crate) fn scale_axis_value(amount: i32, axis_value: i8) -> i32 {
     if amount == 0 {
         return 0;
     }
+    // The shared axis curve can round a small positive value down to 0 when
+    // the axis is sufficiently negative.
     let basis_points = axis_multiplier_basis_points(axis_value);
     let magnitude = amount.saturating_abs();
     let scaled = (magnitude.saturating_mul(basis_points) + 5_000) / 10_000;
@@ -1962,6 +1960,36 @@ mod tests {
         assert!(events.contains(&CombatEvent::CardBurned {
             card: CardId::FracturePulse,
         }));
+    }
+
+    #[test]
+    fn start_of_combat_modules_use_shared_axis_clamp_limits() {
+        let mut state = blank_state();
+        state.player.fighter.statuses.focus = 8;
+        state.player.fighter.statuses.momentum = 8;
+        primary_enemy_mut(&mut state).fighter.statuses.rhythm = -8;
+        primary_enemy_mut(&mut state).fighter.statuses.focus = -8;
+
+        let applied = state.apply_start_of_combat_modules(&[
+            ModuleId::TargetingRelay,
+            ModuleId::CapacitorBank,
+            ModuleId::PrismScope,
+            ModuleId::SuppressionField,
+        ]);
+
+        assert_eq!(
+            applied,
+            vec![
+                ModuleId::TargetingRelay,
+                ModuleId::CapacitorBank,
+                ModuleId::PrismScope,
+                ModuleId::SuppressionField,
+            ]
+        );
+        assert_eq!(state.player.fighter.statuses.focus, 9);
+        assert_eq!(state.player.fighter.statuses.momentum, 9);
+        assert_eq!(primary_enemy(&state).fighter.statuses.rhythm, -9);
+        assert_eq!(primary_enemy(&state).fighter.statuses.focus, -9);
     }
 
     #[test]
@@ -2665,6 +2693,17 @@ mod tests {
                 "{card:?} primed={primed}"
             );
         }
+    }
+
+    #[test]
+    fn gain_energy_can_round_small_refunds_down_to_zero_under_negative_momentum() {
+        let mut state = blank_state();
+        state.player.energy = 2;
+        state.player.fighter.statuses.momentum = -7;
+
+        state.gain_energy(1);
+
+        assert_eq!(state.player.energy, 2);
     }
 
     #[test]

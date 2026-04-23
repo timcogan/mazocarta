@@ -20,7 +20,6 @@ use crate::dungeon::{
 };
 use crate::run_logic::{
     apply_post_victory_modules as apply_post_victory_module_effects,
-    apply_start_of_combat_modules as apply_start_of_combat_module_effects,
     combat_seed_for_dungeon as shared_combat_seed_for_dungeon,
 };
 use crate::save::{
@@ -5400,8 +5399,7 @@ impl App {
         let Some(dungeon) = self.dungeon.as_ref() else {
             return;
         };
-        let applied_modules =
-            apply_start_of_combat_module_effects(&mut self.combat, &dungeon.modules);
+        let applied_modules = self.combat.apply_start_of_combat_modules(&dungeon.modules);
         let changed = !applied_modules.is_empty();
 
         for module in applied_modules {

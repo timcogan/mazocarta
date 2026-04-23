@@ -10,10 +10,7 @@ use crate::content::{
     starter_module_choices, upgraded_card,
 };
 use crate::dungeon::{DungeonNode, DungeonProgress, DungeonRun, RoomKind};
-use crate::run_logic::{
-    apply_post_victory_modules, apply_start_of_combat_modules, combat_seed_for_dungeon,
-    room_seed_for_node,
-};
+use crate::run_logic::{apply_post_victory_modules, combat_seed_for_dungeon};
 
 const MAX_RUN_STEPS: usize = 512;
 const MAX_COMBAT_TURNS: u32 = 100;
@@ -296,7 +293,7 @@ fn simulate_encounter(dungeon: &mut DungeonRun, setup: EncounterSetup) -> Simula
         setup,
         dungeon.deck.clone(),
     );
-    apply_start_of_combat_modules(&mut combat, &dungeon.modules);
+    combat.apply_start_of_combat_modules(&dungeon.modules);
 
     let mut actions_this_turn = 0usize;
     loop {
@@ -638,10 +635,7 @@ fn map_node_score(dungeon: &DungeonRun, node: &DungeonNode) -> i32 {
             }
         }
         RoomKind::Shop => {
-            let offers = shop_offers(
-                room_seed_for_node(dungeon, node.id),
-                dungeon.current_level(),
-            );
+            let offers = shop_offers(dungeon.room_seed_for(node.id), dungeon.current_level());
             let (policy, choices) = scored_shop_choices(dungeon, &offers);
             let has_good_purchase =
                 best_scored_choice(&choices, policy, SHOP_PURCHASE_THRESHOLD - 16).is_some();

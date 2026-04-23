@@ -1,4 +1,3 @@
-use crate::combat::CombatState;
 use crate::content::ModuleId;
 use crate::dungeon::DungeonRun;
 
@@ -10,22 +9,9 @@ pub(crate) struct PostVictoryModuleEffects {
 }
 
 pub(crate) fn combat_seed_for_dungeon(dungeon: &DungeonRun) -> u64 {
-    dungeon
-        .seed
-        .wrapping_add(dungeon.current_node.unwrap_or_default() as u64 * 0x9E37_79B9)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn room_seed_for_node(dungeon: &DungeonRun, node_id: usize) -> u64 {
-    level_seed(dungeon.seed, dungeon.current_level)
-        .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-}
-
-pub(crate) fn apply_start_of_combat_modules(
-    combat: &mut CombatState,
-    modules: &[ModuleId],
-) -> Vec<ModuleId> {
-    combat.apply_start_of_combat_modules(modules)
+    let node_contribution =
+        (dungeon.current_node.unwrap_or_default() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15_u64);
+    dungeon.seed.wrapping_add(node_contribution)
 }
 
 pub(crate) fn apply_post_victory_modules(dungeon: &mut DungeonRun) -> PostVictoryModuleEffects {
@@ -51,21 +37,9 @@ pub(crate) fn apply_post_victory_modules(dungeon: &mut DungeonRun) -> PostVictor
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn level_seed(base_seed: u64, level: usize) -> u64 {
-    if level <= 1 {
-        base_seed
-    } else {
-        base_seed ^ (level as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((level as u64) << 17)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        PostVictoryModuleEffects, apply_post_victory_modules, apply_start_of_combat_modules,
-        combat_seed_for_dungeon, room_seed_for_node,
-    };
+    use super::{PostVictoryModuleEffects, apply_post_victory_modules, combat_seed_for_dungeon};
     use crate::combat::{CombatState, EncounterEnemySetup, EncounterSetup};
     use crate::content::{EnemyProfileId, ModuleId};
     use crate::dungeon::DungeonRun;
@@ -79,7 +53,7 @@ mod tests {
 
         assert_eq!(
             combat_seed_for_dungeon(&dungeon),
-            TEST_SEED.wrapping_add(7_u64.wrapping_mul(0x9E37_79B9))
+            TEST_SEED.wrapping_add(7_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15_u64))
         );
     }
 
@@ -90,7 +64,7 @@ mod tests {
         dungeon.current_node = Some(3);
 
         assert_eq!(
-            room_seed_for_node(&dungeon, 3),
+            dungeon.room_seed_for(3),
             dungeon.current_room_seed().unwrap()
         );
     }
@@ -112,15 +86,12 @@ mod tests {
         };
         let (mut combat, _) = CombatState::new_with_setup(TEST_SEED, setup);
 
-        let applied = apply_start_of_combat_modules(
-            &mut combat,
-            &[
-                ModuleId::TargetingRelay,
-                ModuleId::AegisDrive,
-                ModuleId::OverclockCore,
-                ModuleId::SuppressionField,
-            ],
-        );
+        let applied = combat.apply_start_of_combat_modules(&[
+            ModuleId::TargetingRelay,
+            ModuleId::AegisDrive,
+            ModuleId::OverclockCore,
+            ModuleId::SuppressionField,
+        ]);
 
         assert_eq!(
             applied,

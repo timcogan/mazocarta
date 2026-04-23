@@ -117,16 +117,16 @@ pub(crate) struct SavedDungeonRun {
     pub(crate) available_nodes: Vec<usize>,
     pub(crate) visited_nodes: Vec<usize>,
     pub(crate) deck: Vec<String>,
-    // MIGRATION(save v3): Supports saves where the legacy `modules` field is
-    // missing. Missing `modules` restores as the default starter module.
-    // Remove when minimum supported save format > 3.
+    // MIGRATION(save v3): Supports early v3 map saves and checkpoints produced
+    // before dungeon modules were serialized. Missing `modules` restores as
+    // the default starter module. Remove when minimum supported save format > 3.
     #[serde(default)]
     pub(crate) modules: Option<Vec<String>>,
     pub(crate) player_hp: i32,
     pub(crate) player_max_hp: i32,
-    // MIGRATION(save v3): Supports saves where the legacy `credits` field is
-    // missing. Missing `credits` restores as 0. Remove when minimum supported
-    // save format > 3.
+    // MIGRATION(save v3): Supports early v3 map saves and checkpoints produced
+    // before credits were serialized. Missing `credits` restores as 0.
+    // Remove when minimum supported save format > 3.
     #[serde(default)]
     pub(crate) credits: u32,
     pub(crate) combats_cleared: usize,
@@ -156,15 +156,17 @@ pub(crate) struct SavedRewardState {
 pub(crate) struct SavedModuleSelectState {
     pub(crate) options: Vec<String>,
     pub(crate) seed: u64,
-    // MIGRATION(save v3): Supports saves where the legacy `kind` field is
-    // missing. Missing `kind` restores as the starter module-select context.
-    // Remove when minimum supported save format > 3.
+    // MIGRATION(save v3): Supports early v3 module-select saves produced
+    // before module-select context was serialized. Missing `kind` restores as
+    // the starter module-select context. Remove when minimum supported
+    // save format > 3.
     #[serde(default)]
     pub(crate) kind: Option<String>,
-    // MIGRATION(save v3): Supports saves where the legacy `boss_level` field is
-    // missing. Missing `boss_level` deserializes as `None`; fallback restore
-    // uses boss level 1, while exact restore still errors if a boss reward
-    // requires it. Remove when minimum supported save format > 3.
+    // MIGRATION(save v3): Supports early v3 boss module-select saves produced
+    // before boss reward level was serialized. Missing `boss_level`
+    // deserializes as `None`; fallback restore uses boss level 1, while exact
+    // restore still errors if a boss reward requires it. Remove when minimum
+    // supported save format > 3.
     #[serde(default)]
     pub(crate) boss_level: Option<usize>,
 }

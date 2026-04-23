@@ -338,11 +338,13 @@ impl DungeonRun {
             .map(|node| node.kind)
     }
 
+    pub(crate) fn room_seed_for(&self, node_id: usize) -> u64 {
+        level_seed(self.seed, self.current_level)
+            .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+    }
+
     pub(crate) fn current_room_seed(&self) -> Option<u64> {
-        self.current_node.map(|node_id| {
-            level_seed(self.seed, self.current_level)
-                .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        })
+        self.current_node.map(|node_id| self.room_seed_for(node_id))
     }
 
     pub(crate) fn current_encounter_setup(&self) -> Option<EncounterSetup> {
