@@ -1649,28 +1649,39 @@ impl CombatState {
         events: &mut Vec<CombatEvent>,
     ) {
         let statuses = &mut self.fighter_mut(actor).statuses;
-        match status {
+        let applied_amount = match status {
             StatusKind::Bleed => {
                 if amount <= 0 {
                     return;
                 }
                 statuses.bleed = statuses.bleed.saturating_add(amount as u8);
+                amount
             }
             StatusKind::Focus => {
+                let previous = statuses.focus;
                 statuses.focus = clamp_axis_value(statuses.focus.saturating_add(amount));
+                statuses.focus - previous
             }
             StatusKind::Rhythm => {
+                let previous = statuses.rhythm;
                 statuses.rhythm = clamp_axis_value(statuses.rhythm.saturating_add(amount));
+                statuses.rhythm - previous
             }
             StatusKind::Momentum => {
+                let previous = statuses.momentum;
                 statuses.momentum = clamp_axis_value(statuses.momentum.saturating_add(amount));
+                statuses.momentum - previous
             }
+        };
+
+        if applied_amount == 0 {
+            return;
         }
 
         events.push(CombatEvent::StatusApplied {
             target: actor,
             status,
-            amount,
+            amount: applied_amount,
         });
     }
 
@@ -2078,6 +2089,22 @@ mod tests {
         assert_eq!(state.player.fighter.statuses.focus, 9);
         assert_eq!(state.player.fighter.statuses.rhythm, -9);
         assert_eq!(state.player.fighter.statuses.momentum, 9);
+    }
+
+    #[test]
+    fn status_applied_event_uses_effective_axis_delta_after_clamp() {
+        let mut state = blank_state();
+        let mut events = Vec::new();
+        state.player.fighter.statuses.focus = 8;
+
+        state.apply_status(Actor::Player, StatusKind::Focus, 3, &mut events);
+
+        assert_eq!(state.player.fighter.statuses.focus, 9);
+        assert!(events.contains(&CombatEvent::StatusApplied {
+            target: Actor::Player,
+            status: StatusKind::Focus,
+            amount: 1,
+        }));
     }
 
     #[test]

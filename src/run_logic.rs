@@ -9,9 +9,7 @@ pub(crate) struct PostVictoryModuleEffects {
 }
 
 pub(crate) fn combat_seed_for_dungeon(dungeon: &DungeonRun) -> u64 {
-    let node_contribution =
-        (dungeon.current_node.unwrap_or_default() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15_u64);
-    dungeon.seed.wrapping_add(node_contribution)
+    dungeon.current_room_seed().unwrap_or(dungeon.seed)
 }
 
 pub(crate) fn apply_post_victory_modules(dungeon: &mut DungeonRun) -> PostVictoryModuleEffects {
@@ -47,13 +45,14 @@ mod tests {
     const TEST_SEED: u64 = 0x51A7_C0DE;
 
     #[test]
-    fn combat_seed_uses_current_node_index() {
+    fn combat_seed_matches_current_room_seed_for_selected_node() {
         let mut dungeon = DungeonRun::new(TEST_SEED);
+        dungeon.current_level = 2;
         dungeon.current_node = Some(7);
 
         assert_eq!(
             combat_seed_for_dungeon(&dungeon),
-            TEST_SEED.wrapping_add(7_u64.wrapping_mul(0x9E37_79B9_7F4A_7C15_u64))
+            dungeon.current_room_seed().unwrap()
         );
     }
 

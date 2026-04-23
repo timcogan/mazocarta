@@ -338,6 +338,10 @@ impl DungeonRun {
             .map(|node| node.kind)
     }
 
+    pub(crate) const fn rest_heal_cap() -> i32 {
+        REST_HEAL
+    }
+
     pub(crate) fn room_seed_for(&self, node_id: usize) -> u64 {
         level_seed(self.seed, self.current_level)
             .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))

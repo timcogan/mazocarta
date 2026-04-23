@@ -2622,10 +2622,8 @@ impl App {
             }
             AppScreen::Rest => match key_code {
                 13 | 32 => self.confirm_rest_selection(),
-                27 => {
-                    if self.ui.rest_selection.take().is_some() {
-                        self.dirty = true;
-                    }
+                27 if self.ui.rest_selection.take().is_some() => {
+                    self.dirty = true;
                 }
                 37 => self.set_rest_page(self.ui.rest_page.saturating_sub(1)),
                 39 => self.set_rest_page(self.ui.rest_page.saturating_add(1)),
@@ -2695,11 +2693,9 @@ impl App {
                     || self.enemy_inspect_visible() => {}
                 _ if self.combat_input_locked() => {}
                 13 | 32 => self.perform_action(CombatAction::EndTurn),
-                27 => {
-                    if self.ui.selected_card.take().is_some() {
-                        self.push_log("Selection cleared.");
-                        self.dirty = true;
-                    }
+                27 if self.ui.selected_card.take().is_some() => {
+                    self.push_log("Selection cleared.");
+                    self.dirty = true;
                 }
                 49..=57 => {
                     let index = (key_code - 49) as usize;

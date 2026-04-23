@@ -685,7 +685,7 @@ fn should_heal_at_rest(dungeon: &DungeonRun) -> bool {
     let worthless_upgrade_threshold = if zero_cost_upgrade { 0 } else { 4 };
 
     hp < 72
-        || dungeon.rest_heal_amount() >= 9
+        || dungeon.rest_heal_amount() >= DungeonRun::rest_heal_cap()
         || (hp < if zero_cost_upgrade { 74 } else { 82 } && upgrade_gain < weak_upgrade_threshold)
         || upgrade_gain <= worthless_upgrade_threshold
 }
@@ -1197,10 +1197,7 @@ fn expected_enemy_threat(combat: &CombatState) -> i32 {
             enemy.fighter.statuses.focus,
         );
         total += damage * intent.hits as i32;
-        total += scale_axis_value(
-            scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum),
-            enemy.fighter.statuses.focus,
-        ) * 3;
+        total += scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum) * 3;
         total += enemy.on_hit_bleed as i32 * 3;
     }
     total
@@ -1990,8 +1987,8 @@ mod tests {
         broken.enemies[0].fighter.statuses.focus = -7;
 
         assert_eq!(expected_enemy_threat(&neutral), 7);
-        assert_eq!(expected_enemy_threat(&boosted), 12);
-        assert_eq!(expected_enemy_threat(&broken), 2);
+        assert_eq!(expected_enemy_threat(&boosted), 9);
+        assert_eq!(expected_enemy_threat(&broken), 5);
     }
 
     #[test]
