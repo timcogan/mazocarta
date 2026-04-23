@@ -3,6 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ARG="${1:-}"
+PREVIEW_THEME_COLOR="#3df5ff"
+PREVIEW_GAME_TITLE="Mazocarta Preview"
+PREVIEW_SHORT_NAME="Mazo Preview"
 
 if [[ -z "$OUT_ARG" ]]; then
   echo "usage: $0 OUT_DIR" >&2
@@ -86,6 +89,60 @@ stamp_service_worker_version() {
   fi
 }
 
+rewrite_manifest_branding() {
+  local manifest_path="$1"
+  local channel="$2"
+
+  node --input-type=module -e '
+    import fs from "node:fs";
+
+    const [manifestPath, channel, previewTitle, previewShortName, previewThemeColor] = process.argv.slice(1);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.id = "./";
+    if (channel === "preview") {
+      manifest.name = previewTitle;
+      manifest.short_name = previewShortName;
+      manifest.theme_color = previewThemeColor;
+    }
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  ' "$manifest_path" "$channel" "$PREVIEW_GAME_TITLE" "$PREVIEW_SHORT_NAME" "$PREVIEW_THEME_COLOR"
+}
+
+apply_preview_branding() {
+  local destination="$1"
+  local index_path="$destination/index.html"
+  local manifest_path="$destination/manifest.webmanifest"
+  local svg_path="$destination/mazocarta.svg"
+  local icon_dir="$destination/icons"
+  local apple_icon_path="$destination/apple-touch-icon.png"
+
+  perl -0pi -e 's/#3f6\b/#3df5ff/g; s/#33ff66\b/#3df5ff/g;' "$svg_path"
+  perl -0pi -e 's/content="#000000"/content="#3df5ff"/; s/content="stable"/content="preview"/; s/content="Mazocarta"/content="Mazocarta Preview"/g; s#<title>Mazocarta</title>#<title>Mazocarta Preview</title>#;' "$index_path"
+  rewrite_manifest_branding "$manifest_path" "preview"
+  "$ROOT_DIR/scripts/render-pwa-icons.sh" "$svg_path" "$icon_dir" "$apple_icon_path"
+}
+
+verify_site_branding() {
+  local destination="$1"
+  local channel="$2"
+
+  if [[ "$channel" == "preview" ]]; then
+    grep -q '<title>Mazocarta Preview</title>' "$destination/index.html"
+    grep -q '"name": "Mazocarta Preview"' "$destination/manifest.webmanifest"
+    grep -q '"short_name": "Mazo Preview"' "$destination/manifest.webmanifest"
+    grep -q '"theme_color": "#3df5ff"' "$destination/manifest.webmanifest"
+    grep -q '#3df5ff' "$destination/mazocarta.svg"
+    if grep -Eq '#3f6\b|#33ff66\b' "$destination/mazocarta.svg"; then
+      echo "Preview SVG still contains the stable green accent." >&2
+      return 1
+    fi
+    return 0
+  fi
+
+  grep -q '<title>Mazocarta</title>' "$destination/index.html"
+  grep -q '"name": "Mazocarta"' "$destination/manifest.webmanifest"
+}
+
 build_site() {
   local ref="$1"
   local channel="$2"
@@ -108,7 +165,12 @@ build_site() {
   mkdir -p "$destination"
   cp -R "$worktree/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  rewrite_manifest_branding "$destination/manifest.webmanifest" "$channel"
+  if [[ "$channel" == "preview" ]]; then
+    apply_preview_branding "$destination"
+  fi
   stamp_service_worker_version "$destination" "$channel" "$short_sha"
+  verify_site_branding "$destination" "$channel"
 }
 
 build_current_site() {
@@ -130,7 +192,12 @@ build_current_site() {
   mkdir -p "$destination"
   cp -R "$ROOT_DIR/web/." "$destination/"
   rm -f "$destination/.debug-mode.json"
+  rewrite_manifest_branding "$destination/manifest.webmanifest" "$channel"
+  if [[ "$channel" == "preview" ]]; then
+    apply_preview_branding "$destination"
+  fi
   stamp_service_worker_version "$destination" "$channel" "$short_sha"
+  verify_site_branding "$destination" "$channel"
 }
 
 write_root_redirect() {

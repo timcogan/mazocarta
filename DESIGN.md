@@ -57,6 +57,32 @@ extends the same game instead of drifting into ad hoc patterns.
 - Keep labels, logs, and button text direct. Prefer short verbs and short noun phrases over explanatory sentences.
 - Brand naming stays as `Mazocarta` in both languages.
 
+## Combat Vocabulary Glossary
+
+Use this glossary as the design reference for player-facing combat terms. It is
+meant to support naming, balance, and content planning, not to replace code
+documentation.
+
+The current combat triangle is content-driven, not a hidden global rule:
+`Rhythm` checks `Focus`, `Focus` checks `Momentum`, and `Momentum` checks
+`Rhythm`.
+
+Visual palette for the three core axes:
+- `Focus = green`
+- `Rhythm = blue`
+- `Momentum = cyan`
+
+| Term | Definition |
+| --- | --- |
+| `Shield` | Absorbs incoming damage before HP and clears at the start of that fighter's turn. |
+| `Bleed` | Deals direct damage at the end of the affected fighter's turn, then decreases by 1. |
+| `Focus` | Signed axis that scales outgoing attack damage by `1.2^n` when positive and `0.8^abs(n)` when negative; it decays 1 step toward `0` at end of turn. |
+| `Rhythm` | Signed axis that scales `Shield` gain by `1.2^n` when positive and `0.8^abs(n)` when negative; it decays 1 step toward `0` at end of turn. |
+| `Momentum` | Signed axis that scales player energy and enemy intent output by `1.2^n` when positive and `0.8^abs(n)` when negative; it decays 1 step toward `0` at end of turn. |
+| `Temporary` | Card created during combat that does not enter the persistent run deck after the fight ends. |
+| `Piercing` | Damage that ignores `Shield`. |
+| `All enemies` | Card affects every living enemy without choosing an individual target. |
+
 ## Maintenance Rule
 
 - `DESIGN.md` is not a changelog. It should record durable decisions, not every implementation detail.

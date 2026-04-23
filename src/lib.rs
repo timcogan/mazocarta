@@ -8,8 +8,11 @@ mod content;
 mod dungeon;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod rng;
+mod run_logic;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod save;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sim;
 
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;

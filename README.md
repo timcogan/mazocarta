@@ -55,6 +55,16 @@ make serve
 
 6. Open `http://localhost:4173`.
 
+## Balance Simulation
+
+Run the native actor to simulate many runs and print aggregate difficulty stats:
+
+```bash
+cargo run --bin actor -- --runs 1000 --seed-start 1
+```
+
+Use `--verbose` to print one line per simulated run before the final summary.
+
 ## Controls
 
 - `Click` or `tap` to select the active card, option, or map node

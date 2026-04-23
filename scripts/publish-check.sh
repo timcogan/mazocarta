@@ -104,8 +104,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "==> cargo test -q"
 cargo test -q
 
-echo "==> bash -n scripts/build-web.sh scripts/package-pages.sh scripts/run-gitleaks.sh"
-bash -n scripts/build-web.sh scripts/package-pages.sh scripts/run-gitleaks.sh
+echo "==> bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh"
+bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh
 
 echo "==> node --check web/index.js"
 node --check web/index.js

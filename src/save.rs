@@ -2,12 +2,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::combat::{CombatOutcome, EncounterEnemySetup, EncounterSetup, TurnPhase};
-use crate::content::{CardId, EnemyProfileId, EventId, ModuleId, RewardTier};
+use crate::content::{
+    CardId, EnemyProfileId, EventId, ModuleId, RewardTier, card_slug, resolve_card_slug,
+};
 use crate::dungeon::RoomKind;
 
-// Save v2 changes serialized event ids and the combat hand-size semantics, so older
-// snapshots are intentionally rejected by the exact-version restore policy.
-pub(crate) const SAVE_FORMAT_VERSION: u32 = 2;
+// Save v4 expands the usable Focus/Rhythm/Momentum range and changes their
+// per-stack scaling, so older snapshots are intentionally rejected by the
+// exact-version restore policy.
+pub(crate) const SAVE_FORMAT_VERSION: u32 = 4;
 const CURRENT_GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 
@@ -201,13 +204,9 @@ pub(crate) struct SavedFighterState {
     pub(crate) max_hp: i32,
     pub(crate) block: i32,
     pub(crate) bleed: u8,
-    pub(crate) expose: u8,
-    #[serde(default)]
-    pub(crate) weak: u8,
-    #[serde(default)]
-    pub(crate) frail: u8,
-    #[serde(default)]
-    pub(crate) strength: u8,
+    pub(crate) focus: i8,
+    pub(crate) rhythm: i8,
+    pub(crate) momentum: i8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,72 +253,7 @@ pub(crate) fn parse_run_save(raw: &str) -> Result<RunSaveEnvelope, String> {
 }
 
 pub(crate) fn serialize_card_id(id: CardId) -> &'static str {
-    match id {
-        CardId::FlareSlash => "flare_slash",
-        CardId::FlareSlashPlus => "flare_slash_plus",
-        CardId::GuardStep => "guard_step",
-        CardId::GuardStepPlus => "guard_step_plus",
-        CardId::Slipstream => "slipstream",
-        CardId::SlipstreamPlus => "slipstream_plus",
-        CardId::QuickStrike => "quick_strike",
-        CardId::QuickStrikePlus => "quick_strike_plus",
-        CardId::PinpointJab => "pinpoint_jab",
-        CardId::PinpointJabPlus => "pinpoint_jab_plus",
-        CardId::SignalTap => "signal_tap",
-        CardId::SignalTapPlus => "signal_tap_plus",
-        CardId::Reinforce => "reinforce",
-        CardId::ReinforcePlus => "reinforce_plus",
-        CardId::PressurePoint => "pressure_point",
-        CardId::PressurePointPlus => "pressure_point_plus",
-        CardId::BurstArray => "burst_array",
-        CardId::BurstArrayPlus => "burst_array_plus",
-        CardId::CoverPulse => "cover_pulse",
-        CardId::CoverPulsePlus => "cover_pulse_plus",
-        CardId::SunderingArc => "sundering_arc",
-        CardId::SunderingArcPlus => "sundering_arc_plus",
-        CardId::TwinStrike => "twin_strike",
-        CardId::TwinStrikePlus => "twin_strike_plus",
-        CardId::BarrierField => "barrier_field",
-        CardId::BarrierFieldPlus => "barrier_field_plus",
-        CardId::TacticalBurst => "tactical_burst",
-        CardId::TacticalBurstPlus => "tactical_burst_plus",
-        CardId::RazorNet => "razor_net",
-        CardId::RazorNetPlus => "razor_net_plus",
-        CardId::FracturePulse => "fracture_pulse",
-        CardId::FracturePulsePlus => "fracture_pulse_plus",
-        CardId::VectorLock => "vector_lock",
-        CardId::VectorLockPlus => "vector_lock_plus",
-        CardId::BreachSignal => "breach_signal",
-        CardId::BreachSignalPlus => "breach_signal_plus",
-        CardId::AnchorLoop => "anchor_loop",
-        CardId::AnchorLoopPlus => "anchor_loop_plus",
-        CardId::ExecutionBeam => "execution_beam",
-        CardId::ExecutionBeamPlus => "execution_beam_plus",
-        CardId::ChainBarrage => "chain_barrage",
-        CardId::ChainBarragePlus => "chain_barrage_plus",
-        CardId::FortressMatrix => "fortress_matrix",
-        CardId::FortressMatrixPlus => "fortress_matrix_plus",
-        CardId::OverwatchGrid => "overwatch_grid",
-        CardId::OverwatchGridPlus => "overwatch_grid_plus",
-        CardId::RiftDart => "rift_dart",
-        CardId::RiftDartPlus => "rift_dart_plus",
-        CardId::MarkPulse => "mark_pulse",
-        CardId::MarkPulsePlus => "mark_pulse_plus",
-        CardId::BraceCircuit => "brace_circuit",
-        CardId::BraceCircuitPlus => "brace_circuit_plus",
-        CardId::FaultShot => "fault_shot",
-        CardId::FaultShotPlus => "fault_shot_plus",
-        CardId::SeverArc => "sever_arc",
-        CardId::SeverArcPlus => "sever_arc_plus",
-        CardId::Lockbreaker => "lockbreaker",
-        CardId::LockbreakerPlus => "lockbreaker_plus",
-        CardId::CounterLattice => "counter_lattice",
-        CardId::CounterLatticePlus => "counter_lattice_plus",
-        CardId::TerminalLoop => "terminal_loop",
-        CardId::TerminalLoopPlus => "terminal_loop_plus",
-        CardId::ZeroPoint => "zero_point",
-        CardId::ZeroPointPlus => "zero_point_plus",
-    }
+    card_slug(id)
 }
 
 pub(crate) fn serialize_module_id(id: ModuleId) -> &'static str {
@@ -337,73 +271,7 @@ pub(crate) fn serialize_module_id(id: ModuleId) -> &'static str {
 }
 
 pub(crate) fn resolve_card_id(id: &str) -> Option<CardId> {
-    match id {
-        "flare_slash" => Some(CardId::FlareSlash),
-        "flare_slash_plus" => Some(CardId::FlareSlashPlus),
-        "guard_step" => Some(CardId::GuardStep),
-        "guard_step_plus" => Some(CardId::GuardStepPlus),
-        "slipstream" => Some(CardId::Slipstream),
-        "slipstream_plus" => Some(CardId::SlipstreamPlus),
-        "quick_strike" => Some(CardId::QuickStrike),
-        "quick_strike_plus" => Some(CardId::QuickStrikePlus),
-        "pinpoint_jab" => Some(CardId::PinpointJab),
-        "pinpoint_jab_plus" => Some(CardId::PinpointJabPlus),
-        "signal_tap" => Some(CardId::SignalTap),
-        "signal_tap_plus" => Some(CardId::SignalTapPlus),
-        "reinforce" => Some(CardId::Reinforce),
-        "reinforce_plus" => Some(CardId::ReinforcePlus),
-        "pressure_point" => Some(CardId::PressurePoint),
-        "pressure_point_plus" => Some(CardId::PressurePointPlus),
-        "burst_array" => Some(CardId::BurstArray),
-        "burst_array_plus" => Some(CardId::BurstArrayPlus),
-        "cover_pulse" => Some(CardId::CoverPulse),
-        "cover_pulse_plus" => Some(CardId::CoverPulsePlus),
-        "sundering_arc" => Some(CardId::SunderingArc),
-        "sundering_arc_plus" => Some(CardId::SunderingArcPlus),
-        "twin_strike" => Some(CardId::TwinStrike),
-        "twin_strike_plus" => Some(CardId::TwinStrikePlus),
-        "barrier_field" => Some(CardId::BarrierField),
-        "barrier_field_plus" => Some(CardId::BarrierFieldPlus),
-        "tactical_burst" => Some(CardId::TacticalBurst),
-        "tactical_burst_plus" => Some(CardId::TacticalBurstPlus),
-        "razor_net" => Some(CardId::RazorNet),
-        "razor_net_plus" => Some(CardId::RazorNetPlus),
-        "fracture_pulse" => Some(CardId::FracturePulse),
-        "fracture_pulse_plus" => Some(CardId::FracturePulsePlus),
-        "vector_lock" => Some(CardId::VectorLock),
-        "vector_lock_plus" => Some(CardId::VectorLockPlus),
-        "breach_signal" => Some(CardId::BreachSignal),
-        "breach_signal_plus" => Some(CardId::BreachSignalPlus),
-        "anchor_loop" => Some(CardId::AnchorLoop),
-        "anchor_loop_plus" => Some(CardId::AnchorLoopPlus),
-        "execution_beam" => Some(CardId::ExecutionBeam),
-        "execution_beam_plus" => Some(CardId::ExecutionBeamPlus),
-        "chain_barrage" => Some(CardId::ChainBarrage),
-        "chain_barrage_plus" => Some(CardId::ChainBarragePlus),
-        "fortress_matrix" => Some(CardId::FortressMatrix),
-        "fortress_matrix_plus" => Some(CardId::FortressMatrixPlus),
-        "overwatch_grid" => Some(CardId::OverwatchGrid),
-        "overwatch_grid_plus" => Some(CardId::OverwatchGridPlus),
-        "rift_dart" => Some(CardId::RiftDart),
-        "rift_dart_plus" => Some(CardId::RiftDartPlus),
-        "mark_pulse" => Some(CardId::MarkPulse),
-        "mark_pulse_plus" => Some(CardId::MarkPulsePlus),
-        "brace_circuit" => Some(CardId::BraceCircuit),
-        "brace_circuit_plus" => Some(CardId::BraceCircuitPlus),
-        "fault_shot" => Some(CardId::FaultShot),
-        "fault_shot_plus" => Some(CardId::FaultShotPlus),
-        "sever_arc" => Some(CardId::SeverArc),
-        "sever_arc_plus" => Some(CardId::SeverArcPlus),
-        "lockbreaker" => Some(CardId::Lockbreaker),
-        "lockbreaker_plus" => Some(CardId::LockbreakerPlus),
-        "counter_lattice" => Some(CardId::CounterLattice),
-        "counter_lattice_plus" => Some(CardId::CounterLatticePlus),
-        "terminal_loop" => Some(CardId::TerminalLoop),
-        "terminal_loop_plus" => Some(CardId::TerminalLoopPlus),
-        "zero_point" => Some(CardId::ZeroPoint),
-        "zero_point_plus" => Some(CardId::ZeroPointPlus),
-        _ => None,
-    }
+    resolve_card_slug(id)
 }
 
 pub(crate) fn resolve_module_id(id: &str) -> Option<ModuleId> {
