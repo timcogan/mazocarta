@@ -473,10 +473,12 @@ fn resolve_progress(
 }
 
 fn pick_starter_module(dungeon: &DungeonRun) -> Option<ModuleId> {
-    starter_module_choices()
-        .into_iter()
-        .find(|&module| module == ModuleId::Nanoforge)
-        .or_else(|| choose_best_module(dungeon, &starter_module_choices()))
+    let choices = starter_module_choices();
+    choices
+        .iter()
+        .find(|&&module| module == ModuleId::Nanoforge)
+        .copied()
+        .or_else(|| choose_best_module(dungeon, &choices))
 }
 
 fn choose_best_module(dungeon: &DungeonRun, options: &[ModuleId]) -> Option<ModuleId> {
@@ -1856,7 +1858,7 @@ mod tests {
     use super::{
         SimulationConfig, choose_combat_action, expected_enemy_threat, hp_percent, map_node_score,
         pick_event_choice, pick_map_node, pick_rest_upgrade, pick_reward_card, pick_starter_module,
-        run_simulations,
+        run_simulations, scale_axis_value,
     };
     use crate::combat::{
         CombatAction, CombatState, DeckState, EnemyState, FighterState, PlayerState, StatusSet,
@@ -1982,10 +1984,18 @@ mod tests {
         let neutral = threat_test_combat(EnemyProfileId::NeedlerDrone, 0);
         let mut boosted = neutral.clone();
         let mut broken = neutral.clone();
+        let bleed_threat = |combat: &CombatState| {
+            let intent = combat.current_intent(0).expect("needler intent");
+            let enemy = &combat.enemies[0];
+            scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum) * 3
+        };
 
         boosted.enemies[0].fighter.statuses.focus = 5;
         broken.enemies[0].fighter.statuses.focus = -7;
 
+        assert_eq!(bleed_threat(&neutral), 3);
+        assert_eq!(bleed_threat(&boosted), 3);
+        assert_eq!(bleed_threat(&broken), 3);
         assert_eq!(expected_enemy_threat(&neutral), 7);
         assert_eq!(expected_enemy_threat(&boosted), 9);
         assert_eq!(expected_enemy_threat(&broken), 5);
