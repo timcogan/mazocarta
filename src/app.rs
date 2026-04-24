@@ -13051,11 +13051,11 @@ fn module_box_metrics(card_w: f32) -> CardBoxMetrics {
     metrics.title_body_gap = (metrics.title_body_gap * 0.75).max(2.0);
     metrics.body_gap = (metrics.body_gap * 0.8).max(2.0);
     metrics.cost_size = metrics.title_size;
-    metrics.body_max_width = (card_w - metrics.pad_x * 2.0).max(1.0);
     metrics.title_chars = ((card_w - metrics.pad_x * 2.0) / (metrics.title_size * 0.62))
         .floor()
         .max(8.0) as usize;
     let body_wrap_reserve = (metrics.body_size * 0.72).clamp(4.0, 10.0);
+    metrics.body_max_width = (card_w - metrics.pad_x * 2.0 - body_wrap_reserve).max(1.0);
     metrics.body_chars = ((card_w - metrics.pad_x * 2.0 - body_wrap_reserve)
         / (metrics.body_size * 0.62))
         .floor()
@@ -13113,11 +13113,11 @@ fn event_box_metrics(card_w: f32) -> CardBoxMetrics {
     metrics.title_body_gap = (metrics.title_body_gap * 0.86).max(2.0);
     metrics.body_gap = (metrics.body_gap * 0.88).max(2.0);
     metrics.cost_size = metrics.title_size;
-    metrics.body_max_width = (card_w - metrics.pad_x * 2.0).max(1.0);
     metrics.title_chars = ((card_w - metrics.pad_x * 2.0) / (metrics.title_size * 0.56))
         .floor()
         .max(10.0) as usize;
     let body_wrap_reserve = (metrics.body_size * 0.68).clamp(4.0, 10.0);
+    metrics.body_max_width = (card_w - metrics.pad_x * 2.0 - body_wrap_reserve).max(1.0);
     metrics.body_chars = ((card_w - metrics.pad_x * 2.0 - body_wrap_reserve)
         / (metrics.body_size * 0.56))
         .floor()
