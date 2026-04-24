@@ -779,6 +779,7 @@ struct CardBoxMetrics {
     title_size: f32,
     cost_size: f32,
     body_size: f32,
+    body_max_width: f32,
     title_gap: f32,
     title_body_gap: f32,
     body_gap: f32,
@@ -9468,7 +9469,7 @@ impl App {
             metrics.body_size,
             metrics.body_gap,
             def.description,
-            metrics.body_chars,
+            metrics.body_max_width,
             TERM_GREEN_TEXT,
         );
     }
@@ -9646,7 +9647,7 @@ impl App {
             metrics.body_size,
             metrics.body_gap,
             def.description,
-            metrics.body_chars,
+            metrics.body_max_width,
             body_color,
         );
     }
@@ -10606,11 +10607,11 @@ impl App {
             let title_size = metrics.title_size;
             let cost_size = metrics.cost_size;
             let body_size = metrics.body_size;
+            let body_max_width = metrics.body_max_width;
             let title_gap = metrics.title_gap;
             let title_body_gap = metrics.title_body_gap;
             let body_gap = metrics.body_gap;
             let title_chars = metrics.title_chars;
-            let body_chars = metrics.body_chars;
             let title_lines = wrap_text(def.name, title_chars);
 
             render_ui_tile(scene, *rect, CARD_RADIUS, stroke);
@@ -10655,7 +10656,7 @@ impl App {
                 body_size,
                 body_gap,
                 &description,
-                body_chars,
+                body_max_width,
                 body_color,
             );
         }
@@ -12976,6 +12977,8 @@ fn card_box_metrics(card_w: f32) -> CardBoxMetrics {
         .floor()
         .max(8.0) as usize;
     let body_wrap_reserve = (body_size * 0.9).clamp(6.0, 14.0);
+    // Keep a small wrap margin so browser text rendering does not crowd the card edge.
+    let body_max_width = (card_w - pad_x * 2.0 - body_wrap_reserve).max(1.0);
     let body_chars = ((card_w - pad_x * 2.0 - body_wrap_reserve) / (body_size * 0.56))
         .floor()
         .max(8.0) as usize;
@@ -12990,6 +12993,7 @@ fn card_box_metrics(card_w: f32) -> CardBoxMetrics {
         title_size,
         cost_size,
         body_size,
+        body_max_width,
         title_gap,
         title_body_gap,
         body_gap,
@@ -13006,7 +13010,7 @@ fn card_content_height(def: CardDef, card_w: f32) -> f32 {
 fn card_content_height_with_description(def: CardDef, description: &str, card_w: f32) -> f32 {
     let metrics = card_box_metrics(card_w);
     let title_lines = wrap_text(def.name, metrics.title_chars);
-    let body_lines = wrap_text(description, metrics.body_chars);
+    let body_lines = wrap_text_by_width(description, metrics.body_size, metrics.body_max_width);
     let title_height = if title_lines.is_empty() {
         0.0
     } else {
@@ -13047,6 +13051,7 @@ fn module_box_metrics(card_w: f32) -> CardBoxMetrics {
     metrics.title_body_gap = (metrics.title_body_gap * 0.75).max(2.0);
     metrics.body_gap = (metrics.body_gap * 0.8).max(2.0);
     metrics.cost_size = metrics.title_size;
+    metrics.body_max_width = (card_w - metrics.pad_x * 2.0).max(1.0);
     metrics.title_chars = ((card_w - metrics.pad_x * 2.0) / (metrics.title_size * 0.62))
         .floor()
         .max(8.0) as usize;
@@ -13108,6 +13113,7 @@ fn event_box_metrics(card_w: f32) -> CardBoxMetrics {
     metrics.title_body_gap = (metrics.title_body_gap * 0.86).max(2.0);
     metrics.body_gap = (metrics.body_gap * 0.88).max(2.0);
     metrics.cost_size = metrics.title_size;
+    metrics.body_max_width = (card_w - metrics.pad_x * 2.0).max(1.0);
     metrics.title_chars = ((card_w - metrics.pad_x * 2.0) / (metrics.title_size * 0.56))
         .floor()
         .max(10.0) as usize;
@@ -13183,6 +13189,64 @@ fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
             lines.push(current);
         } else if raw_line.is_empty() {
             lines.push(String::new());
+        }
+    }
+
+    lines
+}
+
+fn wrap_word_indices_by_width(words: &[&str], size: f32, max_width: f32) -> Vec<Vec<usize>> {
+    let mut lines = Vec::new();
+    let max_width = max_width.max(0.0);
+    let space_width = text_width(" ", size);
+    let mut current = Vec::new();
+    let mut current_width = 0.0;
+
+    for (index, word) in words.iter().enumerate() {
+        let word_width = text_width(word, size);
+        let next_width = if current.is_empty() {
+            word_width
+        } else {
+            current_width + space_width + word_width
+        };
+
+        if next_width > max_width && !current.is_empty() {
+            lines.push(current);
+            current = vec![index];
+            current_width = word_width;
+        } else {
+            current.push(index);
+            current_width = next_width;
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
+}
+
+fn wrap_text_by_width(text: &str, size: f32, max_width: f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let words: Vec<&str> = raw_line.split_whitespace().collect();
+        if words.is_empty() {
+            if raw_line.is_empty() {
+                lines.push(String::new());
+            }
+            continue;
+        }
+
+        for indices in wrap_word_indices_by_width(&words, size, max_width) {
+            let mut line = String::new();
+            for index in indices {
+                if !line.is_empty() {
+                    line.push(' ');
+                }
+                line.push_str(words[index]);
+            }
+            lines.push(line);
         }
     }
 
@@ -13297,7 +13361,7 @@ fn render_card_description(
     size: f32,
     gap: f32,
     text: &str,
-    max_chars: usize,
+    max_width: f32,
     default_color: &str,
 ) {
     let mut y = start_y;
@@ -13308,35 +13372,7 @@ fn render_card_description(
             continue;
         }
 
-        let mut line_indices = Vec::new();
-        let mut line_len = 0usize;
-        for (index, word) in words.iter().enumerate() {
-            let next_len = if line_indices.is_empty() {
-                word.len()
-            } else {
-                line_len + 1 + word.len()
-            };
-            if next_len > max_chars && !line_indices.is_empty() {
-                render_card_description_line(
-                    scene,
-                    x,
-                    y,
-                    size,
-                    &words,
-                    &line_indices,
-                    default_color,
-                );
-                y += size + gap;
-                line_indices.clear();
-                line_indices.push(index);
-                line_len = word.len();
-            } else {
-                line_indices.push(index);
-                line_len = next_len;
-            }
-        }
-
-        if !line_indices.is_empty() {
+        for line_indices in wrap_word_indices_by_width(&words, size, max_width) {
             render_card_description_line(scene, x, y, size, &words, &line_indices, default_color);
             y += size + gap;
         }
@@ -14267,6 +14303,19 @@ mod tests {
             && content_bottom <= rect.y + rect.h + 0.01
     }
 
+    fn body_text_entries_in_rect(frame: &str, rect: Rect) -> Vec<FrameTextEntry> {
+        frame_text_entries(frame)
+            .into_iter()
+            .filter(|(x, y, _, _, _, font, _)| {
+                font == "body"
+                    && *x >= rect.x - 0.01
+                    && *x <= rect.x + rect.w + 0.01
+                    && *y >= rect.y - 0.01
+                    && *y <= rect.y + rect.h + 0.01
+            })
+            .collect()
+    }
+
     #[test]
     fn selection_card_colors_damage_shield_momentum_and_cost_in_english() {
         let app = App::new();
@@ -15088,6 +15137,95 @@ mod tests {
     }
 
     #[test]
+    fn card_body_width_wrapping_keeps_each_line_inside_available_space() {
+        let metrics = card_box_metrics(96.0);
+        let lines = wrap_text_by_width(
+            "Gana Ritmo +1. Roba 1. Gana 2 de Escudo.",
+            metrics.body_size,
+            metrics.body_max_width,
+        );
+
+        assert!(lines.len() > 1);
+        assert!(wrapped_lines_fit_width(
+            &lines,
+            metrics.body_size,
+            metrics.body_max_width
+        ));
+    }
+
+    #[test]
+    fn selection_card_keeps_wrapped_spanish_body_inside_card_bounds() {
+        let mut app = App::new();
+        app.set_language(Language::Spanish);
+        let def = app.localized_card_def(CardId::Slipstream);
+        let card_w = 96.0;
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: card_w,
+            h: card_content_height(def, card_w),
+        };
+        let mut scene = SceneBuilder::new();
+        app.render_selection_card(
+            &mut scene,
+            rect,
+            CardId::Slipstream,
+            COLOR_GREEN_STROKE_CARD,
+        );
+
+        let frame = scene.finish();
+        let body_entries = body_text_entries_in_rect(&frame, rect);
+
+        assert!(
+            body_entries
+                .iter()
+                .any(|(_, _, _, _, _, _, text)| text == "de")
+        );
+        assert!(body_entries.iter().all(|(x, _, size, _, _, _, text)| {
+            *x + text_width(text, *size) <= rect.x + rect.w + 0.01
+        }));
+    }
+
+    #[test]
+    fn combat_hand_card_keeps_wrapped_spanish_body_inside_card_bounds() {
+        let mut app = active_combat_fixture();
+        app.set_language(Language::Spanish);
+        app.combat.deck.hand = vec![
+            CardId::Slipstream,
+            CardId::QuickStrike,
+            CardId::GuardStep,
+            CardId::FlareSlash,
+        ];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.resize(320.0, 568.0);
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let card_rect = app.layout().hand_rects[0];
+        let body_entries = body_text_entries_in_rect(&frame, card_rect);
+
+        assert!(
+            body_entries
+                .iter()
+                .any(|(_, _, _, _, _, _, text)| text == "Ritmo")
+        );
+        assert!(
+            body_entries
+                .iter()
+                .any(|(_, _, _, _, _, _, text)| text == "de")
+        );
+        assert!(
+            body_entries
+                .iter()
+                .any(|(_, _, _, _, _, _, text)| text == "Escudo.")
+        );
+        assert!(body_entries.iter().all(|(x, _, size, _, _, _, text)| {
+            *x + text_width(text, *size) <= card_rect.x + card_rect.w + 0.01
+        }));
+    }
+
+    #[test]
     fn card_tiles_grow_taller_for_wrapped_copy_without_needing_more_width() {
         let card_w = 158.0;
         let short = CardDef {
@@ -15111,11 +15249,10 @@ mod tests {
             traits: CardTraits::default(),
         };
         let metrics = card_box_metrics(card_w);
+        let long_body_lines =
+            wrap_text_by_width(long.description, metrics.body_size, metrics.body_max_width);
 
-        assert!(
-            wrap_text(long.name, metrics.title_chars).len() > 1
-                || wrap_text(long.description, metrics.body_chars).len() > 1
-        );
+        assert!(wrap_text(long.name, metrics.title_chars).len() > 1 || long_body_lines.len() > 1);
         assert!(card_content_height(long, card_w) > card_content_height(short, card_w));
     }
 
