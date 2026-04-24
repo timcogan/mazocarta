@@ -11,6 +11,7 @@ const encoder = new TextEncoder();
 const blurCanvas = document.createElement("canvas");
 const blurCtx = blurCanvas.getContext("2d");
 const imageCache = new Map();
+const tintedImageCache = new Map();
 const spriteCache = new Map();
 const spriteColorCache = new Map();
 const spriteColorProbeCanvas = document.createElement("canvas");
@@ -55,12 +56,38 @@ let reloadOnNextControllerChange = false;
 let lastBootScreenVisible = null;
 const MONO_STACK =
   '"IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Liberation Mono", monospace';
-const GAME_TITLE = "Mazocarta";
+const DEFAULT_GAME_TITLE = "Mazocarta";
+const PREVIEW_GAME_TITLE = "Mazocarta Preview";
 const LOGO_ASSET_PATH = "./mazocarta.svg";
+const COMBAT_ICON_ASSET_PATHS = [
+  "./icons/combat/heart.svg",
+  "./icons/combat/shield.svg",
+  "./icons/combat/energy.svg",
+  "./icons/combat/deck.svg",
+];
 const SHARE_CARD_WIDTH = 420;
 const SHARE_CARD_HEIGHT = 500;
-const ACTIVE_RUN_STORAGE_KEY = "mazocarta.active_run";
-const LANGUAGE_STORAGE_KEY = "mazocarta.language";
+
+function readMetaContent(name) {
+  const content = document.querySelector(`meta[name="${name}"]`)?.getAttribute("content");
+  return typeof content === "string" && content.length > 0 ? content : null;
+}
+
+function resolveAppChannel() {
+  const metaChannel = readMetaContent("mazocarta-app-channel");
+  if (metaChannel === "preview" || metaChannel === "stable") {
+    return metaChannel;
+  }
+  return window.location.pathname.includes("/preview/") ? "preview" : "stable";
+}
+
+const APP_CHANNEL = resolveAppChannel();
+const GAME_TITLE =
+  readMetaContent("mazocarta-app-title") ||
+  (APP_CHANNEL === "preview" ? PREVIEW_GAME_TITLE : DEFAULT_GAME_TITLE);
+const STORAGE_NAMESPACE = APP_CHANNEL === "preview" ? "mazocarta.preview" : "mazocarta";
+const ACTIVE_RUN_STORAGE_KEY = `${STORAGE_NAMESPACE}.active_run`;
+const LANGUAGE_STORAGE_KEY = `${STORAGE_NAMESPACE}.language`;
 
 function isStandaloneMode() {
   return (
@@ -236,6 +263,49 @@ function loadImageAsset(src) {
     img.addEventListener("load", handleLoad);
     img.addEventListener("error", handleError);
   });
+}
+
+function buildTintedImageAsset(src, color) {
+  const img = getImageAsset(src);
+  if (!(img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0)) {
+    return null;
+  }
+
+  const tintedCanvas = document.createElement("canvas");
+  tintedCanvas.width = img.naturalWidth;
+  tintedCanvas.height = img.naturalHeight;
+  const tintedCtx = tintedCanvas.getContext("2d");
+  if (!tintedCtx) {
+    return null;
+  }
+
+  tintedCtx.clearRect(0, 0, tintedCanvas.width, tintedCanvas.height);
+  tintedCtx.drawImage(img, 0, 0);
+  tintedCtx.globalCompositeOperation = "source-in";
+  tintedCtx.fillStyle = color;
+  tintedCtx.fillRect(0, 0, tintedCanvas.width, tintedCanvas.height);
+  tintedCtx.globalCompositeOperation = "source-over";
+  return tintedCanvas;
+}
+
+function getTintedImageAsset(src, color) {
+  const key = `${src}|${color.trim().toLowerCase()}`;
+  const cached = tintedImageCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const tinted = buildTintedImageAsset(src, color);
+  if (tinted) {
+    tintedImageCache.set(key, tinted);
+  }
+  return tinted;
+}
+
+async function preloadShellImages() {
+  await Promise.allSettled(
+    [LOGO_ASSET_PATH, ...COMBAT_ICON_ASSET_PATHS].map((src) => loadImageAsset(src)),
+  );
 }
 
 function resolveSpriteColor(color) {
@@ -617,6 +687,25 @@ function drawFrame() {
       if (img && img.complete) {
         ctx.save();
         ctx.globalAlpha *= Number.parseFloat(alpha);
+        ctx.drawImage(
+          img,
+          Number.parseFloat(x),
+          Number.parseFloat(y),
+          Number.parseFloat(w),
+          Number.parseFloat(h),
+        );
+        ctx.restore();
+      }
+      continue;
+    }
+
+    if (opcode === "TIMAGE") {
+      const [, x, y, w, h, src, color, alpha] = parts;
+      const img = getTintedImageAsset(src, color);
+      if (img) {
+        ctx.save();
+        ctx.globalAlpha *= Number.parseFloat(alpha);
+        ctx.imageSmoothingEnabled = false;
         ctx.drawImage(
           img,
           Number.parseFloat(x),
@@ -1418,6 +1507,7 @@ async function registerServiceWorker() {
 async function loadWasm() {
   resizeCanvas();
   try {
+    void preloadShellImages();
     const debugEnabled = await resolveDebugEnabled();
     const response = await fetch("./mazocarta.wasm", { cache: "no-store" });
     if (!response.ok) {
@@ -1445,7 +1535,7 @@ async function loadWasm() {
       typeof wasm.app_language_generation === "function" ? wasm.app_language_generation() : 0;
     lastRunSaveGeneration =
       typeof wasm.run_save_generation === "function" ? wasm.run_save_generation() : 0;
-    document.title = "Mazocarta";
+    document.title = GAME_TITLE;
     drawFrame();
 
     const loop = (timestamp) => {
@@ -1461,7 +1551,7 @@ async function loadWasm() {
 
     rafId = window.requestAnimationFrame(loop);
   } catch (error) {
-    document.title = "Mazocarta";
+    document.title = GAME_TITLE;
     console.error(error);
   }
 }

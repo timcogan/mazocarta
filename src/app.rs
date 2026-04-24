@@ -3,19 +3,24 @@ use std::fmt::Write;
 
 use crate::combat::{
     Actor, CombatAction, CombatEvent, CombatOutcome, CombatState, DeckState, EncounterSetup,
-    EnemyState, FighterState, PlayerState, StatusKind, StatusSet,
+    EnemyState, FighterState, PlayerState, StatusKind, StatusSet, preview_scaled_value,
 };
 use crate::content::{
-    CardDef, CardId, EnemyIntent, EnemyProfileId, EnemySpriteLayerTone, EventId, Language,
-    ModuleDef, ModuleId, RewardTier, ShopOffer, all_base_cards, boss_module_choices,
-    default_starter_module, enemy_profile_level, enemy_sprite_def, localized_card_def,
-    localized_card_name, localized_enemy_intent, localized_enemy_name, localized_event_choice_body,
-    localized_event_choice_title, localized_event_def, localized_module_def, localized_text,
-    reward_choices, shop_offers, starter_module_choices, upgraded_card,
+    AxisKind, CardArchetype, CardDef, CardId, EnemyIntent, EnemyProfileId, EnemySpriteLayerTone,
+    EventId, Language, ModuleDef, ModuleId, RewardTier, ShopOffer, all_base_cards,
+    boss_module_choices, card_def, default_starter_module, enemy_profile_level, enemy_sprite_def,
+    localized_card_def, localized_card_name, localized_enemy_intent, localized_enemy_name,
+    localized_event_choice_body, localized_event_choice_title, localized_event_def,
+    localized_module_def, localized_text, reward_choices, shop_offers, starter_module_choices,
+    upgraded_card,
 };
 use crate::dungeon::{
     DungeonProgress, DungeonRun, EventResolution, NodeSelection, RoomKind, credits_reward_for_room,
     localized_level_codename, localized_level_summary,
+};
+use crate::run_logic::{
+    apply_post_victory_modules as apply_post_victory_module_effects,
+    combat_seed_for_dungeon as shared_combat_seed_for_dungeon,
 };
 use crate::save::{
     RunSaveEnvelope, SavedCheckpoint, SavedCombatState, SavedDeckState, SavedDungeonNode,
@@ -38,24 +43,27 @@ const BUILD_APP_CHANNEL: Option<&str> = option_env!("MAZOCARTA_APP_CHANNEL");
 const APP_BUILD_TIMESTAMP_UTC: Option<&str> = option_env!("MAZOCARTA_APP_BUILD_TIMESTAMP_UTC");
 const APP_GIT_SHA_SHORT: Option<&str> = option_env!("MAZOCARTA_APP_GIT_SHA_SHORT");
 const PLAYER_NAME: &str = "Player";
-const SHIELD_LABEL: &str = "HP";
 const GUARD_LABEL: &str = "Shield";
-const ENERGY_LABEL: &str = "Energy";
-const STACK_LABEL: &str = "Deck";
-const PANEL_TEXT_GAP: &str = "  ";
-const NEXT_SIGNAL_LABEL: &str = "NEXT SIGNAL";
+const COMBAT_HEART_ICON_ASSET_PATH: &str = "./icons/combat/heart.svg";
+const COMBAT_SHIELD_ICON_ASSET_PATH: &str = "./icons/combat/shield.svg";
+const COMBAT_ENERGY_ICON_ASSET_PATH: &str = "./icons/combat/energy.svg";
+const COMBAT_DECK_ICON_ASSET_PATH: &str = "./icons/combat/deck.svg";
+const COMBAT_INLINE_ICON_HEIGHT_RATIO: f32 = 1.0;
+const COMBAT_INLINE_ICON_ASPECT_RATIO: f32 = 0.75;
+const COMBAT_INLINE_ICON_TEXT_GAP_RATIO: f32 = 0.24;
+const COMBAT_ACTION_UI_SCALE: f32 = 0.75;
+const PANEL_TEXT_GAP: &str = " ";
+const NEXT_SIGNAL_LABEL: &str = "Next";
 const TERM_GREEN: &str = "#33ff66";
 const TERM_GREEN_SOFT: &str = "#8dffad";
 const TERM_GREEN_TEXT: &str = "#c9ffd7";
 const TERM_GREEN_DIM: &str = "#6f9f7b";
-const TERM_GREEN_FAINT: &str = "#335c3f";
 const TERM_CYAN: &str = "#3df5ff";
 const TERM_CYAN_SOFT: &str = "#a8fcff";
 const TERM_BLUE_SOFT: &str = "#9bb7ff";
 const TERM_PINK: &str = "#ff4fd8";
 const TERM_PINK_SOFT: &str = "#ff9cf0";
 const TERM_ORANGE: &str = "#ffb852";
-const TERM_LIME: &str = "#d8ff3d";
 const TERM_LIME_SOFT: &str = "#ebff9a";
 const COLOR_TILE_FILL: &str = "rgba(0, 0, 0, 1.0)";
 const COLOR_GREEN_STROKE_STRONG: &str = "rgba(51, 255, 102, 0.92)";
@@ -79,8 +87,10 @@ const COLOR_WHITE_STROKE_PATH: &str = "rgba(255, 255, 255, 0.78)";
 const BUTTON_RADIUS: f32 = 8.0;
 const CARD_RADIUS: f32 = 8.0;
 const ENEMY_PANEL_RADIUS: f32 = 8.0;
-const ENEMY_PANEL_ICON_SIZE_RATIO: f32 = 0.9;
-const ENEMY_PANEL_ICON_GAP_RATIO: f32 = 0.34;
+const UI_TILE_FILL_ALPHA: f32 = 0.02;
+const UI_TILE_STROKE_WIDTH: f32 = 0.5;
+const UI_TILE_STROKE_ALPHA_BOOST: f32 = 0.18;
+const UI_TILE_STROKE_ALPHA_SCALE: f32 = 1.0;
 const ENEMY_PANEL_ICON_ALPHA: f32 = 0.92;
 const ENEMY_PANEL_ICON_DISABLED_ALPHA: f32 = 0.78;
 const CARD_WIDTH: f32 = 190.0;
@@ -128,6 +138,8 @@ const COMBAT_STAT_COUNTDOWN_MAX_STEPS: usize = 8;
 const MAP_NODE_RADIUS: f32 = 18.0;
 const MAP_NODE_DIAMETER: f32 = MAP_NODE_RADIUS * 2.0;
 const MAP_LINE_WIDTH: f32 = 3.0;
+// Keep adjacent map lanes within one node width of empty space on wide viewports.
+const MAP_MAX_ADJACENT_LANE_CENTER_SPACING: f32 = MAP_NODE_DIAMETER * 2.0;
 const BOOT_HERO_SHIFT_UP: f32 = 54.0;
 const MAP_DEBUG_SEED_SIZE: f32 = 14.0;
 const MAP_DEBUG_BUTTON_FONT_SIZE: f32 = 15.0;
@@ -204,6 +216,7 @@ enum HitTarget {
     LegendPanel,
     Info,
     RunInfoPanel,
+    EnemyInspectPanel,
     RestHeal,
     RestCard(usize),
     RestConfirm,
@@ -243,6 +256,9 @@ struct UiState {
     legend_progress: f32,
     run_info_open: bool,
     run_info_progress: f32,
+    enemy_inspect_enemy: Option<usize>,
+    enemy_inspect_open: bool,
+    enemy_inspect_progress: f32,
     restart_confirm_open: bool,
     restart_confirm_progress: f32,
     settings_open: bool,
@@ -279,9 +295,17 @@ struct ActorDisplayedStats {
     block: i32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PlayerDisplayedMeta {
+    energy: i32,
+    draw_pile: i32,
+    discard_pile: i32,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DisplayedCombatStats {
     player: ActorDisplayedStats,
+    player_meta: PlayerDisplayedMeta,
     enemies: Vec<ActorDisplayedStats>,
 }
 
@@ -289,6 +313,9 @@ struct DisplayedCombatStats {
 enum CombatStat {
     Hp,
     Block,
+    Energy,
+    DrawPile,
+    DiscardPile,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -304,14 +331,15 @@ enum CombatPlaybackKind {
     PlayerAction,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum StatChangeOp {
     Add(i32),
     Subtract(i32),
     Set(i32),
+    Values(Vec<i32>),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct QueuedStatChange {
     actor: Actor,
     stat: CombatStat,
@@ -343,8 +371,8 @@ struct CombatFeedbackState {
     displayed: DisplayedCombatStats,
     displayed_intents: Vec<EnemyIntent>,
     playback_kind: Option<CombatPlaybackKind>,
-    stat_queue: VecDeque<QueuedStatChange>,
-    active_stat: Option<StatCountdown>,
+    stat_queue: VecDeque<Vec<QueuedStatChange>>,
+    active_stats: Vec<StatCountdown>,
     playback_queue: VecDeque<CombatEvent>,
     playback_pause_ms: f32,
     outcome_hold_ms: f32,
@@ -428,6 +456,14 @@ impl Layout {
 #[derive(Clone, Copy, Debug)]
 struct RunInfoLayout {
     modal_rect: Rect,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct EnemyInspectLayout {
+    modal_rect: Rect,
+    sprite_rect: Rect,
+    title_size: f32,
+    title_y: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -536,9 +572,18 @@ struct TextLineLayout {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct ActorStatsLineLayout {
+    x: f32,
+    y: f32,
+    size: f32,
+    group_gap: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct StatusRowLayout {
     x: f32,
     y: f32,
+    width: f32,
     size: f32,
     gap: f32,
 }
@@ -744,20 +789,42 @@ struct CardBoxMetrics {
 
 #[derive(Clone, Copy, Debug)]
 struct EnemyPanelMetrics {
-    info_label_size: f32,
     info_body_size: f32,
     info_body_line_gap: f32,
     info_body_chars: usize,
-    info_gap: f32,
-    title_size: f32,
-    title_icon_size: f32,
     stats_size: f32,
     status_size: f32,
+    status_row_height: f32,
     status_gap: f32,
     top_pad: f32,
     line_gap: f32,
     width: f32,
     height: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EnemyIntentLines {
+    first_line_label: String,
+    first_line_summary: String,
+    continuation_lines: Vec<String>,
+}
+
+impl EnemyIntentLines {
+    fn first_line_width(&self, font_size: f32) -> f32 {
+        text_width(&self.first_line_label, font_size)
+            + text_width(&self.first_line_summary, font_size)
+    }
+
+    fn max_width(&self, font_size: f32) -> f32 {
+        self.continuation_lines
+            .iter()
+            .map(|line| text_width(line, font_size))
+            .fold(self.first_line_width(font_size), f32::max)
+    }
+
+    fn line_count(&self) -> usize {
+        1 + self.continuation_lines.len()
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -766,6 +833,7 @@ struct PlayerPanelMetrics {
     stats_size: f32,
     meta_size: f32,
     status_size: f32,
+    status_row_height: f32,
     status_gap: f32,
     top_pad: f32,
     line_gap: f32,
@@ -891,13 +959,7 @@ impl App {
         let (combat, _) = CombatState::new(BASE_SEED);
         let enemy_count = combat.enemy_count();
         let displayed_stats = displayed_combat_stats(&combat);
-        let displayed_intents = (0..enemy_count)
-            .filter_map(|enemy_index| {
-                combat.enemy(enemy_index).map(|enemy| {
-                    localized_enemy_intent(enemy.profile, enemy.intent_index, Language::English)
-                })
-            })
-            .collect();
+        let displayed_intents = displayed_enemy_intents(&combat, Language::English);
 
         Self {
             screen: AppScreen::Boot,
@@ -983,6 +1045,14 @@ impl App {
         ease_out_cubic(self.ui.run_info_progress)
     }
 
+    fn enemy_inspect_visible(&self) -> bool {
+        self.ui.enemy_inspect_progress > 0.001
+    }
+
+    fn enemy_inspect_eased_progress(&self) -> f32 {
+        ease_out_cubic(self.ui.enemy_inspect_progress)
+    }
+
     fn restart_confirm_visible(&self) -> bool {
         self.ui.restart_confirm_progress > 0.001
     }
@@ -1012,6 +1082,9 @@ impl App {
             return;
         }
         self.language = language;
+        if matches!(self.screen, AppScreen::Combat) {
+            self.relocalize_combat_feedback_intents();
+        }
         self.language_generation = self.language_generation.wrapping_add(1);
         self.refresh_hover();
         self.dirty = true;
@@ -1114,6 +1187,25 @@ impl App {
         localized_card_def(card, self.language)
     }
 
+    fn localized_combat_enemy_intent(&self, enemy_index: usize) -> Option<EnemyIntent> {
+        self.combat
+            .enemy(enemy_index)
+            .map(|enemy| localized_enemy_intent(enemy.profile, enemy.intent_index, self.language))
+    }
+
+    fn relocalize_combat_feedback_intents(&mut self) {
+        for enemy_index in 0..self.combat_feedback.displayed_intents.len() {
+            if let Some(intent) = self.localized_combat_enemy_intent(enemy_index) {
+                self.combat_feedback.displayed_intents[enemy_index] = intent;
+            }
+        }
+    }
+
+    fn combat_card_description(&self, card: CardId) -> String {
+        let def = self.localized_card_def(card);
+        scaled_card_description(def.description, self.combat.player.fighter.statuses)
+    }
+
     fn localized_module_def(&self, module: ModuleId) -> ModuleDef {
         localized_module_def(module, self.language)
     }
@@ -1173,13 +1265,7 @@ impl App {
             .collect();
         self.combat_feedback = CombatFeedbackState {
             displayed: displayed_combat_stats(&self.combat),
-            displayed_intents: (0..self.combat.enemy_count())
-                .filter_map(|enemy_index| {
-                    self.combat.enemy(enemy_index).map(|enemy| {
-                        localized_enemy_intent(enemy.profile, enemy.intent_index, self.language)
-                    })
-                })
-                .collect(),
+            displayed_intents: displayed_enemy_intents(&self.combat, self.language),
             ..CombatFeedbackState::default()
         };
     }
@@ -1189,7 +1275,7 @@ impl App {
             && (self.combat_feedback.auto_playback_active
                 || self.combat_feedback.pending_outcome.is_some()
                 || self.combat_feedback.playback_pause_ms > 0.0
-                || self.combat_feedback.active_stat.is_some()
+                || !self.combat_feedback.active_stats.is_empty()
                 || !self.combat_feedback.stat_queue.is_empty())
     }
 
@@ -1198,22 +1284,20 @@ impl App {
             .displayed_intents
             .get(enemy_index)
             .copied()
-            .or_else(|| {
-                self.combat.enemy(enemy_index).map(|enemy| {
-                    localized_enemy_intent(enemy.profile, enemy.intent_index, self.language)
-                })
-            })
+            .or_else(|| self.localized_combat_enemy_intent(enemy_index))
             .unwrap_or(crate::content::EnemyIntent {
                 name: self.tr("Offline", "Sin señal"),
                 summary: self.tr("No next signal.", "Sin siguiente señal."),
                 damage: 0,
                 hits: 0,
                 gain_block: 0,
-                gain_strength: 0,
                 prime_bleed: 0,
-                apply_expose: 0,
-                apply_weak: 0,
-                apply_frail: 0,
+                self_focus: 0,
+                self_rhythm: 0,
+                self_momentum: 0,
+                target_focus: 0,
+                target_rhythm: 0,
+                target_momentum: 0,
                 apply_bleed: 0,
             })
     }
@@ -1281,6 +1365,91 @@ impl App {
         }
     }
 
+    fn displayed_player_meta(&self) -> PlayerDisplayedMeta {
+        let displayed = self.combat_feedback.displayed.player_meta;
+        if displayed == PlayerDisplayedMeta::default()
+            && self.combat_feedback.playback_kind.is_none()
+            && self.combat_feedback.active_stats.is_empty()
+            && self.combat_feedback.stat_queue.is_empty()
+        {
+            return PlayerDisplayedMeta {
+                energy: self.combat.player.energy as i32,
+                draw_pile: self.combat.deck.draw_pile.len() as i32,
+                discard_pile: self.combat.deck.discard_pile.len() as i32,
+            };
+        }
+        displayed
+    }
+
+    fn displayed_player_meta_mut(&mut self) -> &mut PlayerDisplayedMeta {
+        &mut self.combat_feedback.displayed.player_meta
+    }
+
+    fn sync_displayed_player_meta_to_combat(&mut self) {
+        self.combat_feedback.displayed.player_meta = PlayerDisplayedMeta {
+            energy: self.combat.player.energy as i32,
+            draw_pile: self.combat.deck.draw_pile.len() as i32,
+            discard_pile: self.combat.deck.discard_pile.len() as i32,
+        };
+    }
+
+    fn queue_player_meta_stat_set(&mut self, stat: CombatStat, target: i32) {
+        let current = self.displayed_stat_value(Actor::Player, stat);
+        self.queue_stat_change(QueuedStatChange {
+            actor: Actor::Player,
+            stat,
+            op: StatChangeOp::Set(target),
+            tint: if target >= current {
+                StatTint::BlockGain
+            } else {
+                StatTint::NeutralLoss
+            },
+        });
+    }
+
+    fn queue_player_meta_stat_group(
+        &mut self,
+        changes: impl IntoIterator<Item = QueuedStatChange>,
+    ) {
+        self.queue_stat_change_group(
+            changes
+                .into_iter()
+                .filter(|change| match &change.op {
+                    StatChangeOp::Values(values) => !values.is_empty(),
+                    _ => true,
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    fn queue_player_reshuffle_meta_animation(&mut self) {
+        let displayed = self.displayed_player_meta();
+        let transfer = displayed.discard_pile.max(0);
+        let mut draw_values = stat_countdown_values(displayed.draw_pile, 0);
+        if transfer > 0 {
+            draw_values.push(transfer);
+        }
+        let mut discard_values = stat_countdown_values(displayed.discard_pile, transfer);
+        if transfer > 0 || displayed.discard_pile > 0 {
+            discard_values.push(0);
+        }
+
+        self.queue_player_meta_stat_group([
+            QueuedStatChange {
+                actor: Actor::Player,
+                stat: CombatStat::DrawPile,
+                op: StatChangeOp::Values(draw_values),
+                tint: StatTint::NeutralLoss,
+            },
+            QueuedStatChange {
+                actor: Actor::Player,
+                stat: CombatStat::DiscardPile,
+                op: StatChangeOp::Values(discard_values),
+                tint: StatTint::BlockGain,
+            },
+        ]);
+    }
+
     fn mark_enemy_defeat_vfx_started(&mut self, enemy_index: usize) {
         if self.enemy_defeat_vfx_started.len() <= enemy_index {
             self.enemy_defeat_vfx_started.resize(enemy_index + 1, false);
@@ -1333,52 +1502,104 @@ impl App {
     }
 
     fn displayed_stat_value(&self, actor: Actor, stat: CombatStat) -> i32 {
-        let stats = self.displayed_actor_stats(actor);
         match stat {
-            CombatStat::Hp => stats.hp,
-            CombatStat::Block => stats.block,
+            CombatStat::Hp => self.displayed_actor_stats(actor).hp,
+            CombatStat::Block => self.displayed_actor_stats(actor).block,
+            CombatStat::Energy => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta().energy
+            }
+            CombatStat::DrawPile => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta().draw_pile
+            }
+            CombatStat::DiscardPile => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta().discard_pile
+            }
         }
     }
 
     fn set_displayed_stat_value(&mut self, actor: Actor, stat: CombatStat, value: i32) {
-        let stats = self.displayed_actor_stats_mut(actor);
         match stat {
-            CombatStat::Hp => stats.hp = value.max(0),
-            CombatStat::Block => stats.block = value.max(0),
+            CombatStat::Hp => self.displayed_actor_stats_mut(actor).hp = value.max(0),
+            CombatStat::Block => self.displayed_actor_stats_mut(actor).block = value.max(0),
+            CombatStat::Energy => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta_mut().energy = value.max(0);
+            }
+            CombatStat::DrawPile => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta_mut().draw_pile = value.max(0);
+            }
+            CombatStat::DiscardPile => {
+                debug_assert!(matches!(actor, Actor::Player));
+                self.displayed_player_meta_mut().discard_pile = value.max(0);
+            }
         }
     }
 
     fn queue_stat_change(&mut self, change: QueuedStatChange) {
-        self.combat_feedback.stat_queue.push_back(change);
+        self.queue_stat_change_group([change]);
+    }
+
+    fn queue_stat_change_group(&mut self, changes: impl IntoIterator<Item = QueuedStatChange>) {
+        let changes: Vec<_> = changes.into_iter().collect();
+        if changes.is_empty() {
+            return;
+        }
+        self.combat_feedback.stat_queue.push_back(changes);
     }
 
     fn prime_next_stat_countdown_if_idle(&mut self) -> bool {
-        if self.combat_feedback.active_stat.is_some() {
+        if !self.combat_feedback.active_stats.is_empty() {
             return false;
         }
 
-        while let Some(change) = self.combat_feedback.stat_queue.pop_front() {
-            let current = self.displayed_stat_value(change.actor, change.stat);
-            let target = match change.op {
-                StatChangeOp::Add(amount) => current.saturating_add(amount.max(0)),
-                StatChangeOp::Subtract(amount) => current.saturating_sub(amount.max(0)),
-                StatChangeOp::Set(value) => value.max(0),
-            };
-            if current == target {
-                self.set_displayed_stat_value(change.actor, change.stat, target);
-                continue;
+        while let Some(changes) = self.combat_feedback.stat_queue.pop_front() {
+            let mut countdowns = Vec::new();
+
+            for change in changes {
+                let current = self.displayed_stat_value(change.actor, change.stat);
+                let (values, target) = match change.op {
+                    StatChangeOp::Add(amount) => {
+                        let target = current.saturating_add(amount.max(0));
+                        (stat_countdown_values(current, target), target)
+                    }
+                    StatChangeOp::Subtract(amount) => {
+                        let target = current.saturating_sub(amount.max(0));
+                        (stat_countdown_values(current, target), target)
+                    }
+                    StatChangeOp::Set(value) => {
+                        let target = value.max(0);
+                        (stat_countdown_values(current, target), target)
+                    }
+                    StatChangeOp::Values(values) => {
+                        let target = values.last().copied().unwrap_or(current);
+                        (values, target)
+                    }
+                };
+
+                if values.is_empty() {
+                    self.set_displayed_stat_value(change.actor, change.stat, target);
+                    continue;
+                }
+
+                countdowns.push(StatCountdown {
+                    actor: change.actor,
+                    stat: change.stat,
+                    values,
+                    target,
+                    ttl_ms: COMBAT_PLAYBACK_STEP_MS,
+                    total_ms: COMBAT_PLAYBACK_STEP_MS,
+                    tint: change.tint,
+                });
             }
 
-            self.combat_feedback.active_stat = Some(StatCountdown {
-                actor: change.actor,
-                stat: change.stat,
-                values: stat_countdown_values(current, target),
-                target,
-                ttl_ms: COMBAT_PLAYBACK_STEP_MS,
-                total_ms: COMBAT_PLAYBACK_STEP_MS,
-                tint: change.tint,
-            });
-            return true;
+            if !countdowns.is_empty() {
+                self.combat_feedback.active_stats = countdowns;
+                return true;
+            }
         }
 
         false
@@ -1469,6 +1690,12 @@ impl App {
                         Language::Spanish => format!("{} actuan.", self.enemy_turn_label()),
                     }),
                 }
+                if playback && matches!(actor, Actor::Player) {
+                    self.queue_player_meta_stat_set(
+                        CombatStat::Energy,
+                        self.combat.player.energy as i32,
+                    );
+                }
                 if playback {
                     self.show_turn_banner(actor);
                     COMBAT_TURN_BANNER_MS * 0.5
@@ -1492,7 +1719,21 @@ impl App {
                 }
                 COMBAT_PLAYBACK_PAUSE_LOG_MS
             }
-            CombatEvent::CardDrawn { .. } => 0.0,
+            CombatEvent::CardDrawn { .. } => {
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn)
+                {
+                    self.queue_player_meta_stat_set(
+                        CombatStat::DrawPile,
+                        self.displayed_player_meta().draw_pile.saturating_sub(1),
+                    );
+                } else if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
+                0.0
+            }
             CombatEvent::CardPlayed { card } => {
                 self.push_log(match self.language {
                     Language::English => {
@@ -1502,6 +1743,11 @@ impl App {
                         format!("Jugaste {}.", localized_card_name(card, self.language))
                     }
                 });
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
                 COMBAT_PLAYBACK_PAUSE_LOG_MS
             }
             CombatEvent::CardBurned { card } => {
@@ -1515,6 +1761,27 @@ impl App {
                         localized_card_name(card, self.language)
                     ),
                 });
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
+                COMBAT_PLAYBACK_PAUSE_LOG_MS
+            }
+            CombatEvent::CardCreated { card } => {
+                self.push_log(match self.language {
+                    Language::English => {
+                        format!("Generated {}.", localized_card_name(card, self.language))
+                    }
+                    Language::Spanish => {
+                        format!("Generaste {}.", localized_card_name(card, self.language))
+                    }
+                });
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
                 COMBAT_PLAYBACK_PAUSE_LOG_MS
             }
             CombatEvent::CardsDiscarded { count } => {
@@ -1523,6 +1790,19 @@ impl App {
                         Language::English => format!("Discarded {count} card(s)."),
                         Language::Spanish => format!("Descartaste {count} carta(s)."),
                     });
+                    if playback
+                        && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn)
+                    {
+                        self.queue_player_meta_stat_set(
+                            CombatStat::DiscardPile,
+                            self.displayed_player_meta().discard_pile + count as i32,
+                        );
+                    } else if playback
+                        && self.combat_feedback.playback_kind
+                            == Some(CombatPlaybackKind::PlayerAction)
+                    {
+                        self.sync_displayed_player_meta_to_combat();
+                    }
                     COMBAT_PLAYBACK_PAUSE_LOG_MS
                 } else {
                     0.0
@@ -1533,9 +1813,51 @@ impl App {
                     "Discard pile reshuffled into the draw pile.",
                     "El descarte se mezclo dentro del mazo.",
                 ));
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn)
+                {
+                    self.queue_player_reshuffle_meta_animation();
+                } else if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
                 COMBAT_PLAYBACK_PAUSE_LOG_MS
             }
-            CombatEvent::EnergySpent { .. } => 0.0,
+            CombatEvent::EnergySpent { .. } => {
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
+                0.0
+            }
+            CombatEvent::RequirementNotMet {
+                axis,
+                threshold,
+                actual,
+            } => {
+                self.push_log(match self.language {
+                    Language::English => format!(
+                        "Requires {} > {}. Current {}.",
+                        axis_display_name(axis, self.language),
+                        threshold,
+                        actual
+                    ),
+                    Language::Spanish => format!(
+                        "Requiere {} > {}. Actual {}.",
+                        axis_display_name(axis, self.language),
+                        threshold,
+                        actual
+                    ),
+                });
+                if playback
+                    && self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction)
+                {
+                    self.sync_displayed_player_meta_to_combat();
+                }
+                COMBAT_PLAYBACK_PAUSE_STATUS_MS
+            }
             CombatEvent::DamageDealt {
                 source,
                 target,
@@ -1645,23 +1967,53 @@ impl App {
                 status,
                 amount,
             } => {
+                let delta = signed_axis_value(amount);
                 self.push_log(match (target, status) {
-                    (Actor::Player, _) => match self.language {
+                    (Actor::Player, StatusKind::Bleed) => match self.language {
                         Language::English => format!(
-                            "You gain {} {amount}.",
-                            status_display_name(status, self.language)
+                            "You gain {} {}.",
+                            status_display_name(status, self.language),
+                            amount
                         ),
                         Language::Spanish => format!(
-                            "Obtienes {} {amount}.",
-                            status_display_name(status, self.language)
+                            "Obtienes {} {}.",
+                            status_display_name(status, self.language),
+                            amount
                         ),
                     },
-                    (Actor::Enemy(enemy_index), _) => format!(
-                        "{} {} {} {amount}.",
+                    (Actor::Enemy(enemy_index), StatusKind::Bleed) => format!(
+                        "{} {} {} {}.",
                         self.enemy_display_name(enemy_index),
                         self.tr("gains", "gana"),
-                        status_display_name(status, self.language)
+                        status_display_name(status, self.language),
+                        amount
                     ),
+                    (Actor::Player, _) => match self.language {
+                        Language::English => format!(
+                            "Your {} changes by {}.",
+                            status_display_name(status, self.language),
+                            delta
+                        ),
+                        Language::Spanish => format!(
+                            "Tu {} cambia en {}.",
+                            status_display_name(status, self.language),
+                            delta
+                        ),
+                    },
+                    (Actor::Enemy(enemy_index), _) => match self.language {
+                        Language::English => format!(
+                            "{} {} changes by {}.",
+                            self.enemy_display_name(enemy_index),
+                            status_display_name(status, self.language),
+                            delta
+                        ),
+                        Language::Spanish => format!(
+                            "{} {} cambia en {}.",
+                            self.enemy_display_name(enemy_index),
+                            status_display_name(status, self.language),
+                            delta
+                        ),
+                    },
                 });
                 self.spawn_status_floater(target, status, amount);
                 COMBAT_PLAYBACK_PAUSE_STATUS_MS
@@ -1690,7 +2042,7 @@ impl App {
                             self.enemy_display_name(enemy_index)
                         ),
                     },
-                    StatusKind::Expose | StatusKind::Weak | StatusKind::Frail => match actor {
+                    StatusKind::Focus | StatusKind::Rhythm | StatusKind::Momentum => match actor {
                         Actor::Player => match self.language {
                             Language::English => {
                                 format!(
@@ -1707,26 +2059,6 @@ impl App {
                             "{} {} {}.",
                             self.enemy_display_name(enemy_index),
                             self.tr("loses", "pierde"),
-                            status_display_name(status, self.language)
-                        ),
-                    },
-                    StatusKind::Strength => match actor {
-                        Actor::Player => match self.language {
-                            Language::English => {
-                                format!(
-                                    "Your {} holds.",
-                                    status_display_name(status, self.language)
-                                )
-                            }
-                            Language::Spanish => format!(
-                                "Tu {} se mantiene.",
-                                status_display_name(status, self.language)
-                            ),
-                        },
-                        Actor::Enemy(enemy_index) => format!(
-                            "{} {} {}.",
-                            self.enemy_display_name(enemy_index),
-                            self.tr("keeps", "mantiene"),
                             status_display_name(status, self.language)
                         ),
                     },
@@ -1761,17 +2093,24 @@ impl App {
                 enemy_index,
                 intent,
             } => {
+                let localized_intent = self
+                    .localized_combat_enemy_intent(enemy_index)
+                    .unwrap_or(intent);
+                if self.combat_feedback.displayed_intents.len() <= enemy_index {
+                    self.combat_feedback.displayed_intents =
+                        displayed_enemy_intents(&self.combat, self.language);
+                }
                 if self.combat_feedback.displayed_intents.len() <= enemy_index {
                     self.combat_feedback
                         .displayed_intents
-                        .resize(enemy_index + 1, intent);
+                        .resize(enemy_index + 1, localized_intent);
                 }
-                self.combat_feedback.displayed_intents[enemy_index] = intent;
+                self.combat_feedback.displayed_intents[enemy_index] = localized_intent;
                 self.push_log(format!(
                     "{} {} {}.",
                     self.enemy_display_name(enemy_index),
                     self.tr("next intent:", "siguiente accion:"),
-                    intent.name
+                    localized_intent.name
                 ));
                 COMBAT_PLAYBACK_PAUSE_LOG_MS
             }
@@ -1830,42 +2169,53 @@ impl App {
             changed = true;
         }
 
-        if let Some(mut active) = self.combat_feedback.active_stat.take() {
-            active.ttl_ms -= dt_ms;
+        if !self.combat_feedback.active_stats.is_empty() {
+            for active in &mut self.combat_feedback.active_stats {
+                active.ttl_ms -= dt_ms;
+            }
             changed = true;
-            let mut finished = false;
-            while active.ttl_ms <= 0.0 {
-                if let Some(next_value) = active.values.first().copied() {
-                    active.values.remove(0);
-                    self.set_displayed_stat_value(active.actor, active.stat, next_value);
-                    if let (Actor::Enemy(enemy_index), CombatStat::Hp) = (active.actor, active.stat)
-                    {
-                        if next_value <= 0 && !self.combat.enemy_is_alive(enemy_index) {
-                            self.begin_enemy_defeat_vfx(enemy_index);
-                        }
-                    }
-                    changed = true;
-                    if active.values.is_empty() {
-                        finished = true;
-                        break;
-                    }
-                    active.ttl_ms += active.total_ms;
-                } else {
-                    self.set_displayed_stat_value(active.actor, active.stat, active.target);
-                    if let (Actor::Enemy(enemy_index), CombatStat::Hp) = (active.actor, active.stat)
-                    {
-                        if active.target <= 0 && !self.combat.enemy_is_alive(enemy_index) {
-                            self.begin_enemy_defeat_vfx(enemy_index);
-                        }
-                    }
-                    changed = true;
-                    finished = true;
+
+            loop {
+                let should_advance = self
+                    .combat_feedback
+                    .active_stats
+                    .first()
+                    .is_some_and(|active| active.ttl_ms <= 0.0);
+                if !should_advance {
                     break;
                 }
-            }
 
-            if !finished {
-                self.combat_feedback.active_stat = Some(active);
+                let mut next_active_stats = Vec::new();
+                let active_stats = std::mem::take(&mut self.combat_feedback.active_stats);
+                for mut active in active_stats {
+                    if let Some(next_value) = active.values.first().copied() {
+                        active.values.remove(0);
+                        self.set_displayed_stat_value(active.actor, active.stat, next_value);
+                        if let (Actor::Enemy(enemy_index), CombatStat::Hp) =
+                            (active.actor, active.stat)
+                        {
+                            if next_value <= 0 && !self.combat.enemy_is_alive(enemy_index) {
+                                self.begin_enemy_defeat_vfx(enemy_index);
+                            }
+                        }
+                        changed = true;
+                        if !active.values.is_empty() {
+                            active.ttl_ms += active.total_ms;
+                            next_active_stats.push(active);
+                        }
+                    } else {
+                        self.set_displayed_stat_value(active.actor, active.stat, active.target);
+                        if let (Actor::Enemy(enemy_index), CombatStat::Hp) =
+                            (active.actor, active.stat)
+                        {
+                            if active.target <= 0 && !self.combat.enemy_is_alive(enemy_index) {
+                                self.begin_enemy_defeat_vfx(enemy_index);
+                            }
+                        }
+                        changed = true;
+                    }
+                }
+                self.combat_feedback.active_stats = next_active_stats;
             }
         }
 
@@ -1873,7 +2223,7 @@ impl App {
 
         if self.combat_feedback.auto_playback_active
             && self.combat_feedback.playback_pause_ms <= 0.0
-            && self.combat_feedback.active_stat.is_none()
+            && self.combat_feedback.active_stats.is_empty()
             && self.combat_feedback.stat_queue.is_empty()
         {
             if let Some(event) = self.combat_feedback.playback_queue.pop_front() {
@@ -1890,7 +2240,7 @@ impl App {
             && self.combat_feedback.pending_outcome.is_some()
             && self.combat_feedback.playback_pause_ms <= 0.0
             && self.combat_feedback.outcome_hold_ms <= 0.0
-            && self.combat_feedback.active_stat.is_none()
+            && self.combat_feedback.active_stats.is_empty()
             && self.combat_feedback.stat_queue.is_empty()
         {
             self.finalize_pending_combat_outcome();
@@ -1900,7 +2250,7 @@ impl App {
         if !self.combat_feedback.auto_playback_active
             && self.combat_feedback.pending_outcome.is_none()
             && self.combat_feedback.playback_pause_ms <= 0.0
-            && self.combat_feedback.active_stat.is_none()
+            && self.combat_feedback.active_stats.is_empty()
             && self.combat_feedback.stat_queue.is_empty()
             && self.combat_feedback.playback_kind.is_some()
         {
@@ -1974,6 +2324,33 @@ impl App {
             changed = true;
         } else {
             self.ui.run_info_progress = run_info_target;
+        }
+        if self.ui.enemy_inspect_open
+            && !self
+                .ui
+                .enemy_inspect_enemy
+                .is_some_and(|enemy_index| self.combat.enemy_is_alive(enemy_index))
+        {
+            self.ui.enemy_inspect_open = false;
+            self.refresh_hover();
+            changed = true;
+        }
+        let enemy_inspect_target = if self.ui.enemy_inspect_open { 1.0 } else { 0.0 };
+        if (self.ui.enemy_inspect_progress - enemy_inspect_target).abs() > 0.001 {
+            let step = (dt_ms / LEGEND_TRANSITION_MS).clamp(0.0, 1.0);
+            self.ui.enemy_inspect_progress =
+                if self.ui.enemy_inspect_progress < enemy_inspect_target {
+                    (self.ui.enemy_inspect_progress + step).min(enemy_inspect_target)
+                } else {
+                    (self.ui.enemy_inspect_progress - step).max(enemy_inspect_target)
+                };
+            self.refresh_hover();
+            changed = true;
+        } else {
+            self.ui.enemy_inspect_progress = enemy_inspect_target;
+        }
+        if !self.ui.enemy_inspect_open && !self.enemy_inspect_visible() {
+            self.ui.enemy_inspect_enemy = None;
         }
         let restart_target = if self.ui.restart_confirm_open {
             1.0
@@ -2245,10 +2622,8 @@ impl App {
             }
             AppScreen::Rest => match key_code {
                 13 | 32 => self.confirm_rest_selection(),
-                27 => {
-                    if self.ui.rest_selection.take().is_some() {
-                        self.dirty = true;
-                    }
+                27 if self.ui.rest_selection.take().is_some() => {
+                    self.dirty = true;
                 }
                 37 => self.set_rest_page(self.ui.rest_page.saturating_sub(1)),
                 39 => self.set_rest_page(self.ui.rest_page.saturating_add(1)),
@@ -2308,15 +2683,19 @@ impl App {
                 _ => {}
             },
             AppScreen::Combat => match key_code {
-                27 if self.run_info_visible() || self.ui.run_info_open => self.close_run_info(),
-                _ if self.run_info_visible() || self.ui.run_info_open => {}
+                27 if self.ui.run_info_open => self.close_run_info(),
+                27 if self.ui.enemy_inspect_open => self.close_enemy_inspect(),
+                27 if self.run_info_visible() => self.close_run_info(),
+                27 if self.enemy_inspect_visible() => self.close_enemy_inspect(),
+                _ if self.ui.run_info_open
+                    || self.run_info_visible()
+                    || self.ui.enemy_inspect_open
+                    || self.enemy_inspect_visible() => {}
                 _ if self.combat_input_locked() => {}
                 13 | 32 => self.perform_action(CombatAction::EndTurn),
-                27 => {
-                    if self.ui.selected_card.take().is_some() {
-                        self.push_log("Selection cleared.");
-                        self.dirty = true;
-                    }
+                27 if self.ui.selected_card.take().is_some() => {
+                    self.push_log("Selection cleared.");
+                    self.dirty = true;
                 }
                 49..=57 => {
                     let index = (key_code - 49) as usize;
@@ -2585,6 +2964,7 @@ impl App {
         }
 
         self.ui.run_info_open = true;
+        self.ui.enemy_inspect_open = false;
         self.ui.legend_open = false;
         self.refresh_hover();
         self.dirty = true;
@@ -2605,6 +2985,36 @@ impl App {
             self.close_run_info();
         } else {
             self.open_run_info();
+        }
+    }
+
+    fn open_enemy_inspect(&mut self, enemy_index: usize) {
+        if !matches!(self.screen, AppScreen::Combat) || !self.combat.enemy_is_alive(enemy_index) {
+            return;
+        }
+
+        self.ui.enemy_inspect_enemy = Some(enemy_index);
+        self.ui.enemy_inspect_open = true;
+        self.ui.run_info_open = false;
+        self.refresh_hover();
+        self.dirty = true;
+    }
+
+    fn close_enemy_inspect(&mut self) {
+        if !self.ui.enemy_inspect_open && !self.enemy_inspect_visible() {
+            return;
+        }
+
+        self.ui.enemy_inspect_open = false;
+        self.refresh_hover();
+        self.dirty = true;
+    }
+
+    fn toggle_or_switch_enemy_inspect(&mut self, enemy_index: usize) {
+        if self.ui.enemy_inspect_open && self.ui.enemy_inspect_enemy == Some(enemy_index) {
+            self.close_enemy_inspect();
+        } else {
+            self.open_enemy_inspect(enemy_index);
         }
     }
 
@@ -2924,10 +3334,9 @@ impl App {
                     max_hp: self.combat.player.fighter.max_hp,
                     block: self.combat.player.fighter.block,
                     bleed: self.combat.player.fighter.statuses.bleed,
-                    expose: self.combat.player.fighter.statuses.expose,
-                    weak: self.combat.player.fighter.statuses.weak,
-                    frail: self.combat.player.fighter.statuses.frail,
-                    strength: self.combat.player.fighter.statuses.strength,
+                    focus: self.combat.player.fighter.statuses.focus,
+                    rhythm: self.combat.player.fighter.statuses.rhythm,
+                    momentum: self.combat.player.fighter.statuses.momentum,
                 },
                 energy: self.combat.player.energy,
                 max_energy: self.combat.player.max_energy,
@@ -2942,10 +3351,9 @@ impl App {
                         max_hp: enemy.fighter.max_hp,
                         block: enemy.fighter.block,
                         bleed: enemy.fighter.statuses.bleed,
-                        expose: enemy.fighter.statuses.expose,
-                        weak: enemy.fighter.statuses.weak,
-                        frail: enemy.fighter.statuses.frail,
-                        strength: enemy.fighter.statuses.strength,
+                        focus: enemy.fighter.statuses.focus,
+                        rhythm: enemy.fighter.statuses.rhythm,
+                        momentum: enemy.fighter.statuses.momentum,
                     },
                     profile: serialize_enemy_profile(enemy.profile).to_string(),
                     intent_index: enemy.intent_index,
@@ -3457,10 +3865,9 @@ impl App {
                 block: saved.player.fighter.block,
                 statuses: StatusSet {
                     bleed: saved.player.fighter.bleed,
-                    expose: saved.player.fighter.expose,
-                    weak: saved.player.fighter.weak,
-                    frail: saved.player.fighter.frail,
-                    strength: saved.player.fighter.strength,
+                    focus: saved.player.fighter.focus,
+                    rhythm: saved.player.fighter.rhythm,
+                    momentum: saved.player.fighter.momentum,
                 },
             },
             energy: saved.player.energy,
@@ -3477,10 +3884,9 @@ impl App {
                         block: enemy.fighter.block,
                         statuses: StatusSet {
                             bleed: enemy.fighter.bleed,
-                            expose: enemy.fighter.expose,
-                            weak: enemy.fighter.weak,
-                            frail: enemy.fighter.frail,
-                            strength: enemy.fighter.strength,
+                            focus: enemy.fighter.focus,
+                            rhythm: enemy.fighter.rhythm,
+                            momentum: enemy.fighter.momentum,
                         },
                     },
                     profile: resolve_enemy_profile(&enemy.profile)
@@ -3615,9 +4021,7 @@ impl App {
     }
 
     fn combat_seed_for_dungeon(&self, dungeon: &DungeonRun) -> u64 {
-        dungeon
-            .seed
-            .wrapping_add(dungeon.current_node.unwrap_or_default() as u64 * 0x9E37_79B9)
+        shared_combat_seed_for_dungeon(dungeon)
     }
 
     fn start_run(&mut self) {
@@ -3801,6 +4205,7 @@ impl App {
             }
             HitTarget::LegendPanel => {}
             HitTarget::RunInfoPanel => {}
+            HitTarget::EnemyInspectPanel => {}
             HitTarget::DebugLevelDown => self.adjust_debug_level(-1),
             HitTarget::DebugLevelUp => self.adjust_debug_level(1),
             HitTarget::DebugFillDeck => self.debug_fill_deck(),
@@ -4631,8 +5036,20 @@ impl App {
         }
 
         let Some(target) = self.hit_test(x, y) else {
-            if self.run_info_visible() || self.ui.run_info_open {
+            if self.ui.run_info_open {
                 self.close_run_info();
+                return;
+            }
+            if self.ui.enemy_inspect_open {
+                self.close_enemy_inspect();
+                return;
+            }
+            if self.run_info_visible() {
+                self.close_run_info();
+                return;
+            }
+            if self.enemy_inspect_visible() {
+                self.close_enemy_inspect();
                 return;
             }
             if self.ui.selected_card.is_some() {
@@ -4649,6 +5066,7 @@ impl App {
         match target {
             HitTarget::Menu => self.return_to_menu(),
             HitTarget::RunInfoPanel => {}
+            HitTarget::EnemyInspectPanel => {}
             HitTarget::Card(index) => self.select_or_play_card(index),
             HitTarget::Enemy(enemy_index) => {
                 if let Some(selected) = self.ui.selected_card {
@@ -4657,14 +5075,27 @@ impl App {
                             hand_index: selected,
                             target: Some(Actor::Enemy(enemy_index)),
                         });
+                    } else if self.combat.card_targets_all_enemies(selected) {
+                        self.perform_action(CombatAction::PlayCard {
+                            hand_index: selected,
+                            target: None,
+                        });
                     }
+                } else {
+                    self.toggle_or_switch_enemy_inspect(enemy_index);
                 }
             }
             HitTarget::Player => {
                 if self.ui.selected_card.is_none() {
-                    self.toggle_run_info();
+                    if self.ui.enemy_inspect_open || self.enemy_inspect_visible() {
+                        self.open_run_info();
+                    } else {
+                        self.toggle_run_info();
+                    }
                 } else if let Some(selected) = self.ui.selected_card {
-                    if !self.combat.card_requires_enemy(selected) {
+                    if !self.combat.card_requires_enemy(selected)
+                        && !self.combat.card_targets_all_enemies(selected)
+                    {
                         self.perform_action(CombatAction::PlayCard {
                             hand_index: selected,
                             target: Some(Actor::Player),
@@ -4717,6 +5148,13 @@ impl App {
         }
 
         if self.ui.selected_card == Some(index) {
+            if self.combat.card_targets_all_enemies(index) {
+                self.perform_action(CombatAction::PlayCard {
+                    hand_index: index,
+                    target: None,
+                });
+                return;
+            }
             self.dirty = true;
             return;
         }
@@ -4957,123 +5395,58 @@ impl App {
         let Some(dungeon) = self.dungeon.as_ref() else {
             return;
         };
-        let modules = dungeon.modules.clone();
-        let mut changed = false;
+        let applied_modules = self.combat.apply_start_of_combat_modules(&dungeon.modules);
+        let changed = !applied_modules.is_empty();
 
-        for module in modules {
+        for module in applied_modules {
             match module {
                 ModuleId::AegisDrive => {
-                    self.combat.player.fighter.block =
-                        self.combat.player.fighter.block.saturating_add(5);
                     self.push_log(self.tr(
                         "Aegis Drive grants 5 Shield.",
                         "Aegis Drive otorga 5 de Escudo.",
                     ));
-                    changed = true;
                 }
                 ModuleId::TargetingRelay => {
-                    if let Some(enemy_index) = self.combat.first_enemy_index() {
-                        let enemy_name = self.enemy_display_name(enemy_index).to_string();
-                        if let Some(enemy) = self.combat.enemy_mut(enemy_index) {
-                            enemy.fighter.statuses.expose =
-                                enemy.fighter.statuses.expose.saturating_add(1);
-                            self.push_log(match self.language {
-                                Language::English => {
-                                    format!(
-                                        "Targeting Relay applies Vulnerable 1 to {}.",
-                                        enemy_name
-                                    )
-                                }
-                                Language::Spanish => {
-                                    format!(
-                                        "Relé de Apuntamiento aplica Vulnerable 1 a {}.",
-                                        enemy_name
-                                    )
-                                }
-                            });
-                            changed = true;
-                        }
-                    }
+                    self.push_log(match self.language {
+                        Language::English => "Targeting Relay grants Focus +1.".to_string(),
+                        Language::Spanish => "Relé de Apuntamiento otorga Enfoque +1.".to_string(),
+                    });
                 }
                 ModuleId::Nanoforge => {}
                 ModuleId::CapacitorBank => {
-                    self.combat.player.fighter.statuses.strength = self
-                        .combat
-                        .player
-                        .fighter
-                        .statuses
-                        .strength
-                        .saturating_add(1);
                     self.push_log(match self.language {
-                        Language::English => "Capacitor Bank grants Strength 1.".to_string(),
-                        Language::Spanish => "Banco de Capacitores otorga Fuerza 1.".to_string(),
+                        Language::English => "Capacitor Bank grants Momentum +1.".to_string(),
+                        Language::Spanish => "Banco de Capacitores otorga Impulso +1.".to_string(),
                     });
-                    changed = true;
                 }
                 ModuleId::PrismScope => {
-                    let mut applied = false;
-                    for enemy in self
-                        .combat
-                        .enemies
-                        .iter_mut()
-                        .filter(|enemy| enemy.fighter.hp > 0)
-                    {
-                        enemy.fighter.statuses.expose =
-                            enemy.fighter.statuses.expose.saturating_add(1);
-                        applied = true;
-                    }
-                    if applied {
-                        self.push_log(match self.language {
-                            Language::English => {
-                                "Prism Scope applies Vulnerable 1 to all enemies.".to_string()
-                            }
-                            Language::Spanish => {
-                                "Visor Prisma aplica Vulnerable 1 a todos los enemigos.".to_string()
-                            }
-                        });
-                        changed = true;
-                    }
+                    self.push_log(match self.language {
+                        Language::English => {
+                            "Prism Scope applies Rhythm -1 to all enemies.".to_string()
+                        }
+                        Language::Spanish => {
+                            "Visor Prisma aplica Ritmo -1 a todos los enemigos.".to_string()
+                        }
+                    });
                 }
                 ModuleId::SalvageLedger => {}
                 ModuleId::OverclockCore => {
-                    self.combat.player.max_energy = self.combat.player.max_energy.saturating_add(1);
-                    self.combat.player.energy = self
-                        .combat
-                        .player
-                        .energy
-                        .saturating_add(1)
-                        .min(self.combat.player.max_energy);
                     self.push_log(match self.language {
                         Language::English => "Overclock Core grants 1 extra Energy.".to_string(),
                         Language::Spanish => {
                             "Núcleo Overclock otorga 1 de Energía extra.".to_string()
                         }
                     });
-                    changed = true;
                 }
                 ModuleId::SuppressionField => {
-                    let mut applied = false;
-                    for enemy in self
-                        .combat
-                        .enemies
-                        .iter_mut()
-                        .filter(|enemy| enemy.fighter.hp > 0)
-                    {
-                        enemy.fighter.statuses.weak = enemy.fighter.statuses.weak.saturating_add(1);
-                        applied = true;
-                    }
-                    if applied {
-                        self.push_log(match self.language {
-                            Language::English => {
-                                "Suppression Field applies Weak 1 to all enemies.".to_string()
-                            }
-                            Language::Spanish => {
-                                "Campo de Supresión aplica Débil 1 a todos los enemigos."
-                                    .to_string()
-                            }
-                        });
-                        changed = true;
-                    }
+                    self.push_log(match self.language {
+                        Language::English => {
+                            "Suppression Field applies Focus -1 to all enemies.".to_string()
+                        }
+                        Language::Spanish => {
+                            "Campo de Supresión aplica Enfoque -1 a todos los enemigos.".to_string()
+                        }
+                    });
                 }
                 ModuleId::RecoveryMatrix => {}
             }
@@ -5085,35 +5458,17 @@ impl App {
     }
 
     fn apply_post_victory_modules(&mut self) {
-        let Some((nanoforge_healed, salvage_applied, recovery_healed)) =
-            self.dungeon.as_mut().map(|dungeon| {
-                let nanoforge_healed = if dungeon.has_module(ModuleId::Nanoforge) {
-                    dungeon.recover_hp(3)
-                } else {
-                    0
-                };
-                let salvage_applied = dungeon.has_module(ModuleId::SalvageLedger);
-                if salvage_applied {
-                    dungeon.credits = dungeon.credits.saturating_add(4);
-                }
-                let recovery_healed = if dungeon.has_module(ModuleId::RecoveryMatrix) {
-                    dungeon.recover_hp(5)
-                } else {
-                    0
-                };
-                (nanoforge_healed, salvage_applied, recovery_healed)
-            })
-        else {
+        let Some(effects) = self.dungeon.as_mut().map(apply_post_victory_module_effects) else {
             return;
         };
 
-        if nanoforge_healed > 0 {
+        if effects.nanoforge_healed > 0 {
             self.push_log(match self.language {
-                Language::English => format!("Nanoforge restores {nanoforge_healed} HP."),
-                Language::Spanish => format!("Nanoforge restaura {nanoforge_healed} HP."),
+                Language::English => format!("Nanoforge restores {} HP.", effects.nanoforge_healed),
+                Language::Spanish => format!("Nanoforge restaura {} HP.", effects.nanoforge_healed),
             });
         }
-        if salvage_applied {
+        if effects.salvage_applied {
             self.push_log(match self.language {
                 Language::English => "Salvage Ledger grants 4 additional Credits.".to_string(),
                 Language::Spanish => {
@@ -5121,11 +5476,16 @@ impl App {
                 }
             });
         }
-        if recovery_healed > 0 {
+        if effects.recovery_healed > 0 {
             self.push_log(match self.language {
-                Language::English => format!("Recovery Matrix restores {recovery_healed} HP."),
+                Language::English => {
+                    format!("Recovery Matrix restores {} HP.", effects.recovery_healed)
+                }
                 Language::Spanish => {
-                    format!("Matriz de Recuperación restaura {recovery_healed} HP.")
+                    format!(
+                        "Matriz de Recuperación restaura {} HP.",
+                        effects.recovery_healed
+                    )
                 }
             });
         }
@@ -5505,9 +5865,17 @@ impl App {
         });
     }
 
-    fn spawn_status_floater(&mut self, actor: Actor, status: StatusKind, amount: u8) {
+    fn spawn_status_floater(&mut self, actor: Actor, status: StatusKind, amount: i8) {
         let (x, y) = self.anchor_for(actor);
-        let text = format!("{} {amount}", status_display_name(status, self.language));
+        let amount_text = match status {
+            StatusKind::Bleed => amount.to_string(),
+            _ => signed_axis_value(amount),
+        };
+        let text = format!(
+            "{} {}",
+            status_display_name(status, self.language),
+            amount_text
+        );
         let color = status_display_rgb(status);
         self.floaters.push(Floater {
             text,
@@ -5731,10 +6099,7 @@ impl App {
     }
 
     fn snapshot_combat_layout_target(&mut self) {
-        if matches!(self.screen, AppScreen::Combat)
-            && self.layout_transition.is_none()
-            && self.combat_layout_target.is_none()
-        {
+        if matches!(self.screen, AppScreen::Combat) && self.layout_transition.is_none() {
             self.combat_layout_target = Some(self.layout_target());
         }
     }
@@ -5766,27 +6131,28 @@ impl App {
         debug_assert_eq!(hand_arrangement.item_count(), hand_count);
         let card_w = combat_hand_card_width(hand_arrangement, low_hand_layout, tile_scale);
         let tile_insets = tile_insets_for_card_width(card_w);
-        let top_button_font_size = combat_top_button_font_size(low_hand_layout, tile_scale);
+        let top_button_font_size = combat_action_button_font_size(low_hand_layout, tile_scale);
+        let (top_button_pad_x, top_button_pad_y) = combat_action_button_padding(tile_insets);
         let top_button_gap = tile_gap;
         let top_button_y = tile_gap;
         let menu_size = button_size(
             self.tr("Menu", "Menú"),
             top_button_font_size,
-            tile_insets.pad_x,
-            tile_insets.top_pad,
+            top_button_pad_x,
+            top_button_pad_y,
         );
         let end_turn_size = button_size(
             self.tr("End Turn", "Fin del turno"),
             top_button_font_size,
-            tile_insets.pad_x,
-            tile_insets.top_pad,
+            top_button_pad_x,
+            top_button_pad_y,
         );
         let end_battle_size = self.debug_mode.then(|| {
             button_size(
                 self.tr("End Battle", "Fin de batalla"),
                 top_button_font_size,
-                tile_insets.pad_x,
-                tile_insets.top_pad,
+                top_button_pad_x,
+                top_button_pad_y,
             )
         });
         let top_group_w = menu_size.0
@@ -5812,7 +6178,11 @@ impl App {
             .map(|index| {
                 self.combat
                     .hand_card(index)
-                    .map(|card| card_content_height(self.localized_card_def(card), card_w))
+                    .map(|card| {
+                        let def = self.localized_card_def(card);
+                        let description = self.combat_card_description(card);
+                        card_content_height_with_description(def, &description, card_w)
+                    })
                     .unwrap_or(card_w * (CARD_HEIGHT / CARD_WIDTH))
             })
             .collect();
@@ -5875,9 +6245,9 @@ impl App {
         };
         let player_y = hand_bottom + tile_gap;
         let (hint_message, _, _) = combat_hint_tile(self, hand_count);
-        let (hint_font_size, _, _) = hand_hint_metrics(tile_scale);
-        let hint_w = text_width(&hint_message, hint_font_size) + tile_insets.pad_x * 2.0;
-        let hint_h = hint_font_size + tile_insets.top_pad + tile_insets.bottom_pad;
+        let (hint_font_size, hint_pad_x, hint_pad_y) = hand_hint_metrics(tile_scale);
+        let hint_w = text_width(&hint_message, hint_font_size) + hint_pad_x * 2.0;
+        let hint_h = hint_font_size + hint_pad_y * 2.0;
         let hint_rect = Some(Rect {
             x: (logical_width - hint_w) * 0.5,
             y: player_y + player_metrics.height + tile_gap,
@@ -6276,7 +6646,8 @@ impl App {
         let side_pad = (logical_width * 0.12).clamp(54.0, 132.0);
         let lane_span = (logical_width - side_pad * 2.0).max(0.0);
         let lane_spacing = if dungeon.lane_count() > 1 {
-            lane_span / (dungeon.lane_count() - 1) as f32
+            (lane_span / (dungeon.lane_count() - 1) as f32)
+                .min(MAP_MAX_ADJACENT_LANE_CENTER_SPACING)
         } else {
             0.0
         };
@@ -6815,6 +7186,55 @@ impl App {
                 w: modal_w,
                 h: modal_h,
             },
+        })
+    }
+
+    fn enemy_inspect_layout(&self) -> Option<EnemyInspectLayout> {
+        if !matches!(self.screen, AppScreen::Combat) {
+            return None;
+        }
+
+        let enemy_index = self.ui.enemy_inspect_enemy?;
+        let enemy = self.combat.enemy(enemy_index)?;
+        let logical_width = self.logical_width();
+        let logical_height = self.logical_height();
+        let (pad_x, pad_y) = standard_overlay_padding();
+        let title_gap = 26.0_f32;
+        let desired_title_size = 24.0_f32;
+        let name = localized_enemy_name(enemy.profile, self.language);
+        let sprite = enemy_sprite_def(enemy.profile);
+        let sprite_w = sprite.width.max(1) as f32;
+        let sprite_h = sprite.height.max(1) as f32;
+        let max_modal_h = (logical_height - 48.0).max(180.0);
+        let desired_modal_w = text_width(name, desired_title_size).max(208.0) + pad_x * 2.0;
+        let modal_w = fit_modal_width(desired_modal_w, logical_width, 232.0);
+        let title_size =
+            fit_text_size(name, desired_title_size, (modal_w - pad_x * 2.0).max(120.0)).max(18.0);
+        let max_sprite_w = (modal_w - pad_x * 2.0).max(96.0);
+        let max_sprite_h = (max_modal_h - pad_y * 2.0 - title_size - title_gap).max(96.0);
+        let sprite_scale = (max_sprite_w / sprite_w).min(max_sprite_h / sprite_h);
+        let draw_w = sprite_w * sprite_scale;
+        let draw_h = sprite_h * sprite_scale;
+        let modal_h = (pad_y + title_size + title_gap + draw_h + pad_y).min(max_modal_h);
+        let modal_rect = Rect {
+            x: (logical_width - modal_w) * 0.5,
+            y: (logical_height - modal_h) * 0.5,
+            w: modal_w,
+            h: modal_h,
+        };
+        let title_y = modal_rect.y + pad_y + title_size;
+        let sprite_rect = Rect {
+            x: modal_rect.x + (modal_rect.w - draw_w) * 0.5,
+            y: title_y + title_gap,
+            w: draw_w,
+            h: draw_h,
+        };
+
+        Some(EnemyInspectLayout {
+            modal_rect,
+            sprite_rect,
+            title_size,
+            title_y,
         })
     }
 
@@ -7499,10 +7919,80 @@ impl App {
                     return None;
                 }
                 let layout = self.layout();
-                if self.run_info_visible() || self.ui.run_info_open {
+                if self.ui.run_info_open {
                     let run_info_layout = self.run_info_layout()?;
                     if run_info_layout.modal_rect.contains(x, y) {
                         return Some(HitTarget::RunInfoPanel);
+                    }
+                    for (&enemy_index, rect) in layout
+                        .enemy_indices
+                        .iter()
+                        .zip(layout.enemy_rects.iter())
+                        .rev()
+                    {
+                        if rect.contains(x, y) {
+                            return Some(HitTarget::Enemy(enemy_index));
+                        }
+                    }
+                    if layout.player_rect.contains(x, y) {
+                        return Some(HitTarget::Player);
+                    }
+                    return None;
+                }
+                if self.ui.enemy_inspect_open {
+                    let enemy_inspect_layout = self.enemy_inspect_layout()?;
+                    if enemy_inspect_layout.modal_rect.contains(x, y) {
+                        return Some(HitTarget::EnemyInspectPanel);
+                    }
+                    for (&enemy_index, rect) in layout
+                        .enemy_indices
+                        .iter()
+                        .zip(layout.enemy_rects.iter())
+                        .rev()
+                    {
+                        if rect.contains(x, y) {
+                            return Some(HitTarget::Enemy(enemy_index));
+                        }
+                    }
+                    if layout.player_rect.contains(x, y) {
+                        return Some(HitTarget::Player);
+                    }
+                    return None;
+                }
+                if self.run_info_visible() {
+                    let run_info_layout = self.run_info_layout()?;
+                    if run_info_layout.modal_rect.contains(x, y) {
+                        return Some(HitTarget::RunInfoPanel);
+                    }
+                    for (&enemy_index, rect) in layout
+                        .enemy_indices
+                        .iter()
+                        .zip(layout.enemy_rects.iter())
+                        .rev()
+                    {
+                        if rect.contains(x, y) {
+                            return Some(HitTarget::Enemy(enemy_index));
+                        }
+                    }
+                    if layout.player_rect.contains(x, y) {
+                        return Some(HitTarget::Player);
+                    }
+                    return None;
+                }
+                if self.enemy_inspect_visible() {
+                    let enemy_inspect_layout = self.enemy_inspect_layout()?;
+                    if enemy_inspect_layout.modal_rect.contains(x, y) {
+                        return Some(HitTarget::EnemyInspectPanel);
+                    }
+                    for (&enemy_index, rect) in layout
+                        .enemy_indices
+                        .iter()
+                        .zip(layout.enemy_rects.iter())
+                        .rev()
+                    {
+                        if rect.contains(x, y) {
+                            return Some(HitTarget::Enemy(enemy_index));
+                        }
                     }
                     if layout.player_rect.contains(x, y) {
                         return Some(HitTarget::Player);
@@ -7684,7 +8174,17 @@ impl App {
         }
 
         if matches!(screen, AppScreen::Map | AppScreen::Combat) {
-            self.render_run_info(scene);
+            if matches!(screen, AppScreen::Combat) {
+                if self.ui.run_info_open {
+                    self.render_enemy_inspect(scene);
+                    self.render_run_info(scene);
+                } else {
+                    self.render_run_info(scene);
+                    self.render_enemy_inspect(scene);
+                }
+            } else {
+                self.render_run_info(scene);
+            }
         }
     }
 
@@ -7809,12 +8309,11 @@ impl App {
             (1.0 - progress) * 12.0,
             0.968 + progress * 0.032,
         );
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.modal_rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             COLOR_GREEN_STROKE_PANEL,
-            2.0,
         );
         let title_gap = 8.0;
         let title_start_y = layout.modal_rect.y + 24.0 + layout.title_size;
@@ -7879,12 +8378,11 @@ impl App {
             (1.0 - progress) * 12.0,
             0.968 + progress * 0.032,
         );
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.modal_rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             COLOR_GREEN_STROKE_PANEL,
-            2.0,
         );
         let title_gap = 8.0;
         let subtitle_gap = 6.0;
@@ -7965,12 +8463,11 @@ impl App {
             (1.0 - progress) * 12.0,
             0.968 + progress * 0.032,
         );
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.modal_rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             COLOR_GREEN_STROKE_PANEL,
-            2.0,
         );
         let title_gap = 8.0;
         let body_gap = 6.0;
@@ -8065,12 +8562,11 @@ impl App {
             primary_button_pulse(self.boot_time_ms)
         };
         let button_transition = self.opening_intro_button_transition_progress();
-        scene.rect(
+        render_ui_tile(
+            scene,
             action_button.rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             COLOR_GREEN_STROKE_START,
-            2.0,
         );
         let text_y = button_text_baseline(action_button.rect, action_button.font_size);
         scene.text(
@@ -8320,13 +8816,7 @@ impl App {
             (1.0 - progress) * 12.0,
             0.965 + progress * 0.035,
         );
-        scene.rect(
-            rect,
-            BUTTON_RADIUS,
-            COLOR_TILE_FILL,
-            COLOR_GREEN_STROKE_PANEL,
-            2.0,
-        );
+        render_ui_tile(scene, rect, BUTTON_RADIUS, COLOR_GREEN_STROKE_PANEL);
         scene.text(
             rect.x + rect.w * 0.5,
             rect.y + pad_y + title_size,
@@ -8415,6 +8905,67 @@ impl App {
         scene.pop_layer();
     }
 
+    fn render_enemy_inspect(&self, scene: &mut SceneBuilder) {
+        let progress = self.enemy_inspect_eased_progress();
+        if progress <= 0.0 {
+            return;
+        }
+
+        let Some(enemy_index) = self.ui.enemy_inspect_enemy else {
+            return;
+        };
+        let Some(enemy) = self.combat.enemy(enemy_index) else {
+            return;
+        };
+        let Some(layout) = self.enemy_inspect_layout() else {
+            return;
+        };
+
+        let backdrop_rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            w: self.logical_width(),
+            h: self.logical_height(),
+        };
+        let rect = layout.modal_rect;
+        let sprite = enemy_sprite_def(enemy.profile);
+        let is_alive = enemy.fighter.hp > 0;
+
+        scene.blur_rect(backdrop_rect, 0.0, LEGEND_BACKDROP_BLUR * progress);
+        scene.rect(
+            backdrop_rect,
+            0.0,
+            &rgba((0, 0, 0), 0.18 * progress),
+            "transparent",
+            0.0,
+        );
+        scene.push_layer(
+            progress,
+            0.0,
+            (1.0 - progress) * 12.0,
+            0.965 + progress * 0.035,
+        );
+        render_ui_tile(scene, rect, BUTTON_RADIUS, COLOR_GREEN_STROKE_PANEL);
+        scene.text(
+            rect.x + rect.w * 0.5,
+            layout.title_y,
+            layout.title_size,
+            "center",
+            TERM_CYAN_SOFT,
+            "label",
+            localized_enemy_name(enemy.profile, self.language),
+        );
+        for layer in sprite.layers {
+            scene.sprite(
+                layout.sprite_rect,
+                layer.code,
+                enemy_sprite_layer_color(enemy.profile, layer.tone, is_alive),
+                enemy_panel_icon_alpha(enemy.profile, is_alive),
+            );
+        }
+        scene.pop_layer();
+    }
+
     fn render_rest(&self, scene: &mut SceneBuilder) {
         let Some(rest) = self.rest.as_ref() else {
             return;
@@ -8468,10 +9019,10 @@ impl App {
             subtitle,
         );
 
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.heal_rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if heal_actionable {
                 if heal_hovered {
                     COLOR_CYAN_STROKE_STRONG
@@ -8483,7 +9034,6 @@ impl App {
             } else {
                 COLOR_GRAY_STROKE_DISABLED
             },
-            2.0,
         );
         scene.text(
             layout.heal_rect.x + layout.heal_rect.w * 0.5,
@@ -8564,10 +9114,10 @@ impl App {
             let prev_label = "<";
             let next_label = ">";
 
-            scene.rect(
+            render_ui_tile(
+                scene,
                 prev_button.rect,
                 BUTTON_RADIUS,
-                COLOR_TILE_FILL,
                 if prev_enabled {
                     if prev_hovered {
                         COLOR_GREEN_STROKE_STRONG
@@ -8577,7 +9127,6 @@ impl App {
                 } else {
                     COLOR_GRAY_STROKE_DISABLED
                 },
-                2.0,
             );
             scene.text(
                 prev_button.rect.x + prev_button.rect.w * 0.5,
@@ -8593,10 +9142,10 @@ impl App {
                 prev_label,
             );
 
-            scene.rect(
+            render_ui_tile(
+                scene,
                 next_button.rect,
                 BUTTON_RADIUS,
-                COLOR_TILE_FILL,
                 if next_enabled {
                     if next_hovered {
                         COLOR_GREEN_STROKE_STRONG
@@ -8606,7 +9155,6 @@ impl App {
                 } else {
                     COLOR_GRAY_STROKE_DISABLED
                 },
-                2.0,
             );
             scene.text(
                 next_button.rect.x + next_button.rect.w * 0.5,
@@ -8641,10 +9189,10 @@ impl App {
             (layout.confirm_rect.w - 24.0).max(100.0),
         )
         .max(18.0);
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.confirm_rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if confirm_enabled {
                 if confirm_hovered {
                     COLOR_GREEN_STROKE_STRONG
@@ -8654,7 +9202,6 @@ impl App {
             } else {
                 COLOR_GRAY_STROKE_DISABLED
             },
-            2.0,
         );
         scene.text(
             layout.confirm_rect.x + layout.confirm_rect.w * 0.5,
@@ -8758,16 +9305,15 @@ impl App {
         );
 
         let leave_hovered = self.ui.hover == Some(HitTarget::ShopLeave);
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.leave_button,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if leave_hovered {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_START
             },
-            2.0,
         );
         scene.text(
             layout.leave_button.x + layout.leave_button.w * 0.5,
@@ -8846,16 +9392,15 @@ impl App {
         );
 
         let skip_hovered = self.ui.hover == Some(HitTarget::RewardSkip);
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.skip_button,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if skip_hovered {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_START
             },
-            2.0,
         );
         scene.text(
             layout.skip_button.x + layout.skip_button.w * 0.5,
@@ -8878,9 +9423,8 @@ impl App {
         let def = self.localized_card_def(card);
         let metrics = card_box_metrics(rect.w);
         let title_lines = wrap_text(def.name, metrics.title_chars);
-        let body_lines = wrap_text(def.description, metrics.body_chars);
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, rect, CARD_RADIUS, stroke);
 
         let title_x = rect.x + metrics.pad_x;
         let mut title_y = rect.y + metrics.top_pad + metrics.title_size;
@@ -8903,7 +9447,7 @@ impl App {
             rect.y + metrics.top_pad + metrics.cost_size * 0.82,
             metrics.cost_size,
             "right",
-            TERM_GREEN_TEXT,
+            TERM_CYAN,
             "display",
             &def.cost.to_string(),
         );
@@ -8915,20 +9459,18 @@ impl App {
                 + metrics.title_gap * title_lines.len().saturating_sub(1) as f32
         };
         let header_height = title_height.max(metrics.cost_size);
-        let mut body_y =
+        let body_y =
             rect.y + metrics.top_pad + header_height + metrics.title_body_gap + metrics.body_size;
-        for line in body_lines {
-            scene.text(
-                title_x,
-                body_y,
-                metrics.body_size,
-                "left",
-                TERM_GREEN_TEXT,
-                "body",
-                &line,
-            );
-            body_y += metrics.body_size + metrics.body_gap;
-        }
+        render_card_description(
+            scene,
+            title_x,
+            body_y,
+            metrics.body_size,
+            metrics.body_gap,
+            def.description,
+            metrics.body_chars,
+            TERM_GREEN_TEXT,
+        );
     }
 
     fn render_module_tile(
@@ -8943,7 +9485,7 @@ impl App {
         let title_lines = wrap_text(def.name, metrics.title_chars);
         let body_lines = wrap_text(def.description, metrics.body_chars);
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, rect, CARD_RADIUS, stroke);
 
         let title_x = rect.x + metrics.pad_x;
         let mut title_y = rect.y + metrics.top_pad + metrics.title_size;
@@ -8996,7 +9538,7 @@ impl App {
         let title_lines = wrap_text(title, metrics.title_chars);
         let body_lines = wrap_text(body, metrics.body_chars);
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, style.stroke, 2.0);
+        render_ui_tile(scene, rect, CARD_RADIUS, style.stroke);
 
         let title_x = rect.x + metrics.pad_x;
         let mut title_y = rect.y + metrics.top_pad + metrics.title_size;
@@ -9048,7 +9590,6 @@ impl App {
         let def = self.localized_card_def(offer.card);
         let metrics = card_box_metrics(rect.w);
         let title_lines = wrap_text(def.name, metrics.title_chars);
-        let body_lines = wrap_text(def.description, metrics.body_chars);
         let title_color = if affordable {
             card_banner_color(offer.card)
         } else {
@@ -9059,13 +9600,9 @@ impl App {
         } else {
             "#9a9a9a"
         };
-        let cost_color = if affordable {
-            TERM_GREEN_TEXT
-        } else {
-            "#d0d0d0"
-        };
+        let cost_color = if affordable { TERM_CYAN } else { "#d0d0d0" };
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, rect, CARD_RADIUS, stroke);
 
         let title_x = rect.x + metrics.pad_x;
         let mut title_y = rect.y + metrics.top_pad + metrics.title_size;
@@ -9100,20 +9637,18 @@ impl App {
                 + metrics.title_gap * title_lines.len().saturating_sub(1) as f32
         };
         let header_height = title_height.max(metrics.cost_size);
-        let mut body_y =
+        let body_y =
             rect.y + metrics.top_pad + header_height + metrics.title_body_gap + metrics.body_size;
-        for line in body_lines {
-            scene.text(
-                title_x,
-                body_y,
-                metrics.body_size,
-                "left",
-                body_color,
-                "body",
-                &line,
-            );
-            body_y += metrics.body_size + metrics.body_gap;
-        }
+        render_card_description(
+            scene,
+            title_x,
+            body_y,
+            metrics.body_size,
+            metrics.body_gap,
+            def.description,
+            metrics.body_chars,
+            body_color,
+        );
     }
 
     fn render_map(&self, scene: &mut SceneBuilder) {
@@ -9125,16 +9660,15 @@ impl App {
         };
 
         let menu_hovered = self.ui.hover == Some(HitTarget::Menu);
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.menu_button,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if menu_hovered {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_IDLE
             },
-            2.0,
         );
         scene.text(
             layout.menu_button.x + layout.menu_button.w * 0.5,
@@ -9152,16 +9686,15 @@ impl App {
 
         let info_hovered = self.ui.hover == Some(HitTarget::Info);
         let info_active = self.run_info_visible() || self.ui.run_info_open;
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.info_button,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if info_hovered || info_active {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_IDLE
             },
-            2.0,
         );
         scene.text(
             layout.info_button.x + layout.info_button.w * 0.5,
@@ -9179,16 +9712,15 @@ impl App {
 
         let legend_hovered = self.ui.hover == Some(HitTarget::Legend);
         let legend_active = self.legend_visible() || self.ui.legend_open;
-        scene.rect(
+        render_ui_tile(
+            scene,
             layout.legend_button,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             if legend_hovered || legend_active {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_IDLE
             },
-            2.0,
         );
         scene.text(
             layout.legend_button.x + layout.legend_button.w * 0.5,
@@ -9207,16 +9739,15 @@ impl App {
         if self.debug_mode {
             if let Some(button) = layout.debug_level_down_button {
                 let hovered = self.ui.hover == Some(HitTarget::DebugLevelDown);
-                scene.rect(
+                render_ui_tile(
+                    scene,
                     button,
                     BUTTON_RADIUS,
-                    COLOR_TILE_FILL,
                     if hovered {
                         COLOR_GREEN_STROKE_STRONG
                     } else {
                         COLOR_GREEN_STROKE_IDLE
                     },
-                    2.0,
                 );
                 scene.text(
                     button.x + button.w * 0.5,
@@ -9234,16 +9765,15 @@ impl App {
             }
             if let Some(button) = layout.debug_level_up_button {
                 let hovered = self.ui.hover == Some(HitTarget::DebugLevelUp);
-                scene.rect(
+                render_ui_tile(
+                    scene,
                     button,
                     BUTTON_RADIUS,
-                    COLOR_TILE_FILL,
                     if hovered {
                         COLOR_GREEN_STROKE_STRONG
                     } else {
                         COLOR_GREEN_STROKE_IDLE
                     },
-                    2.0,
                 );
                 scene.text(
                     button.x + button.w * 0.5,
@@ -9272,16 +9802,15 @@ impl App {
             }
             if let Some(button) = layout.debug_fill_deck_button {
                 let hovered = self.ui.hover == Some(HitTarget::DebugFillDeck);
-                scene.rect(
+                render_ui_tile(
+                    scene,
                     button,
                     BUTTON_RADIUS,
-                    COLOR_TILE_FILL,
                     if hovered {
                         COLOR_GREEN_STROKE_STRONG
                     } else {
                         COLOR_GREEN_STROKE_IDLE
                     },
-                    2.0,
                 );
                 scene.text(
                     button.x + button.w * 0.5,
@@ -9538,13 +10067,7 @@ impl App {
             (1.0 - progress) * 12.0,
             0.965 + progress * 0.035,
         );
-        scene.rect(
-            rect,
-            BUTTON_RADIUS,
-            COLOR_TILE_FILL,
-            COLOR_GREEN_STROKE_PANEL,
-            2.0,
-        );
+        render_ui_tile(scene, rect, BUTTON_RADIUS, COLOR_GREEN_STROKE_PANEL);
         scene.text(
             rect.x + rect.w * 0.5,
             title_y,
@@ -9600,7 +10123,7 @@ impl App {
         let rect = layout.menu_button;
         let active = !self.combat_input_locked();
         let hovered = active && self.ui.hover == Some(HitTarget::Menu);
-        let font_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
+        let font_size = combat_action_button_font_size(layout.low_hand_layout, layout.tile_scale);
         let stroke = if !active {
             COLOR_GRAY_STROKE_DISABLED
         } else if hovered {
@@ -9608,7 +10131,7 @@ impl App {
         } else {
             COLOR_GREEN_STROKE_IDLE
         };
-        scene.rect(rect, BUTTON_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, rect, BUTTON_RADIUS, stroke);
         scene.text(
             rect.x + rect.w * 0.5,
             button_text_baseline(rect, font_size),
@@ -9634,11 +10157,10 @@ impl App {
             return;
         };
         let text_x = rect.x + layout.tile_insets.pad_x;
-        let enemy_name = self.enemy_display_name(enemy_index);
-        let targeted = self
-            .ui
-            .selected_card
-            .is_some_and(|index| self.combat.card_requires_enemy(index) && enemy.fighter.hp > 0);
+        let targeted = self.ui.selected_card.is_some_and(|index| {
+            (self.combat.card_requires_enemy(index) || self.combat.card_targets_all_enemies(index))
+                && enemy.fighter.hp > 0
+        });
         let metrics = enemy_panel_metrics(
             self,
             enemy_index,
@@ -9647,16 +10169,26 @@ impl App {
             layout.tile_insets,
         );
         let displayed = self.displayed_actor_stats(Actor::Enemy(enemy_index));
-        let title_y = rect.y + metrics.top_pad + metrics.title_size;
-        let stats_y = title_y + metrics.line_gap + metrics.stats_size;
-        let status_y = stats_y + metrics.line_gap;
-        let info_label_y =
-            status_y + metrics.status_size + metrics.line_gap + metrics.info_label_size;
-        let info_body_y = info_label_y + metrics.info_gap + metrics.info_body_size;
+        let top_row_y = rect.y + metrics.top_pad + metrics.stats_size;
+        let status_y = top_row_y + metrics.line_gap;
+        let info_body_y = status_y
+            + metrics.status_row_height
+            + if metrics.status_row_height > 0.0 {
+                metrics.line_gap
+            } else {
+                0.0
+            }
+            + metrics.info_body_size;
         let hover_target = self.ui.hover == Some(HitTarget::Enemy(enemy_index));
         let is_alive = enemy.fighter.hp > 0;
+        let enemy_status_labels =
+            status_labels(enemy.fighter.statuses, enemy.on_hit_bleed, self.language);
+        let status_width = status_row_width(
+            &enemy_status_labels,
+            metrics.status_size,
+            metrics.status_gap,
+        );
 
-        let enemy_fill = COLOR_TILE_FILL;
         let enemy_stroke = if !is_alive {
             COLOR_GRAY_STROKE_DISABLED
         } else if hover_target {
@@ -9668,17 +10200,16 @@ impl App {
         };
         let enemy_stroke = actor_panel_flash_stroke(self, Actor::Enemy(enemy_index), enemy_stroke);
         let sprite = enemy_sprite_def(enemy.profile);
-        let icon_rect = enemy_panel_icon_rect(
-            rect,
-            layout.tile_insets,
-            title_y,
-            metrics.title_size,
-            metrics.title_icon_size,
+        let icon_alpha = enemy_panel_icon_alpha(enemy.profile, is_alive);
+        render_ui_tile(scene, rect, ENEMY_PANEL_RADIUS, enemy_stroke);
+        let mut top_row_x = text_x;
+        let icon_rect = enemy_inline_sprite_rect(
+            top_row_x,
+            top_row_y,
+            metrics.stats_size,
             sprite.width,
             sprite.height,
         );
-        let icon_alpha = enemy_panel_icon_alpha(enemy.profile, is_alive);
-        scene.rect(rect, ENEMY_PANEL_RADIUS, enemy_fill, enemy_stroke, 2.0);
         for layer in sprite.layers {
             scene.sprite(
                 icon_rect,
@@ -9687,21 +10218,14 @@ impl App {
                 icon_alpha,
             );
         }
-        scene.text(
-            text_x,
-            title_y,
-            metrics.title_size,
-            "left",
-            TERM_GREEN_SOFT,
-            "label",
-            enemy_name,
-        );
+        top_row_x += icon_rect.w + combat_inline_group_gap(metrics.stats_size);
         self.render_actor_stats_line(
             scene,
-            TextLineLayout {
-                x: text_x,
-                y: stats_y,
+            ActorStatsLineLayout {
+                x: top_row_x,
+                y: top_row_y,
                 size: metrics.stats_size,
+                group_gap: combat_inline_group_gap(metrics.stats_size),
             },
             Actor::Enemy(enemy_index),
             displayed.hp,
@@ -9713,27 +10237,43 @@ impl App {
             StatusRowLayout {
                 x: text_x,
                 y: status_y,
+                width: status_width,
                 size: metrics.status_size,
                 gap: metrics.status_gap,
             },
             enemy.fighter.statuses,
             enemy.on_hit_bleed,
         );
+        let next_label = self.tr(NEXT_SIGNAL_LABEL, "Siguiente");
+        let summary = self.enemy_signal_summary(enemy_index);
+        let mut line_y = info_body_y;
+        let intent_lines = enemy_intent_lines(next_label, summary, metrics.info_body_chars);
         scene.text(
             text_x,
-            info_label_y,
-            metrics.info_label_size,
+            line_y,
+            metrics.info_body_size,
             "left",
             TERM_GREEN,
             "label",
-            self.tr(NEXT_SIGNAL_LABEL, "SIGUIENTE SEÑAL"),
+            &intent_lines.first_line_label,
         );
-        let signal_lines = wrap_text(
-            self.enemy_signal_summary(enemy_index),
-            metrics.info_body_chars,
-        );
-        let mut line_y = info_body_y;
-        for (line_index, line) in signal_lines.iter().enumerate() {
+        if !intent_lines.first_line_summary.is_empty() {
+            scene.text(
+                text_x + text_width(&intent_lines.first_line_label, metrics.info_body_size),
+                line_y,
+                metrics.info_body_size,
+                "left",
+                if is_alive {
+                    TERM_CYAN_SOFT
+                } else {
+                    TERM_GREEN_DIM
+                },
+                "body",
+                &intent_lines.first_line_summary,
+            );
+        }
+        for line in &intent_lines.continuation_lines {
+            line_y += metrics.info_body_size + metrics.info_body_line_gap;
             scene.text(
                 text_x,
                 line_y,
@@ -9747,20 +10287,16 @@ impl App {
                 "body",
                 line,
             );
-            if line_index + 1 < signal_lines.len() {
-                line_y += metrics.info_body_size + metrics.info_body_line_gap;
-            }
         }
     }
 
     fn render_player_panel(&self, scene: &mut SceneBuilder, layout: &Layout) {
         let rect = layout.player_rect;
-        let text_x = rect.x + layout.tile_insets.pad_x;
+        let center_x = rect.x + rect.w * 0.5;
         let hovered = self.ui.hover == Some(HitTarget::Player);
-        let targeted = self
-            .ui
-            .selected_card
-            .is_some_and(|index| !self.combat.card_requires_enemy(index));
+        let targeted = self.ui.selected_card.is_some_and(|index| {
+            !self.combat.card_requires_enemy(index) && !self.combat.card_targets_all_enemies(index)
+        });
         let metrics = player_panel_metrics(
             self,
             layout.low_hand_layout,
@@ -9776,26 +10312,53 @@ impl App {
         let label_y = rect.y + metrics.top_pad + metrics.label_size;
         let stats_y = label_y + metrics.line_gap + metrics.stats_size;
         let status_y = stats_y + metrics.line_gap;
-        let meta_y = status_y + metrics.status_size + metrics.line_gap + metrics.meta_size;
+        let meta_y = status_y
+            + metrics.status_row_height
+            + if metrics.status_row_height > 0.0 {
+                metrics.line_gap
+            } else {
+                0.0
+            }
+            + metrics.meta_size;
         let displayed = self.displayed_actor_stats(Actor::Player);
-        let playback_meta = combat_playback_meta_label(self);
+        let player_label = self.tr(PLAYER_NAME, "Jugador");
+        let stats_line_width = combat_actor_stats_line_width(
+            displayed.hp,
+            self.combat.player.fighter.max_hp,
+            displayed.block,
+            metrics.stats_size,
+            combat_inline_group_gap(metrics.stats_size),
+        );
+        let player_status_labels =
+            status_labels(self.combat.player.fighter.statuses, 0, self.language);
+        let status_line_width = if player_status_labels.is_empty() {
+            0.0
+        } else {
+            status_row_width(
+                &player_status_labels,
+                metrics.status_size,
+                metrics.status_gap,
+            )
+        };
+        let meta_color = TERM_CYAN;
 
-        scene.rect(rect, CARD_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, rect, CARD_RADIUS, stroke);
         scene.text(
-            text_x,
+            center_x,
             label_y,
             metrics.label_size,
-            "left",
+            "center",
             TERM_GREEN_SOFT,
             "label",
-            self.tr(PLAYER_NAME, "Jugador"),
+            player_label,
         );
         self.render_actor_stats_line(
             scene,
-            TextLineLayout {
-                x: text_x,
+            ActorStatsLineLayout {
+                x: center_x - stats_line_width * 0.5,
                 y: stats_y,
                 size: metrics.stats_size,
+                group_gap: combat_inline_group_gap(metrics.stats_size),
             },
             Actor::Player,
             displayed.hp,
@@ -9805,72 +10368,165 @@ impl App {
         self.render_status_row_left_sized(
             scene,
             StatusRowLayout {
-                x: text_x,
+                x: center_x - status_line_width * 0.5,
                 y: status_y,
+                width: status_line_width,
                 size: metrics.status_size,
                 gap: metrics.status_gap,
             },
             self.combat.player.fighter.statuses,
             0,
         );
-        scene.text(
-            text_x,
-            meta_y,
-            metrics.meta_size,
-            "left",
-            if playback_meta.is_some() {
-                TERM_GREEN_DIM
-            } else {
-                TERM_CYAN
+        self.render_player_panel_meta_line(
+            scene,
+            TextLineLayout {
+                x: center_x - combat_meta_line_width(self, metrics.meta_size) * 0.5,
+                y: meta_y,
+                size: metrics.meta_size,
             },
+            meta_color,
+        );
+    }
+
+    fn render_player_panel_meta_line(
+        &self,
+        scene: &mut SceneBuilder,
+        layout: TextLineLayout,
+        color: &str,
+    ) {
+        let displayed_meta = self.displayed_player_meta();
+        let energy_text = format!(
+            "{}/{}",
+            displayed_meta.energy, self.combat.player.max_energy
+        );
+        let draw_text = displayed_meta.draw_pile.to_string();
+        let arrow_text = "→";
+        let discard_text = displayed_meta.discard_pile.to_string();
+        let energy_color = animated_player_meta_color(self, CombatStat::Energy, color);
+        let draw_color = animated_player_meta_color(self, CombatStat::DrawPile, color);
+        let discard_color = animated_player_meta_color(self, CombatStat::DiscardPile, color);
+        let mut cursor = layout.x;
+
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            layout.y,
+            layout.size,
+            COMBAT_ENERGY_ICON_ASSET_PATH,
+            color,
+        );
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            energy_color,
             "body",
-            playback_meta
-                .unwrap_or_else(|| {
-                    format!(
-                        "{} {}/{}{PANEL_TEXT_GAP}{} {}→{}",
-                        self.tr(ENERGY_LABEL, "Energía"),
-                        self.combat.player.energy,
-                        self.combat.player.max_energy,
-                        self.tr(STACK_LABEL, "Mazo"),
-                        self.combat.deck.draw_pile.len(),
-                        self.combat.deck.discard_pile.len()
-                    )
-                })
-                .as_str(),
+            &energy_text,
+        );
+        cursor += text_width(&energy_text, layout.size);
+        cursor += combat_inline_group_gap(layout.size);
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            layout.y,
+            layout.size,
+            COMBAT_DECK_ICON_ASSET_PATH,
+            color,
+        );
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            draw_color,
+            "body",
+            &draw_text,
+        );
+        cursor += text_width(&draw_text, layout.size);
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            color,
+            "body",
+            arrow_text,
+        );
+        cursor += text_width(arrow_text, layout.size);
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            discard_color,
+            "body",
+            &discard_text,
         );
     }
 
     fn render_actor_stats_line(
         &self,
         scene: &mut SceneBuilder,
-        layout: TextLineLayout,
+        layout: ActorStatsLineLayout,
         actor: Actor,
         hp: i32,
         max_hp: i32,
         block: i32,
     ) {
         let hp_text = hp.to_string();
-        let max_hp_text = max_hp.to_string();
+        let max_hp_text = format!("/{max_hp}");
         let block_text = block.to_string();
         let hp_color = animated_stat_color(self, actor, CombatStat::Hp);
         let block_color = animated_stat_color(self, actor, CombatStat::Block);
         let mut cursor = layout.x;
 
-        for (text, color) in [
-            (format!("{SHIELD_LABEL} "), TERM_GREEN_TEXT),
-            (hp_text, hp_color),
-            (
-                format!(
-                    "/{max_hp_text}{PANEL_TEXT_GAP}{} ",
-                    self.tr(GUARD_LABEL, "Escudo")
-                ),
-                TERM_GREEN_TEXT,
-            ),
-            (block_text, block_color),
-        ] {
-            scene.text(cursor, layout.y, layout.size, "left", color, "body", &text);
-            cursor += text_width(&text, layout.size);
-        }
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            layout.y,
+            layout.size,
+            COMBAT_HEART_ICON_ASSET_PATH,
+            TERM_GREEN_TEXT,
+        );
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            hp_color,
+            "body",
+            &hp_text,
+        );
+        cursor += text_width(&hp_text, layout.size);
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            TERM_GREEN_TEXT,
+            "body",
+            &max_hp_text,
+        );
+        cursor += text_width(&max_hp_text, layout.size);
+        cursor += layout.group_gap;
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            layout.y,
+            layout.size,
+            COMBAT_SHIELD_ICON_ASSET_PATH,
+            TERM_GREEN_TEXT,
+        );
+        scene.text(
+            cursor,
+            layout.y,
+            layout.size,
+            "left",
+            block_color,
+            "body",
+            &block_text,
+        );
     }
 
     fn render_status_row_left_sized(
@@ -9882,33 +10538,22 @@ impl App {
     ) {
         let labels = status_labels(statuses, primed_bleed, self.language);
         if labels.is_empty() {
-            scene.text(
-                layout.x,
-                layout.y + layout.size,
-                layout.size,
-                "left",
-                TERM_GREEN_FAINT,
-                "body",
-                self.tr("No active effects", "Sin efectos activos"),
-            );
             return;
         }
 
-        let mut cursor = layout.x;
-        let last_index = labels.len().saturating_sub(1);
-        for (index, (label, color)) in labels.iter().enumerate() {
-            scene.text(
-                cursor,
-                layout.y + layout.size,
-                layout.size,
-                "left",
-                color,
-                "body",
-                label,
-            );
-            cursor += status_label_width(label, layout.size);
-            if index < last_index {
-                cursor += layout.gap;
+        for (row_index, row_labels) in labels.chunks(STATUS_ROW_MAX_COLUMNS).enumerate() {
+            let row_width = status_row_chunk_width(row_labels, layout.size, layout.gap);
+            let mut cursor = layout.x + (layout.width - row_width).max(0.0) * 0.5;
+            let row_y = layout.y
+                + row_index as f32 * (layout.size + status_row_line_gap(layout.size))
+                + layout.size;
+            let last_index = row_labels.len().saturating_sub(1);
+            for (index, (label, color)) in row_labels.iter().enumerate() {
+                scene.text(cursor, row_y, layout.size, "left", color, "body", label);
+                cursor += status_label_width(label, layout.size);
+                if index < last_index {
+                    cursor += layout.gap;
+                }
             }
         }
     }
@@ -9923,20 +10568,24 @@ impl App {
                 continue;
             };
             let def = self.localized_card_def(card);
+            let description = self.combat_card_description(card);
             let selected = self.ui.selected_card == Some(index);
             let hovered = self.ui.hover == Some(HitTarget::Card(index));
             let playable = !self.combat_input_locked() && self.combat.can_play_card(index);
             let targets_enemy = self.combat.card_requires_enemy(index);
+            let targets_all_enemies = self.combat.card_targets_all_enemies(index);
+            let targets_hostile = targets_enemy || targets_all_enemies;
 
-            let fill = COLOR_TILE_FILL;
             let stroke = if !playable && selected {
                 COLOR_GRAY_STROKE_SELECTED
             } else if !playable && hovered {
                 COLOR_GRAY_STROKE_HOVER
             } else if !playable {
                 COLOR_GRAY_STROKE_DISABLED
-            } else if selected && !targets_enemy {
+            } else if selected && !targets_hostile {
                 COLOR_CYAN_STROKE_TARGET
+            } else if selected && targets_all_enemies {
+                COLOR_GREEN_STROKE_STRONG
             } else if selected {
                 COLOR_LIME_STROKE_TARGET
             } else if hovered {
@@ -9950,7 +10599,7 @@ impl App {
                 "#b8b8b8"
             };
             let body_color = if playable { TERM_GREEN_TEXT } else { "#9a9a9a" };
-            let cost_color = if playable { TERM_GREEN_TEXT } else { "#d0d0d0" };
+            let cost_color = if playable { TERM_CYAN } else { "#d0d0d0" };
             let metrics = card_box_metrics(rect.w);
             let pad_x = metrics.pad_x;
             let top_pad = metrics.top_pad;
@@ -9963,9 +10612,8 @@ impl App {
             let title_chars = metrics.title_chars;
             let body_chars = metrics.body_chars;
             let title_lines = wrap_text(def.name, title_chars);
-            let body_lines = wrap_text(def.description, body_chars);
 
-            scene.rect(*rect, CARD_RADIUS, fill, stroke, 2.0);
+            render_ui_tile(scene, *rect, CARD_RADIUS, stroke);
             let title_x = rect.x + pad_x;
             let mut title_y = rect.y + top_pad + title_size;
             for (line_index, line) in title_lines.iter().enumerate() {
@@ -9999,13 +10647,17 @@ impl App {
                     + title_gap * title_lines.len().saturating_sub(1) as f32
             };
             let header_height = title_height.max(cost_size);
-            let mut line_y = rect.y + top_pad + header_height + title_body_gap + body_size;
-            for line in body_lines {
-                scene.text(
-                    title_x, line_y, body_size, "left", body_color, "body", &line,
-                );
-                line_y += body_size + body_gap;
-            }
+            let line_y = rect.y + top_pad + header_height + title_body_gap + body_size;
+            render_card_description(
+                scene,
+                title_x,
+                line_y,
+                body_size,
+                body_gap,
+                &description,
+                body_chars,
+                body_color,
+            );
         }
     }
 
@@ -10015,7 +10667,7 @@ impl App {
         };
         let (hint_font_size, _, _) = hand_hint_metrics(layout.tile_scale);
         let (message, color, stroke) = combat_hint_tile(self, self.combat.hand_len());
-        scene.rect(hint_rect, BUTTON_RADIUS, COLOR_TILE_FILL, stroke, 2.0);
+        render_ui_tile(scene, hint_rect, BUTTON_RADIUS, stroke);
         scene.text(
             hint_rect.x + hint_rect.w * 0.5,
             button_text_baseline(hint_rect, hint_font_size),
@@ -10031,8 +10683,7 @@ impl App {
         let rect = layout.end_turn_button;
         let active = self.combat.is_player_turn() && !self.combat_input_locked();
         let hovered = self.ui.hover == Some(HitTarget::EndTurn);
-        let font_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
-        let fill = COLOR_TILE_FILL;
+        let font_size = combat_action_button_font_size(layout.low_hand_layout, layout.tile_scale);
         let stroke = if !active {
             COLOR_CYAN_STROKE_DISABLED
         } else if hovered {
@@ -10040,7 +10691,7 @@ impl App {
         } else {
             COLOR_CYAN_STROKE_IDLE
         };
-        scene.rect(rect, BUTTON_RADIUS, fill, stroke, 2.0);
+        render_ui_tile(scene, rect, BUTTON_RADIUS, stroke);
         scene.text(
             rect.x + rect.w * 0.5,
             button_text_baseline(rect, font_size),
@@ -10088,12 +10739,12 @@ impl App {
         let text_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
         let rect = self.turn_banner_rect(layout, &banner.text);
         scene.push_layer(alpha, 0.0, -6.0 * ease_out_cubic(progress), 1.0);
-        scene.rect(
+        render_ui_tile_scaled(
+            scene,
             rect,
             BUTTON_RADIUS,
-            COLOR_TILE_FILL,
             &rgba(banner.color, 0.78 * alpha),
-            2.0,
+            alpha,
         );
         scene.text(
             self.logical_center_x(),
@@ -10112,18 +10763,13 @@ impl App {
             return;
         };
         let hovered = self.ui.hover == Some(HitTarget::EndBattle);
-        let font_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
-        scene.rect(
-            rect,
-            BUTTON_RADIUS,
-            COLOR_TILE_FILL,
-            if hovered {
-                COLOR_LIME_STROKE_TARGET
-            } else {
-                COLOR_GREEN_STROKE_IDLE
-            },
-            2.0,
-        );
+        let font_size = combat_action_button_font_size(layout.low_hand_layout, layout.tile_scale);
+        let stroke = if hovered {
+            COLOR_LIME_STROKE_TARGET
+        } else {
+            COLOR_GREEN_STROKE_IDLE
+        };
+        render_ui_tile(scene, rect, BUTTON_RADIUS, stroke);
         scene.text(
             rect.x + rect.w * 0.5,
             button_text_baseline(rect, font_size),
@@ -10562,76 +11208,24 @@ impl App {
 }
 
 fn card_banner_color(card: CardId) -> &'static str {
-    match card {
-        CardId::FlareSlash | CardId::FlareSlashPlus => TERM_GREEN,
-        CardId::GuardStep | CardId::GuardStepPlus => TERM_CYAN,
-        CardId::Slipstream | CardId::SlipstreamPlus => TERM_PINK,
-        CardId::QuickStrike | CardId::QuickStrikePlus => TERM_GREEN,
-        CardId::PinpointJab | CardId::PinpointJabPlus => TERM_PINK,
-        CardId::SignalTap | CardId::SignalTapPlus => TERM_LIME,
-        CardId::Reinforce | CardId::ReinforcePlus => TERM_CYAN,
-        CardId::PressurePoint | CardId::PressurePointPlus => TERM_LIME,
-        CardId::BurstArray | CardId::BurstArrayPlus => TERM_GREEN,
-        CardId::CoverPulse | CardId::CoverPulsePlus => TERM_CYAN,
-        CardId::SunderingArc | CardId::SunderingArcPlus => TERM_LIME,
-        CardId::TwinStrike | CardId::TwinStrikePlus => TERM_LIME,
-        CardId::BarrierField | CardId::BarrierFieldPlus => TERM_CYAN,
-        CardId::TacticalBurst | CardId::TacticalBurstPlus => TERM_PINK_SOFT,
-        CardId::RazorNet | CardId::RazorNetPlus => TERM_PINK,
-        CardId::FracturePulse | CardId::FracturePulsePlus => TERM_PINK,
-        CardId::VectorLock | CardId::VectorLockPlus => TERM_LIME_SOFT,
-        CardId::BreachSignal | CardId::BreachSignalPlus => TERM_LIME_SOFT,
-        CardId::AnchorLoop | CardId::AnchorLoopPlus => TERM_CYAN_SOFT,
-        CardId::ExecutionBeam | CardId::ExecutionBeamPlus => TERM_LIME_SOFT,
-        CardId::ChainBarrage | CardId::ChainBarragePlus => TERM_PINK_SOFT,
-        CardId::FortressMatrix | CardId::FortressMatrixPlus => TERM_CYAN_SOFT,
-        CardId::OverwatchGrid | CardId::OverwatchGridPlus => TERM_CYAN_SOFT,
-        CardId::RiftDart | CardId::RiftDartPlus => TERM_PINK,
-        CardId::MarkPulse | CardId::MarkPulsePlus => TERM_LIME,
-        CardId::BraceCircuit | CardId::BraceCircuitPlus => TERM_CYAN,
-        CardId::FaultShot | CardId::FaultShotPlus => TERM_LIME,
-        CardId::SeverArc | CardId::SeverArcPlus => TERM_PINK_SOFT,
-        CardId::Lockbreaker | CardId::LockbreakerPlus => TERM_LIME_SOFT,
-        CardId::CounterLattice | CardId::CounterLatticePlus => TERM_CYAN_SOFT,
-        CardId::TerminalLoop | CardId::TerminalLoopPlus => TERM_LIME_SOFT,
-        CardId::ZeroPoint | CardId::ZeroPointPlus => TERM_LIME_SOFT,
+    match card_def(card).archetype {
+        CardArchetype::Pressure => TERM_GREEN,
+        CardArchetype::Bulwark => TERM_BLUE_SOFT,
+        CardArchetype::Momentum => TERM_CYAN,
+        CardArchetype::Fabricate => TERM_ORANGE,
+        CardArchetype::Sweep => TERM_LIME_SOFT,
+        CardArchetype::Burst => TERM_PINK_SOFT,
     }
 }
 
 fn card_banner_rgb(card: CardId) -> (u8, u8, u8) {
-    match card {
-        CardId::FlareSlash | CardId::FlareSlashPlus => (51, 255, 102),
-        CardId::GuardStep | CardId::GuardStepPlus => (61, 245, 255),
-        CardId::Slipstream | CardId::SlipstreamPlus => (255, 79, 216),
-        CardId::QuickStrike | CardId::QuickStrikePlus => (51, 255, 102),
-        CardId::PinpointJab | CardId::PinpointJabPlus => (255, 79, 216),
-        CardId::SignalTap | CardId::SignalTapPlus => (216, 255, 61),
-        CardId::Reinforce | CardId::ReinforcePlus => (61, 245, 255),
-        CardId::PressurePoint | CardId::PressurePointPlus => (216, 255, 61),
-        CardId::BurstArray | CardId::BurstArrayPlus => (51, 255, 102),
-        CardId::CoverPulse | CardId::CoverPulsePlus => (61, 245, 255),
-        CardId::SunderingArc | CardId::SunderingArcPlus => (216, 255, 61),
-        CardId::TwinStrike | CardId::TwinStrikePlus => (216, 255, 61),
-        CardId::BarrierField | CardId::BarrierFieldPlus => (61, 245, 255),
-        CardId::TacticalBurst | CardId::TacticalBurstPlus => (255, 156, 240),
-        CardId::RazorNet | CardId::RazorNetPlus => (255, 79, 216),
-        CardId::FracturePulse | CardId::FracturePulsePlus => (255, 79, 216),
-        CardId::VectorLock | CardId::VectorLockPlus => (235, 255, 154),
-        CardId::BreachSignal | CardId::BreachSignalPlus => (235, 255, 154),
-        CardId::AnchorLoop | CardId::AnchorLoopPlus => (168, 252, 255),
-        CardId::ExecutionBeam | CardId::ExecutionBeamPlus => (235, 255, 154),
-        CardId::ChainBarrage | CardId::ChainBarragePlus => (255, 156, 240),
-        CardId::FortressMatrix | CardId::FortressMatrixPlus => (168, 252, 255),
-        CardId::OverwatchGrid | CardId::OverwatchGridPlus => (168, 252, 255),
-        CardId::RiftDart | CardId::RiftDartPlus => (255, 79, 216),
-        CardId::MarkPulse | CardId::MarkPulsePlus => (216, 255, 61),
-        CardId::BraceCircuit | CardId::BraceCircuitPlus => (61, 245, 255),
-        CardId::FaultShot | CardId::FaultShotPlus => (216, 255, 61),
-        CardId::SeverArc | CardId::SeverArcPlus => (255, 156, 240),
-        CardId::Lockbreaker | CardId::LockbreakerPlus => (235, 255, 154),
-        CardId::CounterLattice | CardId::CounterLatticePlus => (168, 252, 255),
-        CardId::TerminalLoop | CardId::TerminalLoopPlus => (235, 255, 154),
-        CardId::ZeroPoint | CardId::ZeroPointPlus => (235, 255, 154),
+    match card_def(card).archetype {
+        CardArchetype::Pressure => (51, 255, 102),
+        CardArchetype::Bulwark => (155, 183, 255),
+        CardArchetype::Momentum => (61, 245, 255),
+        CardArchetype::Fabricate => (255, 184, 82),
+        CardArchetype::Sweep => (235, 255, 154),
+        CardArchetype::Burst => (255, 156, 240),
     }
 }
 
@@ -10739,6 +11333,11 @@ fn displayed_combat_stats(combat: &CombatState) -> DisplayedCombatStats {
             hp: combat.player.fighter.hp,
             block: combat.player.fighter.block,
         },
+        player_meta: PlayerDisplayedMeta {
+            energy: combat.player.energy as i32,
+            draw_pile: combat.deck.draw_pile.len() as i32,
+            discard_pile: combat.deck.discard_pile.len() as i32,
+        },
         enemies: combat
             .enemies
             .iter()
@@ -10748,6 +11347,16 @@ fn displayed_combat_stats(combat: &CombatState) -> DisplayedCombatStats {
             })
             .collect(),
     }
+}
+
+fn displayed_enemy_intents(combat: &CombatState, language: Language) -> Vec<EnemyIntent> {
+    (0..combat.enemy_count())
+        .filter_map(|enemy_index| {
+            combat
+                .enemy(enemy_index)
+                .map(|enemy| localized_enemy_intent(enemy.profile, enemy.intent_index, language))
+        })
+        .collect()
 }
 
 fn stat_countdown_values(from: i32, to: i32) -> Vec<i32> {
@@ -10774,9 +11383,25 @@ fn stat_countdown_values(from: i32, to: i32) -> Vec<i32> {
     values
 }
 
+fn active_countdown_tint(app: &App, actor: Actor, stat: CombatStat) -> Option<StatTint> {
+    app.combat_feedback
+        .active_stats
+        .iter()
+        .find(|active| active.actor == actor && active.stat == stat)
+        .map(|active| active.tint)
+}
+
+fn first_active_actor_tint(app: &App, actor: Actor) -> Option<StatTint> {
+    app.combat_feedback
+        .active_stats
+        .iter()
+        .find(|active| active.actor == actor)
+        .map(|active| active.tint)
+}
+
 fn animated_stat_color(app: &App, actor: Actor, stat: CombatStat) -> &'static str {
-    match app.combat_feedback.active_stat.as_ref() {
-        Some(active) if active.actor == actor && active.stat == stat => match active.tint {
+    match active_countdown_tint(app, actor, stat) {
+        Some(tint) => match tint {
             StatTint::Damage => TERM_PINK_SOFT,
             StatTint::BlockGain => TERM_GREEN_SOFT,
             StatTint::NeutralLoss => TERM_GREEN_DIM,
@@ -10785,9 +11410,16 @@ fn animated_stat_color(app: &App, actor: Actor, stat: CombatStat) -> &'static st
     }
 }
 
+fn animated_player_meta_color<'a>(app: &App, stat: CombatStat, default: &'a str) -> &'a str {
+    match active_countdown_tint(app, Actor::Player, stat) {
+        Some(_) => TERM_CYAN_SOFT,
+        _ => default,
+    }
+}
+
 fn actor_panel_flash_stroke<'a>(app: &App, actor: Actor, default_stroke: &'a str) -> &'a str {
-    match app.combat_feedback.active_stat.as_ref() {
-        Some(active) if active.actor == actor => match active.tint {
+    match first_active_actor_tint(app, actor) {
+        Some(tint) => match tint {
             StatTint::Damage => COLOR_PINK_STROKE_STRONG,
             StatTint::BlockGain => COLOR_GREEN_STROKE_STRONG,
             StatTint::NeutralLoss => COLOR_GRAY_STROKE_SELECTED,
@@ -10796,48 +11428,30 @@ fn actor_panel_flash_stroke<'a>(app: &App, actor: Actor, default_stroke: &'a str
     }
 }
 
-fn combat_playback_meta_label(app: &App) -> Option<String> {
-    if app.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn) {
-        Some(String::from(app.tr(
-            "Enemy turn resolving...",
-            "Resolviendo turno enemigo...",
-        )))
-    } else if app.combat_feedback.pending_outcome.is_some() {
-        Some(String::from(
-            app.tr("Resolving encounter...", "Resolviendo encuentro..."),
-        ))
-    } else {
-        None
-    }
-}
-
 fn status_display_name(status: StatusKind, language: Language) -> &'static str {
     match status {
         StatusKind::Bleed => localized_text(language, "Bleed", "Sangrado"),
-        StatusKind::Expose => localized_text(language, "Vulnerable", "Vulnerable"),
-        StatusKind::Weak => localized_text(language, "Weak", "Débil"),
-        StatusKind::Frail => localized_text(language, "Frail", "Frágil"),
-        StatusKind::Strength => localized_text(language, "Strength", "Fuerza"),
+        StatusKind::Focus => localized_text(language, "Focus", "Enfoque"),
+        StatusKind::Rhythm => localized_text(language, "Rhythm", "Ritmo"),
+        StatusKind::Momentum => localized_text(language, "Momentum", "Impulso"),
     }
 }
 
 fn status_color(status: StatusKind) -> &'static str {
     match status {
         StatusKind::Bleed => TERM_PINK,
-        StatusKind::Expose => TERM_LIME,
-        StatusKind::Weak => TERM_ORANGE,
-        StatusKind::Frail => TERM_CYAN,
-        StatusKind::Strength => TERM_GREEN,
+        StatusKind::Focus => TERM_GREEN,
+        StatusKind::Rhythm => TERM_BLUE_SOFT,
+        StatusKind::Momentum => TERM_CYAN,
     }
 }
 
 fn status_display_rgb(status: StatusKind) -> (u8, u8, u8) {
     match status {
         StatusKind::Bleed => (255, 79, 216),
-        StatusKind::Expose => (216, 255, 61),
-        StatusKind::Weak => (255, 184, 82),
-        StatusKind::Frail => (61, 245, 255),
-        StatusKind::Strength => (51, 255, 102),
+        StatusKind::Focus => (51, 255, 102),
+        StatusKind::Rhythm => (155, 183, 255),
+        StatusKind::Momentum => (61, 245, 255),
     }
 }
 
@@ -10847,34 +11461,22 @@ fn status_labels(
     language: Language,
 ) -> Vec<(String, &'static str)> {
     let mut labels = Vec::new();
-    if statuses.strength > 0 {
+    if statuses.focus != 0 {
         labels.push((
-            format!(
-                "{} {}",
-                status_display_name(StatusKind::Strength, language),
-                statuses.strength
-            ),
-            status_color(StatusKind::Strength),
+            axis_status_label(StatusKind::Focus, statuses.focus, language),
+            status_color(StatusKind::Focus),
         ));
     }
-    if statuses.weak > 0 {
+    if statuses.rhythm != 0 {
         labels.push((
-            format!(
-                "{} {}",
-                status_display_name(StatusKind::Weak, language),
-                statuses.weak
-            ),
-            status_color(StatusKind::Weak),
+            axis_status_label(StatusKind::Rhythm, statuses.rhythm, language),
+            status_color(StatusKind::Rhythm),
         ));
     }
-    if statuses.frail > 0 {
+    if statuses.momentum != 0 {
         labels.push((
-            format!(
-                "{} {}",
-                status_display_name(StatusKind::Frail, language),
-                statuses.frail
-            ),
-            status_color(StatusKind::Frail),
+            axis_status_label(StatusKind::Momentum, statuses.momentum, language),
+            status_color(StatusKind::Momentum),
         ));
     }
     if statuses.bleed > 0 {
@@ -10885,16 +11487,6 @@ fn status_labels(
                 statuses.bleed
             ),
             status_color(StatusKind::Bleed),
-        ));
-    }
-    if statuses.expose > 0 {
-        labels.push((
-            format!(
-                "{} {}",
-                status_display_name(StatusKind::Expose, language),
-                statuses.expose
-            ),
-            status_color(StatusKind::Expose),
         ));
     }
     if primed_bleed > 0 {
@@ -10913,6 +11505,30 @@ fn status_labels(
         ));
     }
     labels
+}
+
+fn axis_status_label(status: StatusKind, value: i8, language: Language) -> String {
+    format!(
+        "{}{}",
+        status_display_name(status, language),
+        signed_axis_value(value)
+    )
+}
+
+fn axis_display_name(axis: AxisKind, language: Language) -> &'static str {
+    match axis {
+        AxisKind::Focus => localized_text(language, "Focus", "Enfoque"),
+        AxisKind::Rhythm => localized_text(language, "Rhythm", "Ritmo"),
+        AxisKind::Momentum => localized_text(language, "Momentum", "Impulso"),
+    }
+}
+
+fn signed_axis_value(value: i8) -> String {
+    if value >= 0 {
+        format!("+{value}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn map_legend_entries(language: Language) -> [(RoomKind, &'static str); 7] {
@@ -11117,10 +11733,16 @@ fn combat_layout_plan_better(
 }
 
 fn status_label_width(label: &str, size: f32) -> f32 {
-    size * 0.6875 * label.len() as f32
+    text_width(label, size)
 }
 
-fn status_row_width(labels: &[(String, &'static str)], size: f32, gap: f32) -> f32 {
+const STATUS_ROW_MAX_COLUMNS: usize = 2;
+
+fn status_row_line_gap(size: f32) -> f32 {
+    (size * 0.4).max(4.0)
+}
+
+fn status_row_chunk_width(labels: &[(String, &'static str)], size: f32, gap: f32) -> f32 {
     labels
         .iter()
         .enumerate()
@@ -11129,6 +11751,22 @@ fn status_row_width(labels: &[(String, &'static str)], size: f32, gap: f32) -> f
                 + status_label_width(label, size)
                 + if index + 1 < labels.len() { gap } else { 0.0 }
         })
+}
+
+fn status_row_width(labels: &[(String, &'static str)], size: f32, gap: f32) -> f32 {
+    labels
+        .chunks(STATUS_ROW_MAX_COLUMNS)
+        .map(|row| status_row_chunk_width(row, size, gap))
+        .fold(0.0, f32::max)
+}
+
+fn status_row_height(labels: &[(String, &'static str)], size: f32) -> f32 {
+    if labels.is_empty() {
+        return 0.0;
+    }
+
+    let rows = labels.len().div_ceil(STATUS_ROW_MAX_COLUMNS);
+    size * rows as f32 + status_row_line_gap(size) * rows.saturating_sub(1) as f32
 }
 
 fn combat_layout_bounds(layout: &Layout) -> Rect {
@@ -11761,13 +12399,7 @@ fn render_primary_button_sized(
     label: &str,
     time_ms: f32,
 ) {
-    scene.rect(
-        rect,
-        BUTTON_RADIUS,
-        COLOR_TILE_FILL,
-        COLOR_GREEN_STROKE_START,
-        2.0,
-    );
+    render_ui_tile(scene, rect, BUTTON_RADIUS, COLOR_GREEN_STROKE_START);
     scene.text(
         rect.x + rect.w * 0.5,
         button_text_baseline(rect, font_size),
@@ -11793,6 +12425,17 @@ fn combat_top_button_font_size(low_hand_layout: bool, tile_scale: f32) -> f32 {
         TOP_BUTTON_FONT_SIZE
     };
     base * tile_scale
+}
+
+fn combat_action_button_font_size(low_hand_layout: bool, tile_scale: f32) -> f32 {
+    combat_top_button_font_size(low_hand_layout, tile_scale) * COMBAT_ACTION_UI_SCALE
+}
+
+fn combat_action_button_padding(tile_insets: TileInsets) -> (f32, f32) {
+    (
+        tile_insets.pad_x * COMBAT_ACTION_UI_SCALE,
+        tile_insets.top_pad * COMBAT_ACTION_UI_SCALE,
+    )
 }
 
 fn boot_button_tile_padding() -> (f32, f32) {
@@ -11838,7 +12481,11 @@ fn screen_transition_style(from_screen: AppScreen, to_screen: AppScreen) -> Scre
 }
 
 fn hand_hint_metrics(tile_scale: f32) -> (f32, f32, f32) {
-    (16.0 * tile_scale, 14.0 * tile_scale, 8.0 * tile_scale)
+    (
+        16.0 * tile_scale * COMBAT_ACTION_UI_SCALE,
+        14.0 * tile_scale * COMBAT_ACTION_UI_SCALE,
+        8.0 * tile_scale * COMBAT_ACTION_UI_SCALE,
+    )
 }
 
 fn combat_hint_tile(app: &App, hand_count: usize) -> (String, &'static str, &'static str) {
@@ -11881,6 +12528,19 @@ fn combat_hint_tile(app: &App, hand_count: usize) -> (String, &'static str, &'st
                         TERM_LIME_SOFT,
                         COLOR_LIME_STROKE_TARGET,
                     )
+                } else if app.combat.card_targets_all_enemies(index) {
+                    (
+                        match app.language {
+                            Language::English => {
+                                format!("Tap card again ({} energy)", energy_cost)
+                            }
+                            Language::Spanish => {
+                                format!("Toca la carta otra vez ({} energía)", energy_cost)
+                            }
+                        },
+                        TERM_GREEN_SOFT,
+                        COLOR_GREEN_STROKE_STRONG,
+                    )
                 } else {
                     (
                         match app.language {
@@ -11902,8 +12562,52 @@ fn combat_hint_tile(app: &App, hand_count: usize) -> (String, &'static str, &'st
         _ => (
             String::from(app.tr("Tap card or end turn", "Toca una carta o termina el turno")),
             TERM_GREEN_TEXT,
-            COLOR_GREEN_STROKE_IDLE,
+            COLOR_GREEN_STROKE_CARD,
         ),
+    }
+}
+
+fn enemy_intent_lines(label: &str, summary: &str, max_chars: usize) -> EnemyIntentLines {
+    let max_chars = max_chars.max(1);
+    let summary_words: Vec<&str> = summary.split_whitespace().collect();
+    let first_line_summary_chars = max_chars.saturating_sub(label.len() + 1);
+    let mut first_line_words = Vec::new();
+    let mut used_chars = 0usize;
+
+    if first_line_summary_chars > 0 {
+        for word in &summary_words {
+            let next_len = if first_line_words.is_empty() {
+                word.len()
+            } else {
+                used_chars + 1 + word.len()
+            };
+            if next_len > first_line_summary_chars {
+                break;
+            }
+            first_line_words.push(*word);
+            used_chars = next_len;
+        }
+    }
+
+    let first_line_summary = first_line_words.join(" ");
+    let first_line_label = if first_line_summary.is_empty() {
+        String::from(label)
+    } else {
+        format!("{label} ")
+    };
+    let continuation_lines = if first_line_words.len() == summary_words.len() {
+        Vec::new()
+    } else {
+        wrap_text(
+            &summary_words[first_line_words.len()..].join(" "),
+            max_chars,
+        )
+    };
+
+    EnemyIntentLines {
+        first_line_label,
+        first_line_summary,
+        continuation_lines,
     }
 }
 
@@ -11915,15 +12619,10 @@ fn enemy_panel_metrics(
     tile_insets: TileInsets,
 ) -> EnemyPanelMetrics {
     let scale = if low_hand_layout { 1.16 } else { 1.0 } * tile_scale;
-    let info_label_size = 14.0 * scale;
     let info_body_size = 15.0 * scale;
     let info_body_line_gap = 5.0 * scale;
-    let info_gap = 6.0 * scale;
-    let title_size = 18.0 * scale;
     let stats_size = 18.0 * scale;
     let status_size = 14.0 * scale;
-    let title_icon_size = title_size * ENEMY_PANEL_ICON_SIZE_RATIO;
-    let title_icon_gap = title_size * ENEMY_PANEL_ICON_GAP_RATIO;
     let info_body_breathing_room = text_bottom_breathing_room(info_body_size);
     let status_gap = 18.0 * scale;
     let content_pad_x = tile_insets.pad_x;
@@ -11931,70 +12630,67 @@ fn enemy_panel_metrics(
     let line_gap = 10.0 * scale;
     let bottom_pad = tile_insets.bottom_pad;
     let enemy = app.combat.enemy(enemy_index);
-    let enemy_name = app.enemy_display_name(enemy_index);
     let displayed = app.displayed_actor_stats(Actor::Enemy(enemy_index));
-    let stats_line = format!(
-        "{} {}/{}{PANEL_TEXT_GAP}{} {}",
-        SHIELD_LABEL,
+    let next_label = app.tr(NEXT_SIGNAL_LABEL, "Siguiente");
+    let summary = app.enemy_signal_summary(enemy_index);
+    let stats_line_width = combat_actor_stats_line_width(
         displayed.hp,
         enemy.map(|enemy| enemy.fighter.max_hp).unwrap_or(0),
-        app.tr(GUARD_LABEL, "Escudo"),
-        displayed.block
+        displayed.block,
+        stats_size,
+        combat_inline_group_gap(stats_size),
     );
     let status_labels = enemy
         .map(|enemy| status_labels(enemy.fighter.statuses, enemy.on_hit_bleed, app.language))
         .unwrap_or_default();
+    let status_row_height = status_row_height(&status_labels, status_size);
     let status_width = if status_labels.is_empty() {
-        text_width(
-            app.tr("No active effects", "Sin efectos activos"),
-            status_size,
-        )
+        0.0
     } else {
         status_row_width(&status_labels, status_size, status_gap)
     };
-    let title_icon_width = enemy
+    let top_row_sprite_width = enemy
         .map(|enemy| {
             let sprite = enemy_sprite_def(enemy.profile);
-            title_icon_size * sprite.width.max(1) as f32 / sprite.height.max(1) as f32
+            enemy_inline_sprite_width(stats_size, sprite.width, sprite.height)
         })
-        .unwrap_or(title_icon_size);
-    let name_row_width = text_width(enemy_name, title_size) + title_icon_gap + title_icon_width;
-    let inner_width = text_width(&stats_line, stats_size)
-        .max(text_width(
-            app.tr(NEXT_SIGNAL_LABEL, "SIGUIENTE SEÑAL"),
-            info_label_size,
-        ))
-        .max(name_row_width)
-        .max(status_width);
+        .unwrap_or(combat_inline_icon_height(stats_size));
+    let top_row_width =
+        top_row_sprite_width + combat_inline_group_gap(stats_size) + stats_line_width;
+    let base_inner_width = top_row_width.max(status_width);
+    let mut info_body_chars =
+        ((base_inner_width / (info_body_size * 0.62)).floor() as usize).max(18);
+    let mut intent_lines = enemy_intent_lines(next_label, summary, info_body_chars);
+    let mut signal_width = intent_lines.max_width(info_body_size);
+    while info_body_chars > 1 && signal_width > base_inner_width + 0.01 {
+        info_body_chars -= 1;
+        intent_lines = enemy_intent_lines(next_label, summary, info_body_chars);
+        signal_width = intent_lines.max_width(info_body_size);
+    }
+    let inner_width = base_inner_width.max(signal_width);
     let width = inner_width + content_pad_x * 2.0;
-    let info_body_chars = ((inner_width / (info_body_size * 0.62)).floor() as usize).max(18);
-    let info_body_lines = wrap_text(app.enemy_signal_summary(enemy_index), info_body_chars)
-        .len()
-        .max(1);
+    let info_body_lines = intent_lines.line_count();
     let height = top_pad
-        + title_size
-        + line_gap
         + stats_size
         + line_gap
-        + status_size
-        + line_gap
-        + info_label_size
-        + info_gap
+        + status_row_height
+        + if status_row_height > 0.0 {
+            line_gap
+        } else {
+            0.0
+        }
         + info_body_size * info_body_lines as f32
         + info_body_line_gap * info_body_lines.saturating_sub(1) as f32
         + info_body_breathing_room
         + bottom_pad;
 
     EnemyPanelMetrics {
-        info_label_size,
         info_body_size,
         info_body_line_gap,
         info_body_chars,
-        info_gap,
-        title_size,
-        title_icon_size,
         stats_size,
         status_size,
+        status_row_height,
         status_gap,
         top_pad,
         line_gap,
@@ -12003,26 +12699,28 @@ fn enemy_panel_metrics(
     }
 }
 
-fn enemy_panel_icon_rect(
-    rect: Rect,
-    tile_insets: TileInsets,
-    title_baseline_y: f32,
-    title_size: f32,
-    icon_size: f32,
+fn enemy_inline_sprite_width(font_size: f32, sprite_width: u8, sprite_height: u8) -> f32 {
+    let sprite_w = sprite_width.max(1) as f32;
+    let sprite_h = sprite_height.max(1) as f32;
+
+    combat_inline_icon_height(font_size) * sprite_w / sprite_h
+}
+
+fn enemy_inline_sprite_rect(
+    x: f32,
+    baseline_y: f32,
+    font_size: f32,
     sprite_width: u8,
     sprite_height: u8,
 ) -> Rect {
-    let sprite_w = sprite_width.max(1) as f32;
-    let sprite_h = sprite_height.max(1) as f32;
-    let draw_w = icon_size * sprite_w / sprite_h;
-    let title_descender = text_bottom_breathing_room(title_size);
-    let text_mid_y = title_baseline_y - title_size + (title_size + title_descender) * 0.5;
+    let draw_h = combat_inline_icon_height(font_size);
+    let draw_w = enemy_inline_sprite_width(font_size, sprite_width, sprite_height);
 
     Rect {
-        x: rect.x + rect.w - tile_insets.pad_x - draw_w,
-        y: text_mid_y - icon_size * 0.5,
+        x,
+        y: baseline_y - draw_h,
         w: draw_w,
-        h: icon_size,
+        h: draw_h,
     }
 }
 
@@ -12113,7 +12811,7 @@ fn player_panel_metrics(
     tile_insets: TileInsets,
 ) -> PlayerPanelMetrics {
     let scale = if low_hand_layout { 1.14 } else { 1.0 } * tile_scale;
-    let label_size = 18.0 * scale;
+    let label_size = 13.5 * scale;
     let stats_size = 20.0 * scale;
     let meta_size = 18.0 * scale;
     let status_size = 14.0 * scale;
@@ -12124,36 +12822,23 @@ fn player_panel_metrics(
     let line_gap = 10.0 * scale;
     let bottom_pad = tile_insets.bottom_pad;
     let displayed = app.displayed_actor_stats(Actor::Player);
-    let stats_line = format!(
-        "{} {}/{}{PANEL_TEXT_GAP}{} {}",
-        SHIELD_LABEL,
+    let stats_line_width = combat_actor_stats_line_width(
         displayed.hp,
         app.combat.player.fighter.max_hp,
-        app.tr(GUARD_LABEL, "Escudo"),
-        displayed.block
+        displayed.block,
+        stats_size,
+        combat_inline_group_gap(stats_size),
     );
-    let meta_line = combat_playback_meta_label(app).unwrap_or_else(|| {
-        format!(
-            "{} {}/{}{PANEL_TEXT_GAP}{} {}→{}",
-            app.tr(ENERGY_LABEL, "Energía"),
-            app.combat.player.energy,
-            app.combat.player.max_energy,
-            app.tr(STACK_LABEL, "Mazo"),
-            app.combat.deck.draw_pile.len(),
-            app.combat.deck.discard_pile.len()
-        )
-    });
+    let meta_line_width = combat_meta_line_width(app, meta_size);
     let status_labels = status_labels(app.combat.player.fighter.statuses, 0, app.language);
+    let status_row_height = status_row_height(&status_labels, status_size);
     let status_width = if status_labels.is_empty() {
-        text_width(
-            app.tr("No active effects", "Sin efectos activos"),
-            status_size,
-        )
+        0.0
     } else {
         status_row_width(&status_labels, status_size, status_gap)
     };
-    let width = text_width(&stats_line, stats_size)
-        .max(text_width(&meta_line, meta_size))
+    let width = stats_line_width
+        .max(meta_line_width)
         .max(text_width(app.tr(PLAYER_NAME, "Jugador"), label_size))
         .max(status_width)
         + content_pad_x * 2.0;
@@ -12162,8 +12847,12 @@ fn player_panel_metrics(
         + line_gap
         + stats_size
         + line_gap
-        + status_size
-        + line_gap
+        + status_row_height
+        + if status_row_height > 0.0 {
+            line_gap
+        } else {
+            0.0
+        }
         + meta_size
         + meta_breathing_room
         + bottom_pad;
@@ -12173,12 +12862,88 @@ fn player_panel_metrics(
         stats_size,
         meta_size,
         status_size,
+        status_row_height,
         status_gap,
         top_pad,
         line_gap,
         width,
         height,
     }
+}
+
+fn combat_inline_icon_height(font_size: f32) -> f32 {
+    (font_size - text_bottom_breathing_room(font_size)) * COMBAT_INLINE_ICON_HEIGHT_RATIO
+}
+
+fn combat_inline_icon_width(font_size: f32) -> f32 {
+    combat_inline_icon_height(font_size) * COMBAT_INLINE_ICON_ASPECT_RATIO
+}
+
+fn combat_inline_group_gap(font_size: f32) -> f32 {
+    text_width(PANEL_TEXT_GAP, font_size)
+}
+
+fn combat_inline_icon_text_gap(font_size: f32) -> f32 {
+    (font_size * COMBAT_INLINE_ICON_TEXT_GAP_RATIO).max(1.0)
+}
+
+fn combat_inline_icon_rect(x: f32, baseline_y: f32, font_size: f32) -> Rect {
+    let height = combat_inline_icon_height(font_size);
+    let width = combat_inline_icon_width(font_size);
+
+    Rect {
+        x,
+        y: baseline_y - height,
+        w: width,
+        h: height,
+    }
+}
+
+fn render_combat_inline_icon(
+    scene: &mut SceneBuilder,
+    cursor: &mut f32,
+    baseline_y: f32,
+    font_size: f32,
+    src: &str,
+    color: &str,
+) {
+    let rect = combat_inline_icon_rect(*cursor, baseline_y, font_size);
+    scene.tinted_image(rect, src, color, 1.0);
+    *cursor += rect.w + combat_inline_icon_text_gap(font_size);
+}
+
+fn combat_actor_stats_line_width(
+    hp: i32,
+    max_hp: i32,
+    block: i32,
+    font_size: f32,
+    group_gap: f32,
+) -> f32 {
+    combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&hp.to_string(), font_size)
+        + text_width(&format!("/{max_hp}"), font_size)
+        + group_gap
+        + combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&block.to_string(), font_size)
+}
+
+fn combat_meta_line_width(app: &App, font_size: f32) -> f32 {
+    let displayed_meta = app.displayed_player_meta();
+    let energy_text = format!("{}/{}", displayed_meta.energy, app.combat.player.max_energy);
+    let draw_text = displayed_meta.draw_pile.to_string();
+    let discard_text = displayed_meta.discard_pile.to_string();
+
+    combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&energy_text, font_size)
+        + combat_inline_group_gap(font_size)
+        + combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&draw_text, font_size)
+        + text_width("→", font_size)
+        + text_width(&discard_text, font_size)
 }
 
 fn tile_insets_for_card_width(card_w: f32) -> TileInsets {
@@ -12235,9 +13000,13 @@ fn card_box_metrics(card_w: f32) -> CardBoxMetrics {
 }
 
 fn card_content_height(def: CardDef, card_w: f32) -> f32 {
+    card_content_height_with_description(def, def.description, card_w)
+}
+
+fn card_content_height_with_description(def: CardDef, description: &str, card_w: f32) -> f32 {
     let metrics = card_box_metrics(card_w);
     let title_lines = wrap_text(def.name, metrics.title_chars);
-    let body_lines = wrap_text(def.description, metrics.body_chars);
+    let body_lines = wrap_text(description, metrics.body_chars);
     let title_height = if title_lines.is_empty() {
         0.0
     } else {
@@ -12420,8 +13189,332 @@ fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
     lines
 }
 
+fn scaled_card_description(description: &str, statuses: StatusSet) -> String {
+    if statuses.focus == 0 && statuses.rhythm == 0 && statuses.momentum == 0 {
+        return description.to_string();
+    }
+
+    description
+        .split('\n')
+        .map(|line| scale_card_description_line(line, statuses))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn scale_card_description_line(line: &str, statuses: StatusSet) -> String {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+
+    words
+        .iter()
+        .enumerate()
+        .map(|(index, word)| scale_card_description_word(word, &words, index, statuses))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn scale_card_description_word(
+    word: &str,
+    words: &[&str],
+    index: usize,
+    statuses: StatusSet,
+) -> String {
+    let Some((amount, suffix)) = split_unsigned_numeric_token(word) else {
+        return word.to_string();
+    };
+
+    let Some(kind) = card_description_effect_kind(words, index) else {
+        return word.to_string();
+    };
+
+    let scaled = match kind {
+        CardDescriptionEffectKind::Damage => preview_scaled_value(amount, statuses.focus),
+        CardDescriptionEffectKind::Shield => preview_scaled_value(amount, statuses.rhythm),
+        CardDescriptionEffectKind::Energy => preview_scaled_value(amount, statuses.momentum),
+    };
+
+    format!("{scaled}{suffix}")
+}
+
+fn split_unsigned_numeric_token(token: &str) -> Option<(i32, &str)> {
+    let digit_len = token
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .map(char::len_utf8)
+        .sum::<usize>();
+    if digit_len == 0 {
+        return None;
+    }
+
+    let amount = token[..digit_len].parse().ok()?;
+    Some((amount, &token[digit_len..]))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardDescriptionEffectKind {
+    Damage,
+    Shield,
+    Energy,
+}
+
+fn card_description_effect_kind(words: &[&str], index: usize) -> Option<CardDescriptionEffectKind> {
+    let mut next_index = index + 1;
+    let mut token = words
+        .get(next_index)
+        .map(|word| normalized_card_body_token(word))?;
+    if token == "de" {
+        next_index += 1;
+        token = words
+            .get(next_index)
+            .map(|word| normalized_card_body_token(word))?;
+    }
+
+    if is_damage_term(&token) {
+        Some(CardDescriptionEffectKind::Damage)
+    } else if is_shield_term(&token) {
+        Some(CardDescriptionEffectKind::Shield)
+    } else if is_energy_term(&token) {
+        Some(CardDescriptionEffectKind::Energy)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CardBodyTint {
+    Focus,
+    Rhythm,
+    Momentum,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_card_description(
+    scene: &mut SceneBuilder,
+    x: f32,
+    start_y: f32,
+    size: f32,
+    gap: f32,
+    text: &str,
+    max_chars: usize,
+    default_color: &str,
+) {
+    let mut y = start_y;
+    for raw_line in text.split('\n') {
+        let words: Vec<&str> = raw_line.split_whitespace().collect();
+        if words.is_empty() {
+            y += size + gap;
+            continue;
+        }
+
+        let mut line_indices = Vec::new();
+        let mut line_len = 0usize;
+        for (index, word) in words.iter().enumerate() {
+            let next_len = if line_indices.is_empty() {
+                word.len()
+            } else {
+                line_len + 1 + word.len()
+            };
+            if next_len > max_chars && !line_indices.is_empty() {
+                render_card_description_line(
+                    scene,
+                    x,
+                    y,
+                    size,
+                    &words,
+                    &line_indices,
+                    default_color,
+                );
+                y += size + gap;
+                line_indices.clear();
+                line_indices.push(index);
+                line_len = word.len();
+            } else {
+                line_indices.push(index);
+                line_len = next_len;
+            }
+        }
+
+        if !line_indices.is_empty() {
+            render_card_description_line(scene, x, y, size, &words, &line_indices, default_color);
+            y += size + gap;
+        }
+    }
+}
+
+fn render_card_description_line(
+    scene: &mut SceneBuilder,
+    x: f32,
+    y: f32,
+    size: f32,
+    words: &[&str],
+    indices: &[usize],
+    default_color: &str,
+) {
+    let mut cursor_x = x;
+
+    for (position, index) in indices.iter().enumerate() {
+        let word = words[*index];
+        if position > 0 {
+            cursor_x += text_width(" ", size);
+        }
+        scene.text(
+            cursor_x,
+            y,
+            size,
+            "left",
+            card_body_tint_color(card_body_token_tint(words, *index), default_color),
+            "body",
+            word,
+        );
+        cursor_x += text_width(word, size);
+    }
+}
+
+fn card_body_tint_color(tint: Option<CardBodyTint>, default_color: &str) -> &str {
+    match tint {
+        Some(CardBodyTint::Focus) => TERM_GREEN,
+        Some(CardBodyTint::Rhythm) => TERM_BLUE_SOFT,
+        Some(CardBodyTint::Momentum) => TERM_CYAN,
+        None => default_color,
+    }
+}
+
+fn card_body_token_tint(words: &[&str], index: usize) -> Option<CardBodyTint> {
+    let core = normalized_card_body_token(words[index]);
+    if core.is_empty() {
+        return None;
+    }
+
+    if is_focus_term(&core) || is_damage_term(&core) {
+        return Some(CardBodyTint::Focus);
+    }
+    if is_rhythm_term(&core) || is_shield_term(&core) {
+        return Some(CardBodyTint::Rhythm);
+    }
+    if is_momentum_term(&core) || is_energy_term(&core) {
+        return Some(CardBodyTint::Momentum);
+    }
+    if !is_number_token(&core) {
+        return None;
+    }
+
+    let start = index.saturating_sub(2);
+    let end = (index + 2).min(words.len().saturating_sub(1));
+    for (neighbor_index, neighbor) in words.iter().enumerate().take(end + 1).skip(start) {
+        if neighbor_index == index {
+            continue;
+        }
+        let neighbor = normalized_card_body_token(neighbor);
+        if is_focus_term(&neighbor) || is_damage_term(&neighbor) {
+            return Some(CardBodyTint::Focus);
+        }
+        if is_rhythm_term(&neighbor) || is_shield_term(&neighbor) {
+            return Some(CardBodyTint::Rhythm);
+        }
+        if is_momentum_term(&neighbor) || is_energy_term(&neighbor) {
+            return Some(CardBodyTint::Momentum);
+        }
+    }
+
+    None
+}
+
+fn normalized_card_body_token(token: &str) -> String {
+    token
+        .trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '.' | ',' | ':' | ';' | '!' | '?' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+        })
+        .to_lowercase()
+}
+
+fn is_number_token(token: &str) -> bool {
+    let trimmed = token.trim_start_matches(['+', '-']);
+    !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn is_focus_term(token: &str) -> bool {
+    matches!(token, "focus" | "enfoque")
+}
+
+fn is_rhythm_term(token: &str) -> bool {
+    matches!(token, "rhythm" | "ritmo" | "shield" | "escudo")
+}
+
+fn is_momentum_term(token: &str) -> bool {
+    matches!(token, "momentum" | "impulso" | "energy" | "energía")
+}
+
+fn is_damage_term(token: &str) -> bool {
+    matches!(token, "damage" | "daño")
+}
+
+fn is_shield_term(token: &str) -> bool {
+    matches!(token, "shield" | "escudo")
+}
+
+fn is_energy_term(token: &str) -> bool {
+    matches!(token, "energy" | "energía")
+}
+
 fn rgba((r, g, b): (u8, u8, u8), alpha: f32) -> String {
     format!("rgba({r}, {g}, {b}, {:.3})", alpha.clamp(0.0, 1.0))
+}
+
+fn ui_tile_fill_from_rgb(rgb: (u8, u8, u8), alpha_scale: f32) -> String {
+    rgba(rgb, UI_TILE_FILL_ALPHA * alpha_scale.clamp(0.0, 1.0))
+}
+
+fn parse_rgba(color: &str) -> Option<((u8, u8, u8), f32)> {
+    let inner = color.strip_prefix("rgba(")?.strip_suffix(')')?;
+    let mut parts = inner.split(',').map(str::trim);
+    let r = parts.next()?.parse().ok()?;
+    let g = parts.next()?.parse().ok()?;
+    let b = parts.next()?.parse().ok()?;
+    let alpha = parts.next()?.parse().ok()?;
+    Some(((r, g, b), alpha))
+}
+
+fn ui_emphasize_tile_stroke(stroke: &str) -> String {
+    parse_rgba(stroke)
+        .map(|(rgb, alpha)| {
+            rgba(
+                rgb,
+                (alpha + UI_TILE_STROKE_ALPHA_BOOST).clamp(0.0, 1.0) * UI_TILE_STROKE_ALPHA_SCALE,
+            )
+        })
+        .unwrap_or_else(|| stroke.to_string())
+}
+
+fn ui_tile_fill_from_stroke(stroke: &str, alpha_scale: f32) -> String {
+    parse_rgba(stroke)
+        .map(|(rgb, _)| ui_tile_fill_from_rgb(rgb, alpha_scale))
+        .unwrap_or_else(|| COLOR_TILE_FILL.to_string())
+}
+
+fn ui_tile_style(stroke: &str, alpha_scale: f32) -> (String, String) {
+    let stroke = ui_emphasize_tile_stroke(stroke);
+    let fill = ui_tile_fill_from_stroke(&stroke, alpha_scale);
+    (fill, stroke)
+}
+
+fn render_ui_tile(scene: &mut SceneBuilder, rect: Rect, radius: f32, stroke: &str) {
+    render_ui_tile_scaled(scene, rect, radius, stroke, 1.0);
+}
+
+fn render_ui_tile_scaled(
+    scene: &mut SceneBuilder,
+    rect: Rect,
+    radius: f32,
+    stroke: &str,
+    alpha_scale: f32,
+) {
+    let (fill, stroke) = ui_tile_style(stroke, alpha_scale);
+    scene.rect(rect, radius, &fill, &stroke, UI_TILE_STROKE_WIDTH);
 }
 
 struct SceneBuilder {
@@ -12479,6 +13572,19 @@ impl SceneBuilder {
             rect.w,
             rect.h,
             sanitize(src)
+        );
+    }
+
+    fn tinted_image(&mut self, rect: Rect, src: &str, color: &str, alpha: f32) {
+        let _ = writeln!(
+            self.output,
+            "TIMAGE|{:.2}|{:.2}|{:.2}|{:.2}|{}|{}|{alpha:.3}",
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            sanitize(src),
+            sanitize(color)
         );
     }
 
@@ -12580,8 +13686,8 @@ fn sanitize(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::content::{
-        CardDef, CardTarget, EnemyProfileId, ModuleDef, enemy_sprite_def, localized_enemy_name,
-        module_def,
+        CardArchetype, CardDef, CardTarget, CardTraits, EnemyProfileId, ModuleDef, RewardTier,
+        enemy_sprite_def, localized_enemy_name, module_def,
     };
 
     const TEST_RUN_SEED: u64 = 0x0BAD_5EED;
@@ -12589,6 +13695,7 @@ mod tests {
     const TEST_FALLBACK_SEED: u64 = 0xBAAD_F00D;
     const TEST_BUILD_TIMESTAMP: &str = "BUILD_TS";
     const TEST_BUILD_SHA: &str = "BUILD_SHA";
+    type FrameTextEntry = (f32, f32, f32, String, String, String, String);
 
     fn primary_enemy(combat: &CombatState) -> &EnemyState {
         combat
@@ -12677,6 +13784,15 @@ mod tests {
         app.screen_transition = None;
     }
 
+    fn map_node_center_x(layout: &MapLayout, node_id: usize) -> f32 {
+        layout
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .expect("map layout should include requested node")
+            .center_x
+    }
+
     fn active_module_select_fixture() -> App {
         let mut app = App::new();
         app.start_run();
@@ -12763,12 +13879,12 @@ mod tests {
     fn combat_save_fixture() -> App {
         let mut app = active_combat_fixture();
         app.perform_action(CombatAction::EndTurn);
-        app.combat.player.fighter.statuses.weak = 2;
-        app.combat.player.fighter.statuses.frail = 1;
-        app.combat.player.fighter.statuses.strength = 3;
-        primary_enemy_mut(&mut app.combat).fighter.statuses.weak = 1;
-        primary_enemy_mut(&mut app.combat).fighter.statuses.frail = 2;
-        primary_enemy_mut(&mut app.combat).fighter.statuses.strength = 1;
+        app.combat.player.fighter.statuses.focus = 2;
+        app.combat.player.fighter.statuses.rhythm = -1;
+        app.combat.player.fighter.statuses.momentum = 3;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.focus = -1;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.rhythm = 2;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.momentum = -1;
         app
     }
 
@@ -12904,6 +14020,137 @@ mod tests {
             .collect()
     }
 
+    #[derive(Debug, Clone, PartialEq)]
+    struct FrameRectEntry {
+        rect: Rect,
+        radius: f32,
+        fill: String,
+        stroke: String,
+        stroke_width: f32,
+    }
+
+    fn frame_rect_entries(frame: &str) -> Vec<FrameRectEntry> {
+        frame
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('|');
+                if parts.next()? != "RECT" {
+                    return None;
+                }
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                let w = parts.next()?.parse().ok()?;
+                let h = parts.next()?.parse().ok()?;
+                let radius = parts.next()?.parse().ok()?;
+                let fill = String::from(parts.next()?);
+                let stroke = String::from(parts.next()?);
+                let stroke_width = parts.next()?.parse().ok()?;
+                Some(FrameRectEntry {
+                    rect: Rect { x, y, w, h },
+                    radius,
+                    fill,
+                    stroke,
+                    stroke_width,
+                })
+            })
+            .collect()
+    }
+
+    fn find_frame_rect_entry(entries: &[FrameRectEntry], rect: Rect) -> &FrameRectEntry {
+        entries
+            .iter()
+            .find(|entry| rects_match(entry.rect, rect))
+            .unwrap_or_else(|| panic!("expected RECT entry for {:?}", rect))
+    }
+
+    fn assert_ui_tile_entry(entry: &FrameRectEntry, stroke: &str, alpha_scale: f32) {
+        let expected_stroke = ui_emphasize_tile_stroke(stroke);
+        assert_eq!(
+            entry.fill,
+            ui_tile_fill_from_stroke(&expected_stroke, alpha_scale)
+        );
+        assert_eq!(entry.stroke, expected_stroke);
+        assert_eq!(entry.stroke_width, UI_TILE_STROKE_WIDTH);
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct FrameTintedImageEntry {
+        rect: Rect,
+        src: String,
+        color: String,
+    }
+
+    fn frame_tinted_image_entries(frame: &str) -> Vec<FrameTintedImageEntry> {
+        frame
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('|');
+                if parts.next()? != "TIMAGE" {
+                    return None;
+                }
+                let x = parts.next()?.parse().ok()?;
+                let y = parts.next()?.parse().ok()?;
+                let w = parts.next()?.parse().ok()?;
+                let h = parts.next()?.parse().ok()?;
+                let src = String::from(parts.next()?);
+                let color = String::from(parts.next()?);
+                Some(FrameTintedImageEntry {
+                    rect: Rect { x, y, w, h },
+                    src,
+                    color,
+                })
+            })
+            .collect()
+    }
+
+    fn frame_text_entries(frame: &str) -> Vec<FrameTextEntry> {
+        frame
+            .lines()
+            .filter_map(|line| {
+                let mut parts = line.split('|');
+                if parts.next()? != "TEXT" {
+                    return None;
+                }
+                Some((
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                    parts.next()?.parse().ok()?,
+                    String::from(parts.next()?),
+                    String::from(parts.next()?),
+                    String::from(parts.next()?),
+                    String::from(parts.next()?),
+                ))
+            })
+            .collect()
+    }
+
+    fn panel_has_text_with_color(
+        entries: &[FrameTextEntry],
+        panel: Rect,
+        text: &str,
+        color: &str,
+    ) -> bool {
+        entries
+            .iter()
+            .any(|(x, y, size, _, entry_color, _, entry_text)| {
+                entry_text == text
+                    && entry_color == color
+                    && *x >= panel.x - 0.01
+                    && *x + text_width(entry_text, *size) <= panel.x + panel.w + 0.01
+                    && *y >= panel.y - 0.01
+                    && *y <= panel.y + panel.h + 0.01
+            })
+    }
+
+    fn player_active_stats(app: &App) -> Vec<CombatStat> {
+        app.combat_feedback
+            .active_stats
+            .iter()
+            .filter(|active| active.actor == Actor::Player)
+            .map(|active| active.stat)
+            .collect()
+    }
+
     fn button_label_fits(button: FittedPrimaryButton, label: &str) -> bool {
         text_width(label, button.font_size) <= button.rect.w + 0.01
             && button.font_size <= button.rect.h + 0.01
@@ -12955,6 +14202,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn ui_tile_fill_from_stroke_reuses_border_rgb_and_scales_alpha() {
+        assert_eq!(
+            ui_tile_fill_from_stroke(COLOR_GREEN_STROKE_IDLE, 1.0),
+            rgba((51, 255, 102), UI_TILE_FILL_ALPHA)
+        );
+        assert_eq!(
+            ui_tile_fill_from_stroke(COLOR_LIME_STROKE_TARGET, 0.5),
+            rgba((216, 255, 61), UI_TILE_FILL_ALPHA * 0.5)
+        );
+    }
+
+    #[test]
+    fn ui_emphasize_tile_stroke_adds_the_standard_alpha_boost() {
+        assert_eq!(
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_IDLE),
+            rgba(
+                (51, 255, 102),
+                (0.55 + UI_TILE_STROKE_ALPHA_BOOST).clamp(0.0, 1.0) * UI_TILE_STROKE_ALPHA_SCALE
+            )
+        );
+        assert_eq!(
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_STRONG),
+            rgba(
+                (51, 255, 102),
+                (0.92 + UI_TILE_STROKE_ALPHA_BOOST).clamp(0.0, 1.0) * UI_TILE_STROKE_ALPHA_SCALE
+            )
+        );
+    }
+
     fn module_tile_copy_fits_rect(def: ModuleDef, rect: Rect) -> bool {
         let metrics = module_box_metrics(rect.w);
         let inner_width = rect.w - metrics.pad_x * 2.0;
@@ -12988,6 +14265,120 @@ mod tests {
         wrapped_lines_fit_width(&title_lines, metrics.title_size, inner_width)
             && wrapped_lines_fit_width(&body_lines, metrics.body_size, inner_width)
             && content_bottom <= rect.y + rect.h + 0.01
+    }
+
+    #[test]
+    fn selection_card_colors_damage_shield_momentum_and_cost_in_english() {
+        let app = App::new();
+        let mut scene = SceneBuilder::new();
+        app.render_selection_card(
+            &mut scene,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: CARD_WIDTH,
+                h: CARD_HEIGHT,
+            },
+            CardId::VectorLock,
+            COLOR_GREEN_STROKE_CARD,
+        );
+
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "6" && color == TERM_GREEN
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "Momentum" && color == TERM_CYAN
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text.starts_with("-2") && color == TERM_CYAN
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "5" && color == TERM_BLUE_SOFT
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "display" && text == "1" && color == TERM_CYAN
+        }));
+    }
+
+    #[test]
+    fn selection_card_colors_shield_and_momentum_segments_in_spanish() {
+        let mut app = App::new();
+        app.language = Language::Spanish;
+        let mut scene = SceneBuilder::new();
+        app.render_selection_card(
+            &mut scene,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: CARD_WIDTH,
+                h: CARD_HEIGHT,
+            },
+            CardId::CapacitiveShell,
+            COLOR_GREEN_STROKE_CARD,
+        );
+
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "Escudo." && color == TERM_BLUE_SOFT
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "Impulso" && color == TERM_CYAN
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "body" && text == "+2." && color == TERM_CYAN
+        }));
+        assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
+            font == "display" && text == "1" && color == TERM_CYAN
+        }));
+    }
+
+    #[test]
+    fn scaled_card_description_updates_scaled_effect_numbers_in_english() {
+        let description = "Deal 5 damage. Gain 5 Shield. Gain 2 Energy. Apply Focus -1.";
+        let statuses = StatusSet {
+            focus: 1,
+            rhythm: 2,
+            momentum: 2,
+            ..StatusSet::default()
+        };
+
+        assert_eq!(
+            scaled_card_description(description, statuses),
+            "Deal 6 damage. Gain 6 Shield. Gain 2 Energy. Apply Focus -1."
+        );
+    }
+
+    #[test]
+    fn scaled_card_description_updates_scaled_effect_numbers_in_spanish() {
+        let description =
+            "Inflige 5 de daño. Gana 5 de Escudo. Gana 2 de Energía. Aplica Enfoque -1.";
+        let statuses = StatusSet {
+            focus: 1,
+            rhythm: 2,
+            momentum: 2,
+            ..StatusSet::default()
+        };
+
+        assert_eq!(
+            scaled_card_description(description, statuses),
+            "Inflige 6 de daño. Gana 6 de Escudo. Gana 2 de Energía. Aplica Enfoque -1."
+        );
+    }
+
+    #[test]
+    fn combat_card_description_reflects_current_rhythm_scaling() {
+        let mut app = active_combat_fixture();
+        app.combat.player.fighter.statuses.rhythm = 3;
+
+        assert_eq!(
+            app.combat_card_description(CardId::GuardStep),
+            "Gain 7 Shield."
+        );
     }
 
     #[test]
@@ -13078,22 +14469,21 @@ mod tests {
     }
 
     #[test]
-    fn combat_layout_stacks_enemy_rows_in_portrait_when_panels_are_wide() {
+    fn combat_layout_keeps_enemy_row_in_portrait_when_status_wrap_reduces_panel_width() {
         let mut app = active_two_enemy_combat_fixture();
         for enemy in &mut app.combat.enemies {
             enemy.fighter.statuses = StatusSet {
                 bleed: 1,
-                expose: 1,
-                weak: 1,
-                frail: 1,
-                strength: 1,
+                focus: 1,
+                rhythm: -1,
+                momentum: 1,
             };
         }
         app.resize(320.0, 568.0);
 
         let layout = app.layout();
 
-        assert_eq!(layout.enemy_arrangement.row_counts, vec![1, 1]);
+        assert_eq!(layout.enemy_arrangement.row_counts, vec![2]);
     }
 
     #[test]
@@ -13119,9 +14509,10 @@ mod tests {
 
         let collapsed_layout = app.layout();
 
-        assert_ne!(
-            baseline_layout.enemy_arrangement.row_counts,
-            collapsed_layout.enemy_arrangement.row_counts
+        assert!(
+            baseline_layout.enemy_arrangement.row_counts
+                != collapsed_layout.enemy_arrangement.row_counts
+                || !rect_vecs_match(&baseline_layout.enemy_rects, &collapsed_layout.enemy_rects)
         );
         assert!(collapsed_layout.hand_arrangement.row_counts.is_empty());
     }
@@ -13298,7 +14689,11 @@ mod tests {
         set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 1);
         app.sync_combat_feedback_to_combat();
         let long_metrics = enemy_panel_metrics(&app, 0, false, 1.0, tile_insets);
-        let long_lines = wrap_text(app.enemy_signal_summary(0), long_metrics.info_body_chars);
+        let long_lines = enemy_intent_lines(
+            app.tr(NEXT_SIGNAL_LABEL, "Siguiente"),
+            app.enemy_signal_summary(0),
+            long_metrics.info_body_chars,
+        );
 
         assert!(
             (short_metrics.width - long_metrics.width).abs() < 0.1,
@@ -13309,8 +14704,139 @@ mod tests {
             "long next-signal text should increase panel height instead"
         );
         assert!(
-            long_lines.len() > 1,
+            long_lines.line_count() > 1,
             "long next-signal text should wrap to multiple lines"
+        );
+    }
+
+    #[test]
+    fn enemy_intent_lines_allow_label_only_first_line_when_summary_cannot_share_it() {
+        let lines = enemy_intent_lines("Siguiente", "Escudo", "Siguiente".len());
+
+        assert_eq!(lines.first_line_label, "Siguiente");
+        assert!(lines.first_line_summary.is_empty());
+        assert_eq!(lines.continuation_lines, vec![String::from("Escudo")]);
+    }
+
+    #[test]
+    fn enemy_panel_renders_next_label_inline_with_signal_summary_in_both_languages() {
+        let mut app = active_combat_fixture();
+
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let next_label = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "Next ")
+            .expect("enemy panel should render Next label");
+        let next_summary = entries
+            .iter()
+            .find(|(_, y, _, _, color, font, text)| {
+                (*y - next_label.1).abs() < 0.01
+                    && font == "body"
+                    && color == TERM_CYAN_SOFT
+                    && !text.is_empty()
+            })
+            .expect("enemy panel should render summary inline with Next");
+        assert!(next_summary.0 > next_label.0);
+        assert!(!next_summary.6.starts_with("Next"));
+
+        app.language = Language::Spanish;
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let next_label = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "Siguiente ")
+            .expect("enemy panel should render Siguiente label");
+        let next_summary = entries
+            .iter()
+            .find(|(_, y, _, _, color, font, text)| {
+                (*y - next_label.1).abs() < 0.01
+                    && font == "body"
+                    && color == TERM_CYAN_SOFT
+                    && !text.is_empty()
+            })
+            .expect("enemy panel should render summary inline with Siguiente");
+        assert!(next_summary.0 > next_label.0);
+        assert!(!next_summary.6.starts_with("Siguiente"));
+    }
+
+    #[test]
+    fn set_language_relocalizes_cached_enemy_intents_in_combat() {
+        let mut app = active_combat_fixture();
+        set_primary_enemy_intent(&mut app, EnemyProfileId::ScoutDrone, 0);
+        app.sync_combat_feedback_to_combat();
+
+        assert_eq!(app.enemy_signal_summary(0), "Deal 5 damage.");
+
+        app.set_language(Language::Spanish);
+
+        assert_eq!(app.enemy_signal_summary(0), "Inflige 5 de daño.");
+        assert_eq!(
+            app.combat_feedback.displayed_intents[0].name,
+            "Aguja de Choque"
+        );
+    }
+
+    #[test]
+    fn intent_advance_keeps_enemy_signal_summary_in_spanish() {
+        let mut app = active_combat_fixture();
+        app.set_language(Language::Spanish);
+        set_primary_enemy_intent(&mut app, EnemyProfileId::ScoutDrone, 0);
+        app.sync_combat_feedback_to_combat();
+
+        app.perform_action(CombatAction::EndTurn);
+
+        advance_until(&mut app, |app| {
+            app.enemy_signal_summary(0) == "Inflige 3 de daño dos veces."
+        });
+
+        assert_eq!(app.enemy_signal_summary(0), "Inflige 3 de daño dos veces.");
+        assert!(!app.enemy_signal_summary(0).contains("Deal"));
+        assert!(
+            app.log
+                .iter()
+                .any(|line| line.ends_with("siguiente accion: Fuego Cruzado."))
+        );
+    }
+
+    #[test]
+    fn enemy_panel_keeps_wrapped_spanish_intent_text_inside_the_panel() {
+        let mut app = active_two_enemy_combat_fixture();
+        app.language = Language::Spanish;
+        app.resize(320.0, 568.0);
+        set_primary_enemy_intent(&mut app, EnemyProfileId::HeptarchCore, 1);
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let panel = primary_enemy_rect(&app.layout());
+        let summary_entries = frame_text_entries(&frame)
+            .into_iter()
+            .filter(|(x, y, size, _, color, font, text)| {
+                *x >= panel.x - 0.01
+                    && *x <= panel.x + panel.w + 0.01
+                    && *y >= panel.y - 0.01
+                    && *y <= panel.y + panel.h + 0.01
+                    && font == "body"
+                    && color == TERM_CYAN_SOFT
+                    && !text.is_empty()
+                    && *x + text_width(text, *size) <= panel.x + panel.w + 0.01
+            })
+            .collect::<Vec<_>>();
+
+        assert!(
+            summary_entries.len() > 1,
+            "wrapped spanish intent text should span multiple body lines in a narrow panel"
+        );
+        assert!(
+            summary_entries
+                .iter()
+                .all(|(_, _, _, _, _, _, text)| !text.starts_with("Siguiente")),
+            "summary text should never repeat the green Siguiente label in blue"
         );
     }
 
@@ -13331,7 +14857,7 @@ mod tests {
     }
 
     #[test]
-    fn enemy_name_icon_stays_inside_enemy_panel() {
+    fn enemy_sprite_stays_inside_enemy_panel_top_row() {
         let mut app = active_combat_fixture();
         app.rebuild_frame();
 
@@ -13347,14 +14873,79 @@ mod tests {
                 .iter()
                 .all(|(_, sprite_rect)| rect_contains_rect(panel, *sprite_rect))
         );
-        assert!(sprites.iter().all(|(_, sprite_rect)| {
-            ((sprite_rect.x + sprite_rect.w) - (panel.x + panel.w - insets.pad_x)).abs() < 0.02
-        }));
+        assert!(
+            sprites.iter().all(|(_, sprite_rect)| {
+                (sprite_rect.x - (panel.x + insets.pad_x)).abs() < 0.02
+            })
+        );
         assert!(
             sprites
                 .iter()
                 .all(|(_, sprite_rect)| sprite_rect.y >= panel.y + insets.top_pad - 0.02)
         );
+    }
+
+    #[test]
+    fn enemy_panel_does_not_render_enemy_name_text() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let panel = primary_enemy_rect(&app.layout());
+        let enemy_name =
+            localized_enemy_name(primary_enemy(&app.combat).profile, Language::English);
+        let panel_texts = frame_text_entries(&frame);
+
+        assert!(panel_texts.iter().all(|(x, y, _, _, _, _, text)| {
+            !(*x >= panel.x - 0.01
+                && *x <= panel.x + panel.w + 0.01
+                && *y >= panel.y - 0.01
+                && *y <= panel.y + panel.h + 0.01
+                && text == enemy_name)
+        }));
+    }
+
+    #[test]
+    fn enemy_panel_top_row_uses_consistent_group_gap() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let panel = primary_enemy_rect(&app.layout());
+        let sprite_rect = frame_sprite_entries(&frame)
+            .into_iter()
+            .map(|(_, rect)| rect)
+            .find(|rect| rect_contains_rect(panel, *rect))
+            .expect("enemy panel should render a sprite");
+        let icons = frame_tinted_image_entries(&frame);
+        let heart_icon = icons
+            .iter()
+            .find(|entry| {
+                entry.src == COMBAT_HEART_ICON_ASSET_PATH && rect_contains_rect(panel, entry.rect)
+            })
+            .expect("enemy panel should render a heart icon");
+        let shield_icon = icons
+            .iter()
+            .find(|entry| {
+                entry.src == COMBAT_SHIELD_ICON_ASSET_PATH && rect_contains_rect(panel, entry.rect)
+            })
+            .expect("enemy panel should render a shield icon");
+        let max_hp_text = format!("/{}", primary_enemy(&app.combat).fighter.max_hp);
+        let max_hp_entry = frame_text_entries(&frame)
+            .into_iter()
+            .find(|(x, y, _, _, _, _, text)| {
+                *x >= panel.x - 0.01
+                    && *x <= panel.x + panel.w + 0.01
+                    && *y >= panel.y - 0.01
+                    && *y <= panel.y + panel.h + 0.01
+                    && text == &max_hp_text
+            })
+            .expect("enemy panel should render max hp text");
+        let sprite_gap = heart_icon.rect.x - (sprite_rect.x + sprite_rect.w);
+        let hp_group_gap =
+            shield_icon.rect.x - (max_hp_entry.0 + text_width(&max_hp_text, max_hp_entry.2));
+
+        assert!((sprite_gap - hp_group_gap).abs() < 0.05);
     }
 
     #[test]
@@ -13505,13 +15096,19 @@ mod tests {
             cost: 1,
             target: CardTarget::Enemy,
             description: "Deal 6 damage.",
+            archetype: CardArchetype::Pressure,
+            reward_tier: Some(RewardTier::Combat),
+            traits: CardTraits::default(),
         };
         let long = CardDef {
             id: CardId::QuickStrike,
             name: "Pulse Synchronization Cascade",
             cost: 1,
             target: CardTarget::Enemy,
-            description: "Deal 6 damage. Gain 4 Shield. Draw 1 card. Apply Vulnerable 1 if the target is exposed.",
+            description: "Deal 6 damage. Gain 4 Shield. Draw 1 card. Apply Momentum -1 if the target has Bleed.",
+            archetype: CardArchetype::Pressure,
+            reward_tier: Some(RewardTier::Combat),
+            traits: CardTraits::default(),
         };
         let metrics = card_box_metrics(card_w);
 
@@ -13533,7 +15130,7 @@ mod tests {
         let long = ModuleDef {
             id: ModuleId::AegisDrive,
             name: "Reactive Synchronization Lattice",
-            description: "Start each combat with 5 Shield. After each victory, recover 3 HP and gain 4 additional Credits.",
+            description: "Start each combat with 5 Shield. After each victory, recover 2 HP and gain 4 additional Credits.",
         };
         let metrics = module_box_metrics(card_w);
 
@@ -14065,6 +15662,155 @@ mod tests {
     }
 
     #[test]
+    fn non_combat_primary_and_flow_buttons_use_tinted_tiles() {
+        let mut boot = App::new();
+        boot.rebuild_frame();
+        let boot_layout = boot.boot_buttons_layout(false);
+        let boot_frame = String::from_utf8(boot.frame.clone()).unwrap();
+        let boot_rects = frame_rect_entries(&boot_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&boot_rects, boot_layout.start_button),
+            COLOR_GREEN_STROKE_START,
+            1.0,
+        );
+
+        let mut rest = active_rest_fixture(dense_rest_test_deck(), 24);
+        rest.rebuild_frame();
+        let rest_layout = rest.rest_layout().unwrap();
+        let rest_frame = String::from_utf8(rest.frame.clone()).unwrap();
+        let rest_rects = frame_rect_entries(&rest_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&rest_rects, rest_layout.heal_rect),
+            COLOR_CYAN_STROKE_IDLE,
+            1.0,
+        );
+
+        let mut shop = active_shop_fixture();
+        shop.rebuild_frame();
+        let shop_layout = shop.shop_layout().unwrap();
+        let shop_frame = String::from_utf8(shop.frame.clone()).unwrap();
+        let shop_rects = frame_rect_entries(&shop_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&shop_rects, shop_layout.leave_button),
+            COLOR_GREEN_STROKE_START,
+            1.0,
+        );
+
+        let mut reward = App::new();
+        reward.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+        reward.screen = AppScreen::Reward;
+        reward.reward = Some(RewardState {
+            tier: RewardTier::Combat,
+            options: vec![CardId::QuickStrike],
+            followup: RewardFollowup {
+                completed_run: false,
+            },
+            seed: TEST_RUN_SEED,
+        });
+        reward.rebuild_frame();
+        let reward_layout = reward.reward_layout().unwrap();
+        let reward_frame = String::from_utf8(reward.frame.clone()).unwrap();
+        let reward_rects = frame_rect_entries(&reward_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&reward_rects, reward_layout.skip_button),
+            COLOR_GREEN_STROKE_START,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn non_combat_selection_tiles_use_tinted_fill() {
+        let mut module_select = active_module_select_fixture();
+        module_select.rebuild_frame();
+        let module_layout = module_select.module_select_layout().unwrap();
+        let module = module_select.module_select.as_ref().unwrap().options[0];
+        let module_frame = String::from_utf8(module_select.frame.clone()).unwrap();
+        let module_rects = frame_rect_entries(&module_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&module_rects, module_layout.card_rects[0]),
+            &module_stroke(module),
+            1.0,
+        );
+
+        let mut event = active_event_fixture(EventId::SalvageCache);
+        event.rebuild_frame();
+        let event_layout = event.event_layout().unwrap();
+        let event_frame = String::from_utf8(event.frame.clone()).unwrap();
+        let event_rects = frame_rect_entries(&event_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&event_rects, event_layout.choice_rects[0]),
+            COLOR_BLUE_STROKE_IDLE,
+            1.0,
+        );
+
+        let mut shop = active_shop_fixture();
+        shop.shop.as_mut().unwrap().offers = vec![ShopOffer {
+            card: CardId::QuickStrike,
+            price: 16,
+        }];
+        shop.rebuild_frame();
+        let shop_layout = shop.shop_layout().unwrap();
+        let shop_frame = String::from_utf8(shop.frame.clone()).unwrap();
+        let shop_rects = frame_rect_entries(&shop_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&shop_rects, shop_layout.card_rects[0]),
+            COLOR_CYAN_STROKE_IDLE,
+            1.0,
+        );
+
+        let mut reward = App::new();
+        reward.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+        reward.screen = AppScreen::Reward;
+        reward.reward = Some(RewardState {
+            tier: RewardTier::Elite,
+            options: vec![CardId::QuickStrike],
+            followup: RewardFollowup {
+                completed_run: false,
+            },
+            seed: TEST_RUN_SEED,
+        });
+        reward.rebuild_frame();
+        let reward_layout = reward.reward_layout().unwrap();
+        let reward_frame = String::from_utf8(reward.frame.clone()).unwrap();
+        let reward_rects = frame_rect_entries(&reward_frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&reward_rects, reward_layout.card_rects[0]),
+            reward_tier_stroke(RewardTier::Elite),
+            1.0,
+        );
+    }
+
+    #[test]
+    fn map_buttons_and_run_info_panel_use_tinted_tiles() {
+        let mut app = App::new();
+        start_run_to_map(&mut app);
+        app.open_run_info();
+        app.ui.run_info_progress = 1.0;
+
+        app.rebuild_frame();
+
+        let map_layout = app.map_layout().unwrap();
+        let run_info_layout = app.run_info_layout().unwrap();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let rects = frame_rect_entries(&frame);
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&rects, map_layout.menu_button),
+            COLOR_GREEN_STROKE_IDLE,
+            1.0,
+        );
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&rects, map_layout.info_button),
+            COLOR_GREEN_STROKE_STRONG,
+            1.0,
+        );
+        assert_ui_tile_entry(
+            find_frame_rect_entry(&rects, run_info_layout.modal_rect),
+            COLOR_GREEN_STROKE_PANEL,
+            1.0,
+        );
+    }
+
+    #[test]
     fn shop_layout_keeps_prices_close_to_cards_and_credits_farther_below() {
         let app = active_shop_fixture();
         let layout = app.shop_layout().unwrap();
@@ -14551,7 +16297,7 @@ mod tests {
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains("|label|Skip"));
-        assert!(frame.contains("|label|+8 Credits"));
+        assert!(frame.contains("|label|+6 Credits"));
     }
 
     #[test]
@@ -14604,6 +16350,132 @@ mod tests {
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains(COLOR_WHITE_STROKE_PATH));
         assert!(frame.contains(COLOR_GRAY_STROKE_DISABLED));
+    }
+
+    #[test]
+    fn map_layout_caps_adjacent_lane_spacing_on_wide_viewports() {
+        let mut app = App::new();
+        app.resize(2200.0, 720.0);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1, 2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 2,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Elite,
+                next: vec![],
+            },
+        ];
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Map;
+
+        let layout = app.map_layout().unwrap();
+        let center_gap = (map_node_center_x(&layout, 2) - map_node_center_x(&layout, 1)).abs();
+        let edge_gap = center_gap - MAP_NODE_DIAMETER;
+
+        assert!(center_gap <= MAP_MAX_ADJACENT_LANE_CENTER_SPACING + 0.01);
+        assert!(edge_gap <= MAP_NODE_DIAMETER + 0.01);
+    }
+
+    #[test]
+    fn map_layout_preserves_empty_lanes_while_capping_wide_spacing() {
+        let mut app = App::new();
+        app.resize(2200.0, 720.0);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1, 2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 2,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 1,
+                lane: 4,
+                kind: RoomKind::Elite,
+                next: vec![],
+            },
+        ];
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Map;
+
+        let layout = app.map_layout().unwrap();
+        let center_gap = (map_node_center_x(&layout, 2) - map_node_center_x(&layout, 1)).abs();
+
+        assert!(
+            (center_gap - MAP_MAX_ADJACENT_LANE_CENTER_SPACING * 2.0).abs() <= 0.01,
+            "expected one preserved empty lane between visible branches"
+        );
+    }
+
+    #[test]
+    fn map_layout_keeps_narrow_viewport_lane_spacing_below_the_cap() {
+        let mut app = App::new();
+        app.resize(320.0, 568.0);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1, 2, 3],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 2,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Rest,
+                next: vec![],
+            },
+            crate::dungeon::DungeonNode {
+                id: 3,
+                depth: 1,
+                lane: 6,
+                kind: RoomKind::Shop,
+                next: vec![],
+            },
+        ];
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Map;
+
+        let layout = app.map_layout().unwrap();
+        let center_gap = (map_node_center_x(&layout, 2) - map_node_center_x(&layout, 1)).abs();
+        let side_pad = (app.logical_width() * 0.12).clamp(54.0, 132.0);
+        let expected_spacing = (app.logical_width() - side_pad * 2.0).max(0.0) / 6.0;
+
+        assert!(center_gap < MAP_MAX_ADJACENT_LANE_CENTER_SPACING);
+        assert!((center_gap - expected_spacing).abs() <= 0.01);
     }
 
     #[test]
@@ -14869,6 +16741,204 @@ mod tests {
     }
 
     #[test]
+    fn enemy_panel_toggles_enemy_inspect_when_no_card_is_selected() {
+        let mut app = active_combat_fixture();
+        let enemy_rect = primary_enemy_rect(&app.layout());
+
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+        assert!(app.ui.enemy_inspect_open);
+        assert_eq!(app.ui.enemy_inspect_enemy, Some(0));
+
+        app.ui.enemy_inspect_progress = 1.0;
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+        assert!(!app.ui.enemy_inspect_open);
+    }
+
+    #[test]
+    fn enemy_inspect_switches_between_panels() {
+        let mut app = active_combat_fixture();
+        let mut setup = crate::combat::EncounterSetup {
+            player_hp: 32,
+            player_max_hp: 32,
+            player_max_energy: 3,
+            enemies: Vec::new(),
+        };
+        setup.enemies.push(crate::combat::EncounterEnemySetup {
+            hp: 6,
+            max_hp: 6,
+            block: 0,
+            profile: EnemyProfileId::ScoutDrone,
+            intent_index: 0,
+            on_hit_bleed: 0,
+        });
+        setup.enemies.push(crate::combat::EncounterEnemySetup {
+            hp: 14,
+            max_hp: 14,
+            block: 0,
+            profile: EnemyProfileId::NeedlerDrone,
+            intent_index: 1,
+            on_hit_bleed: 0,
+        });
+        app.begin_encounter(setup);
+        app.screen_transition = None;
+
+        let first_enemy_rect = app.layout().enemy_rect(0).unwrap();
+        let second_enemy_rect = app.layout().enemy_rect(1).unwrap();
+
+        app.handle_combat_pointer(
+            first_enemy_rect.x + first_enemy_rect.w * 0.5,
+            first_enemy_rect.y + first_enemy_rect.h * 0.5,
+        );
+        assert_eq!(app.ui.enemy_inspect_enemy, Some(0));
+
+        app.ui.enemy_inspect_progress = 1.0;
+        app.handle_combat_pointer(
+            second_enemy_rect.x + second_enemy_rect.w * 0.5,
+            second_enemy_rect.y + second_enemy_rect.h * 0.5,
+        );
+        assert!(app.ui.enemy_inspect_open);
+        assert_eq!(app.ui.enemy_inspect_enemy, Some(1));
+    }
+
+    #[test]
+    fn combat_panels_switch_between_run_info_and_enemy_inspect() {
+        let mut app = active_combat_fixture();
+        let player_rect = app.layout().player_rect;
+        let enemy_rect = primary_enemy_rect(&app.layout());
+
+        app.handle_combat_pointer(
+            player_rect.x + player_rect.w * 0.5,
+            player_rect.y + player_rect.h * 0.5,
+        );
+        assert!(app.ui.run_info_open);
+        assert!(!app.ui.enemy_inspect_open);
+
+        app.ui.run_info_progress = 1.0;
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+        assert!(!app.ui.run_info_open);
+        assert!(app.ui.enemy_inspect_open);
+        assert_eq!(app.ui.enemy_inspect_enemy, Some(0));
+
+        app.ui.enemy_inspect_progress = 1.0;
+        app.handle_combat_pointer(
+            player_rect.x + player_rect.w * 0.5,
+            player_rect.y + player_rect.h * 0.5,
+        );
+        assert!(app.ui.run_info_open);
+        assert!(!app.ui.enemy_inspect_open);
+    }
+
+    #[test]
+    fn enemy_panel_keeps_enemy_target_cards_working_instead_of_opening_inspect() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 3;
+        app.combat.deck.hand = vec![CardId::QuickStrike];
+        app.combat.deck.draw_pile.clear();
+        app.combat.deck.discard_pile.clear();
+        app.sync_combat_feedback_to_combat();
+        app.select_or_play_card(0);
+        let enemy_rect = primary_enemy_rect(&app.layout());
+
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+
+        assert!(!app.ui.enemy_inspect_open);
+        assert_eq!(
+            app.combat_feedback.playback_kind,
+            Some(CombatPlaybackKind::PlayerAction)
+        );
+    }
+
+    #[test]
+    fn enemy_inspect_modal_closes_on_outside_tap_and_escape() {
+        let mut app = active_combat_fixture();
+        let enemy_rect = primary_enemy_rect(&app.layout());
+        let close_point = app.layout().menu_button;
+
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+        app.ui.enemy_inspect_progress = 1.0;
+
+        app.handle_combat_pointer(
+            close_point.x + close_point.w * 0.5,
+            close_point.y + close_point.h * 0.5,
+        );
+        assert!(!app.ui.enemy_inspect_open);
+
+        app.handle_combat_pointer(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+        assert!(app.ui.enemy_inspect_open);
+
+        app.key_down(27);
+        assert!(!app.ui.enemy_inspect_open);
+    }
+
+    #[test]
+    fn enemy_inspect_modal_renders_centered_name_and_sprite() {
+        let mut app = active_combat_fixture();
+        let enemy_name =
+            localized_enemy_name(primary_enemy(&app.combat).profile, Language::English);
+        let expected_codes = enemy_sprite_codes(primary_enemy(&app.combat).profile);
+        app.open_enemy_inspect(0);
+        app.ui.enemy_inspect_progress = 1.0;
+
+        app.rebuild_frame();
+
+        let layout = app.enemy_inspect_layout().unwrap();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let title_entry = frame_text_entries(&frame)
+            .into_iter()
+            .find(|(x, y, _, align, _, font, text)| {
+                *x >= layout.modal_rect.x - 0.01
+                    && *x <= layout.modal_rect.x + layout.modal_rect.w + 0.01
+                    && *y >= layout.modal_rect.y - 0.01
+                    && *y <= layout.modal_rect.y + layout.modal_rect.h + 0.01
+                    && align == "center"
+                    && font == "label"
+                    && text == enemy_name
+            })
+            .expect("enemy inspect modal should render a centered name");
+        assert!((title_entry.0 - (layout.modal_rect.x + layout.modal_rect.w * 0.5)).abs() < 0.05);
+
+        let modal_sprites = frame_sprite_entries(&frame)
+            .into_iter()
+            .filter(|(_, rect)| rect_contains_rect(layout.modal_rect, *rect))
+            .collect::<Vec<_>>();
+        assert_eq!(modal_sprites.len(), expected_codes.len());
+        assert_eq!(
+            modal_sprites
+                .iter()
+                .map(|(code, _)| *code)
+                .collect::<Vec<_>>(),
+            expected_codes
+        );
+        assert!(
+            modal_sprites
+                .iter()
+                .all(|(_, rect)| rect_contains_rect(layout.modal_rect, *rect)
+                    && (rect.x - layout.sprite_rect.x).abs() < 0.02
+                    && (rect.y - layout.sprite_rect.y).abs() < 0.02
+                    && (rect.w - layout.sprite_rect.w).abs() < 0.02
+                    && (rect.h - layout.sprite_rect.h).abs() < 0.02)
+        );
+    }
+
+    #[test]
     fn reward_skip_button_anchors_to_bottom() {
         let mut app = App::new();
         app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
@@ -15076,47 +17146,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn restore_old_combat_save_without_new_status_fields_defaults_to_zero() {
-        let app = combat_save_fixture();
-        let snapshot = app.serialize_current_run().unwrap();
-        let mut value: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        value["active_state"]["combat"]["player"]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("weak");
-        value["active_state"]["combat"]["player"]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("frail");
-        value["active_state"]["combat"]["player"]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("strength");
-        value["active_state"]["combat"]["enemies"][0]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("weak");
-        value["active_state"]["combat"]["enemies"][0]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("frail");
-        value["active_state"]["combat"]["enemies"][0]["fighter"]
-            .as_object_mut()
-            .unwrap()
-            .remove("strength");
-
-        let restored = restore_app_from_snapshot(&serde_json::to_string(&value).unwrap());
-
-        assert_eq!(restored.combat.player.fighter.statuses.weak, 0);
-        assert_eq!(restored.combat.player.fighter.statuses.frail, 0);
-        assert_eq!(restored.combat.player.fighter.statuses.strength, 0);
-        assert_eq!(primary_enemy(&restored.combat).fighter.statuses.weak, 0);
-        assert_eq!(primary_enemy(&restored.combat).fighter.statuses.frail, 0);
-        assert_eq!(primary_enemy(&restored.combat).fighter.statuses.strength, 0);
-    }
-
-    #[test]
     fn incompatible_combat_save_falls_back_to_encounter_checkpoint() {
         let app = combat_save_fixture();
         let original_turn = app.combat.turn;
@@ -15173,7 +17202,7 @@ mod tests {
     }
 
     #[test]
-    fn targeting_relay_applies_vulnerable_at_the_start_of_combat() {
+    fn targeting_relay_grants_focus_at_the_start_of_combat() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
         dungeon.modules = vec![ModuleId::TargetingRelay];
@@ -15200,16 +17229,16 @@ mod tests {
 
         app.begin_encounter(setup);
 
-        assert_eq!(primary_enemy(&app.combat).fighter.statuses.expose, 1);
+        assert_eq!(app.combat.player.fighter.statuses.focus, 1);
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Targeting Relay applies Vulnerable 1 to Scout Drone.")
+                .any(|line| line == "Targeting Relay grants Focus +1.")
         );
     }
 
     #[test]
-    fn capacitor_bank_grants_strength_at_the_start_of_combat() {
+    fn capacitor_bank_grants_momentum_at_the_start_of_combat() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
         dungeon.modules = vec![ModuleId::CapacitorBank];
@@ -15217,16 +17246,16 @@ mod tests {
 
         app.begin_encounter(crate::combat::EncounterSetup::default());
 
-        assert_eq!(app.combat.player.fighter.statuses.strength, 1);
+        assert_eq!(app.combat.player.fighter.statuses.momentum, 1);
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Capacitor Bank grants Strength 1.")
+                .any(|line| line == "Capacitor Bank grants Momentum +1.")
         );
     }
 
     #[test]
-    fn prism_scope_applies_vulnerable_to_all_enemies_at_the_start_of_combat() {
+    fn prism_scope_applies_rhythm_to_all_enemies_at_the_start_of_combat() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
         dungeon.modules = vec![ModuleId::PrismScope];
@@ -15248,12 +17277,12 @@ mod tests {
             app.combat
                 .enemies
                 .iter()
-                .all(|enemy| enemy.fighter.statuses.expose == 1)
+                .all(|enemy| enemy.fighter.statuses.rhythm == -1)
         );
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Prism Scope applies Vulnerable 1 to all enemies.")
+                .any(|line| line == "Prism Scope applies Rhythm -1 to all enemies.")
         );
     }
 
@@ -15276,7 +17305,7 @@ mod tests {
     }
 
     #[test]
-    fn suppression_field_applies_weak_to_all_enemies_at_the_start_of_combat() {
+    fn suppression_field_applies_focus_to_all_enemies_at_the_start_of_combat() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
         dungeon.modules = vec![ModuleId::SuppressionField];
@@ -15297,30 +17326,29 @@ mod tests {
             app.combat
                 .enemies
                 .iter()
-                .all(|enemy| enemy.fighter.statuses.weak == 1)
+                .all(|enemy| enemy.fighter.statuses.focus == -1)
         );
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Suppression Field applies Weak 1 to all enemies.")
+                .any(|line| line == "Suppression Field applies Focus -1 to all enemies.")
         );
     }
 
     #[test]
-    fn combat_panels_render_weak_frail_and_strength_labels() {
+    fn combat_panels_render_focus_rhythm_and_momentum_labels() {
         let mut app = active_combat_fixture();
-        app.combat.player.fighter.statuses.strength = 2;
-        app.combat.player.fighter.statuses.weak = 1;
-        primary_enemy_mut(&mut app.combat).fighter.statuses.frail = 1;
-        primary_enemy_mut(&mut app.combat).fighter.statuses.expose = 1;
+        app.combat.player.fighter.statuses.focus = 2;
+        app.combat.player.fighter.statuses.rhythm = -1;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.rhythm = -1;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.momentum = 1;
 
         app.rebuild_frame();
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(frame.contains("|body|Strength 2"));
-        assert!(frame.contains("|body|Weak 1"));
-        assert!(frame.contains("|body|Frail 1"));
-        assert!(frame.contains("|body|Vulnerable 1"));
+        assert!(frame.contains("|body|Focus+2"));
+        assert!(frame.contains("|body|Rhythm-1"));
+        assert!(frame.contains("|body|Momentum+1"));
     }
 
     #[test]
@@ -15354,11 +17382,11 @@ mod tests {
 
         app.debug_end_battle();
 
-        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 23);
+        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 22);
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Nanoforge restores 3 HP.")
+                .any(|line| line == "Nanoforge restores 2 HP.")
         );
     }
 
@@ -15391,7 +17419,7 @@ mod tests {
 
         app.debug_end_battle();
 
-        assert_eq!(app.dungeon.as_ref().unwrap().credits, 12);
+        assert_eq!(app.dungeon.as_ref().unwrap().credits, 10);
         assert!(
             app.log
                 .iter()
@@ -15495,6 +17523,133 @@ mod tests {
     }
 
     #[test]
+    fn end_turn_playback_animates_player_meta_from_real_deck_events() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 0;
+        app.combat.player.max_energy = 3;
+        app.combat.deck.hand = vec![CardId::QuickStrike, CardId::GuardStep];
+        app.combat.deck.draw_pile =
+            vec![CardId::FlareSlash, CardId::PinpointJab, CardId::Slipstream];
+        app.combat.deck.discard_pile = vec![
+            CardId::SignalTap,
+            CardId::BurstArray,
+            CardId::CoverPulse,
+            CardId::BarrierField,
+            CardId::ZeroPoint,
+            CardId::PressurePoint,
+            CardId::GuardStepPlus,
+            CardId::QuickStrikePlus,
+        ];
+        app.sync_combat_feedback_to_combat();
+
+        let initial_meta = app.displayed_player_meta();
+        assert_eq!(
+            initial_meta,
+            PlayerDisplayedMeta {
+                energy: 0,
+                draw_pile: 3,
+                discard_pile: 8,
+            }
+        );
+
+        app.perform_action(CombatAction::EndTurn);
+        assert_eq!(app.displayed_player_meta(), initial_meta);
+
+        advance_until(&mut app, |app| {
+            app.displayed_player_meta().discard_pile == 9
+        });
+        assert_eq!(app.displayed_player_meta().draw_pile, 3);
+        advance_until(&mut app, |app| {
+            app.displayed_player_meta().discard_pile == 10
+        });
+        assert_eq!(app.displayed_player_meta().draw_pile, 3);
+
+        advance_until(&mut app, |app| {
+            player_active_stats(app).contains(&CombatStat::Energy)
+        });
+        advance_until(&mut app, |app| {
+            app.displayed_player_meta().energy > initial_meta.energy
+        });
+        let animated_energy = app.displayed_player_meta().energy;
+        assert!(animated_energy < i32::from(app.combat.player.max_energy));
+        app.rebuild_frame();
+        let player_panel = app.layout().player_rect;
+        let entries = frame_text_entries(&String::from_utf8(app.frame.clone()).unwrap());
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            &format!("{animated_energy}/{}", app.combat.player.max_energy),
+            TERM_CYAN_SOFT,
+        ));
+
+        advance_until(&mut app, |app| app.displayed_player_meta().draw_pile == 2);
+        advance_until(&mut app, |app| app.displayed_player_meta().draw_pile == 1);
+        advance_until(&mut app, |app| app.displayed_player_meta().draw_pile == 0);
+        assert_eq!(app.displayed_player_meta().discard_pile, 10);
+
+        advance_until(&mut app, |app| {
+            let active_stats = player_active_stats(app);
+            active_stats.contains(&CombatStat::DrawPile)
+                && active_stats.contains(&CombatStat::DiscardPile)
+        });
+        assert_eq!(app.displayed_player_meta().draw_pile, 0);
+        assert_eq!(app.displayed_player_meta().discard_pile, 10);
+        app.rebuild_frame();
+        let entries = frame_text_entries(&String::from_utf8(app.frame.clone()).unwrap());
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "0",
+            TERM_CYAN_SOFT,
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "10",
+            TERM_CYAN_SOFT,
+        ));
+
+        advance_until(&mut app, |app| {
+            app.displayed_player_meta().draw_pile == 10
+                && app.displayed_player_meta().discard_pile == 0
+        });
+        advance_until(&mut app, |app| app.displayed_player_meta().draw_pile == 9);
+
+        advance_until(&mut app, |app| app.combat_feedback.playback_kind.is_none());
+
+        let final_meta = app.displayed_player_meta();
+        assert_eq!(
+            final_meta,
+            PlayerDisplayedMeta {
+                energy: app.combat.player.energy as i32,
+                draw_pile: app.combat.deck.draw_pile.len() as i32,
+                discard_pile: app.combat.deck.discard_pile.len() as i32,
+            }
+        );
+
+        app.rebuild_frame();
+        let entries = frame_text_entries(&String::from_utf8(app.frame.clone()).unwrap());
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            &format!("{}/{}", final_meta.energy, app.combat.player.max_energy),
+            TERM_CYAN,
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            &final_meta.draw_pile.to_string(),
+            TERM_CYAN,
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            &final_meta.discard_pile.to_string(),
+            TERM_CYAN,
+        ));
+    }
+
+    #[test]
     fn player_attack_playback_counts_enemy_block_before_hp() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 3;
@@ -15526,6 +17681,65 @@ mod tests {
         assert_eq!(displayed_primary_enemy(&app).block, 0);
 
         advance_until(&mut app, |app| !app.combat_input_locked());
+    }
+
+    #[test]
+    fn player_action_playback_syncs_player_meta_without_meta_countdowns() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 3;
+        app.combat.deck.hand = vec![CardId::FlareSlash];
+        app.combat.deck.draw_pile = vec![CardId::GuardStep, CardId::ZeroPoint];
+        app.combat.deck.discard_pile.clear();
+        app.sync_combat_feedback_to_combat();
+
+        let expected_meta = PlayerDisplayedMeta {
+            energy: 2,
+            draw_pile: 2,
+            discard_pile: 1,
+        };
+
+        app.perform_action(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(Actor::Enemy(0)),
+        });
+
+        assert_eq!(
+            app.combat_feedback.playback_kind,
+            Some(CombatPlaybackKind::PlayerAction)
+        );
+        assert_eq!(
+            app.displayed_player_meta(),
+            PlayerDisplayedMeta {
+                energy: 3,
+                draw_pile: 2,
+                discard_pile: 0,
+            }
+        );
+
+        let mut saw_expected_meta = false;
+        let mut saw_meta_countdown = false;
+        for _ in 0..400 {
+            if app.combat_feedback.active_stats.iter().any(|active| {
+                active.actor == Actor::Player
+                    && matches!(
+                        active.stat,
+                        CombatStat::Energy | CombatStat::DrawPile | CombatStat::DiscardPile
+                    )
+            }) {
+                saw_meta_countdown = true;
+            }
+            if app.displayed_player_meta() == expected_meta {
+                saw_expected_meta = true;
+            }
+            if app.combat_feedback.playback_kind.is_none() {
+                break;
+            }
+            advance_time(&mut app, 16.0);
+        }
+
+        assert!(saw_expected_meta);
+        assert!(!saw_meta_countdown);
+        assert_eq!(app.displayed_player_meta(), expected_meta);
     }
 
     #[test]
@@ -15583,16 +17797,21 @@ mod tests {
         let layout = app.layout();
         let banner_rect = app.turn_banner_rect(&layout, "Enemy Turn");
         let font_size = combat_top_button_font_size(layout.low_hand_layout, layout.tile_scale);
+        let banner = app
+            .combat_feedback
+            .turn_banner
+            .as_ref()
+            .expect("enemy turn banner should be active");
+        let alpha = (banner.ttl_ms / banner.total_ms).clamp(0.0, 1.0);
+        let expected_stroke = ui_emphasize_tile_stroke(&rgba(banner.color, 0.78 * alpha));
+        let expected_fill = rgba(banner.color, UI_TILE_FILL_ALPHA * alpha);
         let banner_frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(banner_frame.contains(&format!(
-            "RECT|{:.2}|{:.2}|{:.2}|{:.2}|{:.2}|{}|",
-            banner_rect.x,
-            banner_rect.y,
-            banner_rect.w,
-            banner_rect.h,
-            BUTTON_RADIUS,
-            COLOR_TILE_FILL
-        )));
+        let banner_rects = frame_rect_entries(&banner_frame);
+        let banner_entry = find_frame_rect_entry(&banner_rects, banner_rect);
+        assert_eq!(banner_entry.radius, BUTTON_RADIUS);
+        assert_eq!(banner_entry.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(banner_entry.fill, expected_fill);
+        assert_eq!(banner_entry.stroke, expected_stroke);
         assert!(banner_frame.contains(&format!(
             "TEXT|{:.2}|{:.2}|{:.2}|center|",
             banner_rect.x + banner_rect.w * 0.5,
@@ -15609,7 +17828,218 @@ mod tests {
     }
 
     #[test]
-    fn player_panel_deck_counter_uses_unicode_arrow_in_both_languages() {
+    fn combat_action_buttons_use_scaled_font_and_padding() {
+        let mut app = active_combat_fixture();
+        app.debug_mode = true;
+
+        let layout = app.layout();
+        let font_size = combat_action_button_font_size(layout.low_hand_layout, layout.tile_scale);
+        let (pad_x, pad_y) = combat_action_button_padding(layout.tile_insets);
+        let menu_size = button_size(app.tr("Menu", "Menú"), font_size, pad_x, pad_y);
+        let end_turn_size =
+            button_size(app.tr("End Turn", "Fin del turno"), font_size, pad_x, pad_y);
+        let end_battle_size = button_size(
+            app.tr("End Battle", "Fin de batalla"),
+            font_size,
+            pad_x,
+            pad_y,
+        );
+
+        assert!((layout.menu_button.w - menu_size.0).abs() < 0.01);
+        assert!((layout.menu_button.h - menu_size.1).abs() < 0.01);
+        assert!((layout.end_turn_button.w - end_turn_size.0).abs() < 0.01);
+        assert!((layout.end_turn_button.h - end_turn_size.1).abs() < 0.01);
+
+        let end_battle_button = layout
+            .end_battle_button
+            .expect("debug mode should show End Battle");
+        assert!((end_battle_button.w - end_battle_size.0).abs() < 0.01);
+        assert!((end_battle_button.h - end_battle_size.1).abs() < 0.01);
+
+        let banner_rect = app.turn_banner_rect(&layout, "Enemy Turn");
+        assert!(layout.menu_button.h < banner_rect.h);
+        assert!(layout.end_turn_button.h < banner_rect.h);
+        assert!(end_battle_button.h < banner_rect.h);
+    }
+
+    #[test]
+    fn combat_hint_tile_uses_scaled_metrics_and_stays_centered() {
+        let app = active_combat_fixture();
+        let layout = app.layout();
+        let hint_rect = layout
+            .hint_rect
+            .expect("combat layout should include a hint tile");
+        let (hint_font_size, pad_x, pad_y) = hand_hint_metrics(layout.tile_scale);
+        let (message, _, _) = combat_hint_tile(&app, app.combat.hand_len());
+
+        assert!((hint_rect.w - (text_width(&message, hint_font_size) + pad_x * 2.0)).abs() < 0.01);
+        assert!((hint_rect.h - (hint_font_size + pad_y * 2.0)).abs() < 0.01);
+        assert!((hint_rect.x + hint_rect.w * 0.5 - app.logical_center_x()).abs() < 0.05);
+    }
+
+    #[test]
+    fn combat_action_tiles_match_hand_card_stroke_width() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let layout = app.layout();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let rect_entries = frame_rect_entries(&frame);
+        let hint_rect = layout
+            .hint_rect
+            .expect("combat layout should include a hint tile");
+        let menu = find_frame_rect_entry(&rect_entries, layout.menu_button);
+        let end_turn = find_frame_rect_entry(&rect_entries, layout.end_turn_button);
+        let hint = find_frame_rect_entry(&rect_entries, hint_rect);
+        let first_card = find_frame_rect_entry(&rect_entries, layout.hand_rects[0]);
+
+        assert_eq!(menu.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(end_turn.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(hint.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(first_card.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(menu.stroke_width, first_card.stroke_width);
+        assert_eq!(end_turn.stroke_width, first_card.stroke_width);
+        assert_eq!(hint.stroke_width, first_card.stroke_width);
+    }
+
+    #[test]
+    fn combat_tiles_use_tinted_fill_in_idle_state() {
+        let mut app = active_combat_fixture();
+        app.debug_mode = true;
+        app.rebuild_frame();
+
+        let layout = app.layout();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let rect_entries = frame_rect_entries(&frame);
+        let hint_rect = layout
+            .hint_rect
+            .expect("combat layout should include a hint tile");
+
+        let menu = find_frame_rect_entry(&rect_entries, layout.menu_button);
+        assert_eq!(menu.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(menu.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            menu.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_IDLE)
+        );
+
+        let end_turn = find_frame_rect_entry(&rect_entries, layout.end_turn_button);
+        assert_eq!(end_turn.fill, rgba((61, 245, 255), UI_TILE_FILL_ALPHA));
+        assert_eq!(end_turn.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            end_turn.stroke,
+            ui_emphasize_tile_stroke(COLOR_CYAN_STROKE_IDLE)
+        );
+
+        let end_battle = find_frame_rect_entry(
+            &rect_entries,
+            layout
+                .end_battle_button
+                .expect("debug mode should show End Battle"),
+        );
+        assert_eq!(end_battle.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(end_battle.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            end_battle.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_IDLE)
+        );
+
+        let hint = find_frame_rect_entry(&rect_entries, hint_rect);
+        assert_eq!(hint.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(hint.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            hint.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_CARD)
+        );
+
+        let enemy = find_frame_rect_entry(&rect_entries, primary_enemy_rect(&layout));
+        assert_eq!(enemy.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(enemy.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            enemy.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_PANEL)
+        );
+
+        let player = find_frame_rect_entry(&rect_entries, layout.player_rect);
+        assert_eq!(player.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(player.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            player.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_CARD)
+        );
+
+        let first_card = find_frame_rect_entry(&rect_entries, layout.hand_rects[0]);
+        assert_eq!(first_card.fill, rgba((51, 255, 102), UI_TILE_FILL_ALPHA));
+        assert_eq!(first_card.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            first_card.stroke,
+            ui_emphasize_tile_stroke(COLOR_GREEN_STROKE_CARD)
+        );
+    }
+
+    #[test]
+    fn combat_tiles_tint_fill_tracks_selected_target_state() {
+        let mut app = active_combat_fixture();
+        app.combat.deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+        assert!(app.combat.card_requires_enemy(0));
+        assert!(!app.combat.card_requires_enemy(1));
+
+        app.ui.selected_card = Some(0);
+        app.rebuild_frame();
+        let enemy_frame = String::from_utf8(app.frame.clone()).unwrap();
+        let enemy_rects = frame_rect_entries(&enemy_frame);
+        let enemy_layout = app.layout();
+        let targeted_enemy = find_frame_rect_entry(&enemy_rects, primary_enemy_rect(&enemy_layout));
+        assert_eq!(
+            targeted_enemy.fill,
+            rgba((216, 255, 61), UI_TILE_FILL_ALPHA)
+        );
+        assert_eq!(targeted_enemy.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            targeted_enemy.stroke,
+            ui_emphasize_tile_stroke(COLOR_LIME_STROKE_TARGET)
+        );
+        let selected_enemy_card = find_frame_rect_entry(&enemy_rects, enemy_layout.hand_rects[0]);
+        assert_eq!(
+            selected_enemy_card.fill,
+            rgba((216, 255, 61), UI_TILE_FILL_ALPHA)
+        );
+        assert_eq!(selected_enemy_card.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            selected_enemy_card.stroke,
+            ui_emphasize_tile_stroke(COLOR_LIME_STROKE_TARGET)
+        );
+
+        app.ui.selected_card = Some(1);
+        app.rebuild_frame();
+        let player_frame = String::from_utf8(app.frame.clone()).unwrap();
+        let player_rects = frame_rect_entries(&player_frame);
+        let player_layout = app.layout();
+        let targeted_player = find_frame_rect_entry(&player_rects, player_layout.player_rect);
+        assert_eq!(
+            targeted_player.fill,
+            rgba((61, 245, 255), UI_TILE_FILL_ALPHA)
+        );
+        assert_eq!(targeted_player.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            targeted_player.stroke,
+            ui_emphasize_tile_stroke(COLOR_CYAN_STROKE_TARGET)
+        );
+        let selected_player_card =
+            find_frame_rect_entry(&player_rects, player_layout.hand_rects[1]);
+        assert_eq!(
+            selected_player_card.fill,
+            rgba((61, 245, 255), UI_TILE_FILL_ALPHA)
+        );
+        assert_eq!(selected_player_card.stroke_width, UI_TILE_STROKE_WIDTH);
+        assert_eq!(
+            selected_player_card.stroke,
+            ui_emphasize_tile_stroke(COLOR_CYAN_STROKE_TARGET)
+        );
+    }
+
+    #[test]
+    fn combat_panels_use_tinted_svg_icons_in_both_languages() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 2;
         app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
@@ -15619,8 +18049,76 @@ mod tests {
         app.tick(0.0);
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(frame.contains("Deck 2→1"));
-        assert!(!frame.contains("Deck 2->1"));
+        let icons = frame_tinted_image_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let enemy_panel = primary_enemy_rect(&app.layout());
+
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_HEART_ICON_ASSET_PATH)
+                .count(),
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_SHIELD_ICON_ASSET_PATH)
+                .count(),
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_ENERGY_ICON_ASSET_PATH)
+                .count(),
+            1
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_DECK_ICON_ASSET_PATH)
+                .count(),
+            1
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_GREEN_TEXT)
+                .count(),
+            4
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_CYAN)
+                .count(),
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| {
+                    entry.src == COMBAT_HEART_ICON_ASSET_PATH
+                        && rect_contains_rect(player_panel, entry.rect)
+                })
+                .count(),
+            1
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| {
+                    entry.src == COMBAT_HEART_ICON_ASSET_PATH
+                        && rect_contains_rect(enemy_panel, entry.rect)
+                })
+                .count(),
+            1
+        );
+        assert!(icons.iter().all(|entry| {
+            rect_contains_rect(player_panel, entry.rect)
+                || rect_contains_rect(enemy_panel, entry.rect)
+        }));
 
         app.language = Language::Spanish;
         app.sync_combat_feedback_to_combat();
@@ -15628,8 +18126,345 @@ mod tests {
         app.tick(0.0);
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(frame.contains("Mazo 2→1"));
-        assert!(!frame.contains("Mazo 2->1"));
+        let icons = frame_tinted_image_entries(&frame);
+        assert_eq!(icons.len(), 6);
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_GREEN_TEXT)
+                .count(),
+            4
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_CYAN)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn player_panel_label_is_centered_and_seventy_five_percent_size_in_both_languages() {
+        let mut app = active_combat_fixture();
+        app.rebuild_frame();
+
+        let layout = app.layout();
+        let player_panel = layout.player_rect;
+        let expected_label_size =
+            13.5 * if layout.low_hand_layout { 1.14 } else { 1.0 } * layout.tile_scale;
+        let player_metrics = player_panel_metrics(
+            &app,
+            layout.low_hand_layout,
+            layout.tile_scale,
+            layout.tile_insets,
+        );
+        assert!((player_metrics.label_size - expected_label_size).abs() < 0.01);
+
+        let player_center_x = player_panel.x + player_panel.w * 0.5;
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let player_label = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "Player")
+            .expect("player panel should render the Player label");
+        assert_eq!(player_label.3, "center");
+        assert!((player_label.0 - player_center_x).abs() < 0.05);
+
+        app.language = Language::Spanish;
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let player_label = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "Jugador")
+            .expect("player panel should render the Jugador label");
+        assert_eq!(player_label.3, "center");
+        assert!((player_label.0 - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn player_panel_stats_and_meta_lines_are_centered() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 2;
+        app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.discard_pile = vec![CardId::QuickStrike];
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let icons = frame_tinted_image_entries(&frame);
+        let texts = frame_text_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let layout = app.layout();
+        let player_metrics = player_panel_metrics(
+            &app,
+            layout.low_hand_layout,
+            layout.tile_scale,
+            layout.tile_insets,
+        );
+        let player_center_x = player_panel.x + player_panel.w * 0.5;
+
+        let heart_icon = icons
+            .iter()
+            .find(|entry| {
+                entry.src == COMBAT_HEART_ICON_ASSET_PATH
+                    && rect_contains_rect(player_panel, entry.rect)
+            })
+            .expect("player panel should render a heart icon");
+        let stats_baseline_y = heart_icon.rect.y + heart_icon.rect.h;
+        let stats_line_end = texts
+            .iter()
+            .filter(|(x, y, _, _, _, _, _)| {
+                *x >= player_panel.x - 0.01
+                    && *x <= player_panel.x + player_panel.w + 0.01
+                    && *y >= player_panel.y - 0.01
+                    && *y <= player_panel.y + player_panel.h + 0.01
+                    && (*y - stats_baseline_y).abs() < 0.01
+            })
+            .map(|(x, _, size, _, _, _, text)| *x + text_width(text, *size))
+            .fold(0.0, f32::max);
+        let stats_center_x = (heart_icon.rect.x + stats_line_end) * 0.5;
+        assert!((stats_center_x - player_center_x).abs() < 0.05);
+
+        let energy_icon = icons
+            .iter()
+            .find(|entry| {
+                entry.src == COMBAT_ENERGY_ICON_ASSET_PATH
+                    && rect_contains_rect(player_panel, entry.rect)
+            })
+            .expect("player panel should render an energy icon");
+        let meta_center_x =
+            energy_icon.rect.x + combat_meta_line_width(&app, player_metrics.meta_size) * 0.5;
+        assert!((meta_center_x - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn player_panel_status_row_is_centered_when_present() {
+        let mut app = active_combat_fixture();
+        app.combat.player.fighter.statuses.focus = 1;
+        app.combat.player.fighter.statuses.rhythm = -1;
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let texts = frame_text_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let player_center_x = player_panel.x + player_panel.w * 0.5;
+        let status_entries = texts
+            .iter()
+            .filter(|(x, y, _, _, _, _, text)| {
+                *x >= player_panel.x - 0.01
+                    && *x <= player_panel.x + player_panel.w + 0.01
+                    && *y >= player_panel.y - 0.01
+                    && *y <= player_panel.y + player_panel.h + 0.01
+                    && (text == "Focus+1" || text == "Rhythm-1")
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(status_entries.len(), 2);
+        let row_start = status_entries
+            .iter()
+            .map(|(x, _, _, _, _, _, _)| *x)
+            .fold(f32::INFINITY, f32::min);
+        let row_end = status_entries
+            .iter()
+            .map(|(x, _, size, _, _, _, text)| *x + text_width(text, *size))
+            .fold(0.0, f32::max);
+        let row_center_x = (row_start + row_end) * 0.5;
+        assert!((row_center_x - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn player_panel_long_status_label_is_centered() {
+        let mut app = active_combat_fixture();
+        app.combat.player.fighter.statuses.momentum = 1;
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let texts = frame_text_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let player_center_x = player_panel.x + player_panel.w * 0.5;
+        let momentum_entry = texts
+            .iter()
+            .find(|(x, y, _, _, _, _, text)| {
+                *x >= player_panel.x - 0.01
+                    && *x <= player_panel.x + player_panel.w + 0.01
+                    && *y >= player_panel.y - 0.01
+                    && *y <= player_panel.y + player_panel.h + 0.01
+                    && text == "Momentum+1"
+            })
+            .expect("player panel should render Momentum+1");
+
+        let label_start = momentum_entry.0;
+        let label_end = momentum_entry.0 + text_width(&momentum_entry.6, momentum_entry.2);
+        let label_center_x = (label_start + label_end) * 0.5;
+        assert!((label_center_x - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn player_panel_status_row_wraps_after_two_labels() {
+        let mut app = active_combat_fixture();
+        app.combat.player.fighter.statuses.focus = 1;
+        app.combat.player.fighter.statuses.rhythm = -1;
+        app.combat.player.fighter.statuses.momentum = 1;
+        app.combat.player.fighter.statuses.bleed = 2;
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let texts = frame_text_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let mut status_entries = texts
+            .iter()
+            .filter(|(x, y, _, _, _, _, text)| {
+                *x >= player_panel.x - 0.01
+                    && *x <= player_panel.x + player_panel.w + 0.01
+                    && *y >= player_panel.y - 0.01
+                    && *y <= player_panel.y + player_panel.h + 0.01
+                    && matches!(
+                        text.as_str(),
+                        "Focus+1" | "Rhythm-1" | "Momentum+1" | "Bleed 2"
+                    )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(status_entries.len(), 4);
+        status_entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.total_cmp(&b.0)));
+
+        let mut rows: Vec<Vec<&FrameTextEntry>> = Vec::new();
+        for entry in status_entries {
+            if let Some(row) = rows
+                .iter_mut()
+                .find(|row| (row[0].1 - entry.1).abs() < 0.01)
+            {
+                row.push(entry);
+            } else {
+                rows.push(vec![entry]);
+            }
+        }
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.len() <= STATUS_ROW_MAX_COLUMNS));
+        assert!(rows.iter().all(|row| row.len() == 2));
+        assert!(rows[1][0].1 > rows[0][0].1);
+    }
+
+    #[test]
+    fn player_panel_does_not_render_playback_meta_text_and_keeps_meta_icons() {
+        let mut app = active_combat_fixture();
+        app.combat_feedback.playback_kind = Some(CombatPlaybackKind::EnemyTurn);
+        app.combat.player.energy = 2;
+        app.combat.player.max_energy = 3;
+        app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.discard_pile = vec![CardId::QuickStrike];
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let player_panel = app.layout().player_rect;
+        let panel_texts = frame_text_entries(&frame);
+        assert!(panel_texts.iter().all(|(x, y, _, _, _, _, text)| {
+            !(*x >= player_panel.x - 0.01
+                && *x <= player_panel.x + player_panel.w + 0.01
+                && *y >= player_panel.y - 0.01
+                && *y <= player_panel.y + player_panel.h + 0.01
+                && text == "Enemy turn resolving...")
+        }));
+
+        let panel_icons = frame_tinted_image_entries(&frame);
+        assert!(panel_icons.iter().any(|entry| {
+            entry.src == COMBAT_ENERGY_ICON_ASSET_PATH
+                && rect_contains_rect(player_panel, entry.rect)
+        }));
+        assert!(panel_icons.iter().any(|entry| {
+            entry.src == COMBAT_DECK_ICON_ASSET_PATH && rect_contains_rect(player_panel, entry.rect)
+        }));
+    }
+
+    #[test]
+    fn combat_panels_do_not_render_empty_status_placeholder_text() {
+        let mut app = active_combat_fixture();
+
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(!frame.contains("No active effects"));
+        assert!(!frame.contains("Sin efectos activos"));
+
+        app.language = Language::Spanish;
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(!frame.contains("No active effects"));
+        assert!(!frame.contains("Sin efectos activos"));
+    }
+
+    #[test]
+    fn combat_panels_collapse_empty_status_rows_and_move_following_content_up() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 2;
+        app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.discard_pile = vec![CardId::QuickStrike];
+        app.sync_combat_feedback_to_combat();
+        let tile_insets = tile_insets_for_card_width(CARD_WIDTH);
+
+        let player_metrics_without = player_panel_metrics(&app, false, 1.0, tile_insets);
+        let enemy_metrics_without = enemy_panel_metrics(&app, 0, false, 1.0, tile_insets);
+        assert_eq!(player_metrics_without.status_row_height, 0.0);
+        assert_eq!(enemy_metrics_without.status_row_height, 0.0);
+
+        app.rebuild_frame();
+        let frame_without = String::from_utf8(app.frame.clone()).unwrap();
+        let player_panel_y_without = app.layout().player_rect.y;
+        let player_meta_y_without = frame_tinted_image_entries(&frame_without)
+            .into_iter()
+            .find(|entry| entry.src == COMBAT_ENERGY_ICON_ASSET_PATH)
+            .map(|entry| entry.rect.y)
+            .unwrap();
+
+        app.combat.player.fighter.statuses.focus = -1;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.rhythm = -1;
+
+        let player_metrics_with = player_panel_metrics(&app, false, 1.0, tile_insets);
+        let enemy_metrics_with = enemy_panel_metrics(&app, 0, false, 1.0, tile_insets);
+        assert_eq!(
+            player_metrics_with.status_row_height,
+            player_metrics_with.status_size
+        );
+        assert_eq!(
+            enemy_metrics_with.status_row_height,
+            enemy_metrics_with.status_size
+        );
+        assert!(
+            (player_metrics_with.height
+                - player_metrics_without.height
+                - (player_metrics_with.status_size + player_metrics_with.line_gap))
+                .abs()
+                < 0.1
+        );
+        assert!(
+            (enemy_metrics_with.height
+                - enemy_metrics_without.height
+                - (enemy_metrics_with.status_size + enemy_metrics_with.line_gap))
+                .abs()
+                < 0.1
+        );
+
+        app.rebuild_frame();
+        let frame_with = String::from_utf8(app.frame.clone()).unwrap();
+        let player_panel_y_with = app.layout().player_rect.y;
+        let player_meta_y_with = frame_tinted_image_entries(&frame_with)
+            .into_iter()
+            .find(|entry| entry.src == COMBAT_ENERGY_ICON_ASSET_PATH)
+            .map(|entry| entry.rect.y)
+            .unwrap();
+
+        assert!(
+            player_meta_y_without - player_panel_y_without
+                < player_meta_y_with - player_panel_y_with
+        );
     }
 
     #[test]
@@ -15686,11 +18521,9 @@ mod tests {
         });
         advance_until(&mut app, |app| {
             app.combat_feedback
-                .active_stat
-                .as_ref()
-                .is_some_and(|active| {
-                    active.actor == Actor::Player && active.stat == CombatStat::Block
-                })
+                .active_stats
+                .iter()
+                .any(|active| active.actor == Actor::Player && active.stat == CombatStat::Block)
                 && app.combat_feedback.displayed.player.block > 0
         });
 
@@ -15777,14 +18610,14 @@ mod tests {
 
         app.rebuild_frame();
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(!frame.contains(localized_enemy_name(
-            EnemyProfileId::ScoutDrone,
-            Language::English
-        )));
-        assert!(frame.contains(localized_enemy_name(
-            EnemyProfileId::NeedlerDrone,
-            Language::English
-        )));
+        let sprites = frame_sprite_entries(&frame);
+        let expected_codes = enemy_sprite_codes(EnemyProfileId::NeedlerDrone);
+
+        assert_eq!(sprites.len(), expected_codes.len());
+        assert_eq!(
+            sprites.iter().map(|(code, _)| *code).collect::<Vec<_>>(),
+            expected_codes
+        );
     }
 
     #[test]
@@ -16473,8 +19306,8 @@ mod tests {
             app.screen,
             AppScreen::Result(CombatOutcome::Victory)
         ));
-        assert_eq!(app.dungeon.as_ref().unwrap().credits, 8);
-        assert!(app.log.iter().any(|entry| entry == "Gained 8 Credits."));
+        assert_eq!(app.dungeon.as_ref().unwrap().credits, 6);
+        assert!(app.log.iter().any(|entry| entry == "Gained 6 Credits."));
     }
 
     #[test]

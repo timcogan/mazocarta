@@ -13,16 +13,16 @@ use crate::rng::XorShift64;
 use std::collections::{BTreeMap, BTreeSet};
 
 const START_HP: i32 = DEFAULT_PLAYER_HP;
-const REST_HEAL: i32 = 8;
+const REST_HEAL: i32 = 6;
 const DUNGEON_LEVEL_COUNT: usize = 3;
 const MAP_COLUMNS: usize = 7;
 const MAP_REGULAR_DEPTHS: usize = 9;
 const MAP_MAX_SEGMENT_MERGES: usize = 2;
 const MAP_MAX_SEGMENTS_WITHOUT_BRIDGE: usize = 1;
 const MAP_MAX_BRIDGE_SPAN: usize = 2;
-const COMBAT_CREDITS_REWARD: u32 = 8;
-const ELITE_CREDITS_REWARD: u32 = 16;
-const BOSS_CREDITS_REWARD: u32 = 32;
+const COMBAT_CREDITS_REWARD: u32 = 6;
+const ELITE_CREDITS_REWARD: u32 = 14;
+const BOSS_CREDITS_REWARD: u32 = 28;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RoomKind {
@@ -208,14 +208,14 @@ fn level_profile(level: usize) -> LevelProfile {
             rest_roll: 180,
             force_elite_min_depth: 3,
             force_rest_min_depth: 5,
-            combat_hp_base: 40,
+            combat_hp_base: 42,
             combat_hp_per_depth: 6,
             combat_block: 2,
             combat_intent_shift: 2,
-            elite_hp_base: 60,
+            elite_hp_base: 64,
             elite_hp_per_depth: 7,
             elite_block: 7,
-            boss_hp: 104,
+            boss_hp: 108,
             boss_block: 12,
         },
     }
@@ -338,11 +338,17 @@ impl DungeonRun {
             .map(|node| node.kind)
     }
 
+    pub(crate) const fn rest_heal_cap() -> i32 {
+        REST_HEAL
+    }
+
+    pub(crate) fn room_seed_for(&self, node_id: usize) -> u64 {
+        level_seed(self.seed, self.current_level)
+            .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
+    }
+
     pub(crate) fn current_room_seed(&self) -> Option<u64> {
-        self.current_node.map(|node_id| {
-            level_seed(self.seed, self.current_level)
-                .wrapping_add((node_id as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        })
+        self.current_node.map(|node_id| self.room_seed_for(node_id))
     }
 
     pub(crate) fn current_encounter_setup(&self) -> Option<EncounterSetup> {
@@ -1474,7 +1480,7 @@ mod tests {
         let mut run = DungeonRun::new(TEST_RUN_SEED);
         run.player_hp = 20;
 
-        assert_eq!(run.rest_heal_amount(), 8);
+        assert_eq!(run.rest_heal_amount(), 6);
 
         run.player_hp = 29;
         assert_eq!(run.rest_heal_amount(), 3);
@@ -2327,7 +2333,7 @@ mod tests {
         assert_eq!(level_one_boss.enemies[0].block, 6);
         assert_eq!(level_two_boss.enemies[0].hp, 88);
         assert_eq!(level_two_boss.enemies[0].block, 10);
-        assert_eq!(level_three_boss.enemies[0].hp, 104);
+        assert_eq!(level_three_boss.enemies[0].hp, 108);
         assert_eq!(level_three_boss.enemies[0].block, 12);
     }
 

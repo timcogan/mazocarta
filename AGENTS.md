@@ -43,3 +43,9 @@
 - Mirror the existing history: short, imperative commit subjects such as `Improve map generation` or `Add reward after each battle`.
 - Keep commits focused on one gameplay, UI, or build concern.
 - PRs should explain the user-visible change, list validation performed, and include screenshots or a short recording when `web/` visuals or interactions change.
+
+## Pre-PR Checklist
+
+- Run the relevant validation for your change and note it in the PR, at minimum `cargo test`.
+- If you changed save/load behavior or saved-data semantics, confirm `SAVE_FORMAT_VERSION` and any migration or compatibility code are updated appropriately.
+- Double-check that local paths, personal information, or other private data has been removed from files included in the PR.

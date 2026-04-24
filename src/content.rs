@@ -1,98 +1,11 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CardId {
-    FlareSlash,
-    FlareSlashPlus,
-    GuardStep,
-    GuardStepPlus,
-    Slipstream,
-    SlipstreamPlus,
-    QuickStrike,
-    QuickStrikePlus,
-    Reinforce,
-    ReinforcePlus,
-    PressurePoint,
-    PressurePointPlus,
-    SunderingArc,
-    SunderingArcPlus,
-    TwinStrike,
-    TwinStrikePlus,
-    BarrierField,
-    BarrierFieldPlus,
-    TacticalBurst,
-    TacticalBurstPlus,
-    RazorNet,
-    RazorNetPlus,
-    BreachSignal,
-    BreachSignalPlus,
-    AnchorLoop,
-    AnchorLoopPlus,
-    ExecutionBeam,
-    ExecutionBeamPlus,
-    FortressMatrix,
-    FortressMatrixPlus,
-    ZeroPoint,
-    ZeroPointPlus,
-    PinpointJab,
-    PinpointJabPlus,
-    SignalTap,
-    SignalTapPlus,
-    BurstArray,
-    BurstArrayPlus,
-    CoverPulse,
-    CoverPulsePlus,
-    FracturePulse,
-    FracturePulsePlus,
-    VectorLock,
-    VectorLockPlus,
-    ChainBarrage,
-    ChainBarragePlus,
-    OverwatchGrid,
-    OverwatchGridPlus,
-    RiftDart,
-    RiftDartPlus,
-    MarkPulse,
-    MarkPulsePlus,
-    BraceCircuit,
-    BraceCircuitPlus,
-    FaultShot,
-    FaultShotPlus,
-    SeverArc,
-    SeverArcPlus,
-    Lockbreaker,
-    LockbreakerPlus,
-    CounterLattice,
-    CounterLatticePlus,
-    TerminalLoop,
-    TerminalLoopPlus,
-}
+mod cards;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CardTarget {
-    Enemy,
-    SelfOnly,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CardDef {
-    pub(crate) id: CardId,
-    pub(crate) name: &'static str,
-    pub(crate) cost: u8,
-    pub(crate) target: CardTarget,
-    pub(crate) description: &'static str,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RewardTier {
-    Combat,
-    Elite,
-    Boss,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ShopOffer {
-    pub(crate) card: CardId,
-    pub(crate) price: u32,
-}
+#[allow(unused_imports)]
+pub(crate) use cards::{
+    AxisKind, CardArchetype, CardDef, CardId, CardRequirement, CardTarget, CardTraits, RewardTier,
+    ShopOffer, all_base_cards, card_def, card_requirement, card_slug, resolve_card_slug,
+    reward_choices, reward_pool, shop_offers, starter_deck, upgraded_card,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EventId {
@@ -187,17 +100,27 @@ pub(crate) struct EnemySpriteDef {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EnemySpriteBounds {
+    pub(crate) left: u8,
+    pub(crate) top: u8,
+    pub(crate) width: u8,
+    pub(crate) height: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EnemyIntent {
     pub(crate) name: &'static str,
     pub(crate) summary: &'static str,
     pub(crate) damage: i32,
     pub(crate) hits: u8,
     pub(crate) gain_block: i32,
-    pub(crate) gain_strength: u8,
     pub(crate) prime_bleed: u8,
-    pub(crate) apply_expose: u8,
-    pub(crate) apply_weak: u8,
-    pub(crate) apply_frail: u8,
+    pub(crate) self_focus: i8,
+    pub(crate) self_rhythm: i8,
+    pub(crate) self_momentum: i8,
+    pub(crate) target_focus: i8,
+    pub(crate) target_rhythm: i8,
+    pub(crate) target_momentum: i8,
     pub(crate) apply_bleed: u8,
 }
 
@@ -235,576 +158,6 @@ pub(crate) fn localized_text<'a>(
     }
 }
 
-pub(crate) fn card_def(id: CardId) -> CardDef {
-    match id {
-        CardId::FlareSlash => CardDef {
-            id,
-            name: "Strike",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage.",
-        },
-        CardId::FlareSlashPlus => CardDef {
-            id,
-            name: "Strike+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 9 damage.",
-        },
-        CardId::GuardStep => CardDef {
-            id,
-            name: "Defend",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 5 Shield.",
-        },
-        CardId::GuardStepPlus => CardDef {
-            id,
-            name: "Defend+",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 8 Shield.",
-        },
-        CardId::Slipstream => CardDef {
-            id,
-            name: "Reposition",
-            cost: 0,
-            target: CardTarget::SelfOnly,
-            description: "Draw 1. Gain 2 Shield.",
-        },
-        CardId::SlipstreamPlus => CardDef {
-            id,
-            name: "Reposition+",
-            cost: 0,
-            target: CardTarget::SelfOnly,
-            description: "Draw 1. Gain 4 Shield.",
-        },
-        CardId::QuickStrike => CardDef {
-            id,
-            name: "Quick Strike",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 5 damage. Draw 1.",
-        },
-        CardId::QuickStrikePlus => CardDef {
-            id,
-            name: "Quick Strike+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 7 damage. Draw 1.",
-        },
-        CardId::PinpointJab => CardDef {
-            id,
-            name: "Pinpoint Jab",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 5 damage. Apply Bleed 1.",
-        },
-        CardId::PinpointJabPlus => CardDef {
-            id,
-            name: "Pinpoint Jab+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 7 damage. Apply Bleed 1.",
-        },
-        CardId::SignalTap => CardDef {
-            id,
-            name: "Signal Tap",
-            cost: 0,
-            target: CardTarget::Enemy,
-            description: "Apply 1 Vulnerable. Draw 1.",
-        },
-        CardId::SignalTapPlus => CardDef {
-            id,
-            name: "Signal Tap+",
-            cost: 0,
-            target: CardTarget::Enemy,
-            description: "Apply 1 Vulnerable. Draw 1. Gain 3 Shield.",
-        },
-        CardId::Reinforce => CardDef {
-            id,
-            name: "Reinforce",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 8 Shield.",
-        },
-        CardId::ReinforcePlus => CardDef {
-            id,
-            name: "Reinforce+",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 11 Shield.",
-        },
-        CardId::PressurePoint => CardDef {
-            id,
-            name: "Pressure Point",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 4 damage. Apply Weak 1.",
-        },
-        CardId::PressurePointPlus => CardDef {
-            id,
-            name: "Pressure Point+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage. Apply Weak 2.",
-        },
-        CardId::BurstArray => CardDef {
-            id,
-            name: "Burst Array",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 3 damage three times.",
-        },
-        CardId::BurstArrayPlus => CardDef {
-            id,
-            name: "Burst Array+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 4 damage three times.",
-        },
-        CardId::CoverPulse => CardDef {
-            id,
-            name: "Cover Pulse",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 6 Shield. Draw 1.",
-        },
-        CardId::CoverPulsePlus => CardDef {
-            id,
-            name: "Cover Pulse+",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 8 Shield. Draw 1.",
-        },
-        CardId::SunderingArc => CardDef {
-            id,
-            name: "Precise Strike",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 12 damage. Apply 1 Vulnerable.",
-        },
-        CardId::SunderingArcPlus => CardDef {
-            id,
-            name: "Precise Strike+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 16 damage. Apply 1 Vulnerable.",
-        },
-        CardId::TwinStrike => CardDef {
-            id,
-            name: "Twin Strike",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 4 damage twice.",
-        },
-        CardId::TwinStrikePlus => CardDef {
-            id,
-            name: "Twin Strike+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 5 damage twice.",
-        },
-        CardId::BarrierField => CardDef {
-            id,
-            name: "Barrier Field",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Gain 10 Shield. Apply Frail 1.",
-        },
-        CardId::BarrierFieldPlus => CardDef {
-            id,
-            name: "Barrier Field+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Gain 13 Shield. Apply Frail 2.",
-        },
-        CardId::TacticalBurst => CardDef {
-            id,
-            name: "Tactical Burst",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Draw 2. Gain Strength 1.",
-        },
-        CardId::TacticalBurstPlus => CardDef {
-            id,
-            name: "Tactical Burst+",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Draw 2. Gain Strength 2.",
-        },
-        CardId::RazorNet => CardDef {
-            id,
-            name: "Razor Net",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 4 damage twice. Apply Bleed 2.",
-        },
-        CardId::RazorNetPlus => CardDef {
-            id,
-            name: "Razor Net+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 5 damage twice. Apply Bleed 2.",
-        },
-        CardId::FracturePulse => CardDef {
-            id,
-            name: "Fracture Pulse",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 9 damage. Apply Bleed 3.",
-        },
-        CardId::FracturePulsePlus => CardDef {
-            id,
-            name: "Fracture Pulse+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 12 damage. Apply Bleed 3.",
-        },
-        CardId::VectorLock => CardDef {
-            id,
-            name: "Vector Lock",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage. Apply 2 Vulnerable. Gain 5 Shield.",
-        },
-        CardId::VectorLockPlus => CardDef {
-            id,
-            name: "Vector Lock+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 8 damage. Apply 2 Vulnerable. Gain 6 Shield.",
-        },
-        CardId::BreachSignal => CardDef {
-            id,
-            name: "Breach Signal",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 7 damage. Draw 1. Apply 2 Vulnerable.",
-        },
-        CardId::BreachSignalPlus => CardDef {
-            id,
-            name: "Breach Signal+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 9 damage. Draw 1. Apply 2 Vulnerable.",
-        },
-        CardId::AnchorLoop => CardDef {
-            id,
-            name: "Anchor Loop",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 14 Shield. Draw 2.",
-        },
-        CardId::AnchorLoopPlus => CardDef {
-            id,
-            name: "Anchor Loop+",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 17 Shield. Draw 2.",
-        },
-        CardId::ExecutionBeam => CardDef {
-            id,
-            name: "Execution Beam",
-            cost: 3,
-            target: CardTarget::Enemy,
-            description: "Deal 20 damage.",
-        },
-        CardId::ExecutionBeamPlus => CardDef {
-            id,
-            name: "Execution Beam+",
-            cost: 3,
-            target: CardTarget::Enemy,
-            description: "Deal 26 damage.",
-        },
-        CardId::ChainBarrage => CardDef {
-            id,
-            name: "Chain Barrage",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 8 damage twice. Apply Bleed 2.",
-        },
-        CardId::ChainBarragePlus => CardDef {
-            id,
-            name: "Chain Barrage+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 10 damage twice. Apply Bleed 2.",
-        },
-        CardId::FortressMatrix => CardDef {
-            id,
-            name: "Fortress Matrix",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 16 Shield. Draw 1.",
-        },
-        CardId::FortressMatrixPlus => CardDef {
-            id,
-            name: "Fortress Matrix+",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 20 Shield. Draw 1.",
-        },
-        CardId::OverwatchGrid => CardDef {
-            id,
-            name: "Overwatch Grid",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 18 Shield. Draw 2.",
-        },
-        CardId::OverwatchGridPlus => CardDef {
-            id,
-            name: "Overwatch Grid+",
-            cost: 2,
-            target: CardTarget::SelfOnly,
-            description: "Gain 22 Shield. Draw 2.",
-        },
-        CardId::RiftDart => CardDef {
-            id,
-            name: "Rift Dart",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 4 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
-        },
-        CardId::RiftDartPlus => CardDef {
-            id,
-            name: "Rift Dart+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
-        },
-        CardId::MarkPulse => CardDef {
-            id,
-            name: "Mark Pulse",
-            cost: 0,
-            target: CardTarget::Enemy,
-            description: "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield.",
-        },
-        CardId::MarkPulsePlus => CardDef {
-            id,
-            name: "Mark Pulse+",
-            cost: 0,
-            target: CardTarget::Enemy,
-            description: "Apply 1 Vulnerable. If target has Bleed, gain 6 Shield.",
-        },
-        CardId::BraceCircuit => CardDef {
-            id,
-            name: "Brace Circuit",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 6 Shield. If you already have Shield, draw 1.",
-        },
-        CardId::BraceCircuitPlus => CardDef {
-            id,
-            name: "Brace Circuit+",
-            cost: 1,
-            target: CardTarget::SelfOnly,
-            description: "Gain 8 Shield. If you already have Shield, draw 1.",
-        },
-        CardId::FaultShot => CardDef {
-            id,
-            name: "Fault Shot",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 5 damage. If target has Weak or Frail, gain Strength 1.",
-        },
-        CardId::FaultShotPlus => CardDef {
-            id,
-            name: "Fault Shot+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 7 damage. If target has Weak or Frail, gain Strength 1.",
-        },
-        CardId::SeverArc => CardDef {
-            id,
-            name: "Sever Arc",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 8 damage. If target has Bleed, deal 8 damage again.",
-        },
-        CardId::SeverArcPlus => CardDef {
-            id,
-            name: "Sever Arc+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 10 damage. If target has Bleed, deal 10 damage again.",
-        },
-        CardId::Lockbreaker => CardDef {
-            id,
-            name: "Lockbreaker",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield.",
-        },
-        CardId::LockbreakerPlus => CardDef {
-            id,
-            name: "Lockbreaker+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 8 damage. If target has Vulnerable, apply Weak 1 and gain 8 Shield.",
-        },
-        CardId::CounterLattice => CardDef {
-            id,
-            name: "Counter Lattice",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 6 damage. If target has Weak, gain 1 Energy.",
-        },
-        CardId::CounterLatticePlus => CardDef {
-            id,
-            name: "Counter Lattice+",
-            cost: 1,
-            target: CardTarget::Enemy,
-            description: "Deal 8 damage. If target has Weak, gain 1 Energy.",
-        },
-        CardId::TerminalLoop => CardDef {
-            id,
-            name: "Terminal Loop",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 12 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 1.",
-        },
-        CardId::TerminalLoopPlus => CardDef {
-            id,
-            name: "Terminal Loop+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2.",
-        },
-        CardId::ZeroPoint => CardDef {
-            id,
-            name: "Zero Point",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 10 damage. Draw 1. Apply 2 Vulnerable.",
-        },
-        CardId::ZeroPointPlus => CardDef {
-            id,
-            name: "Zero Point+",
-            cost: 2,
-            target: CardTarget::Enemy,
-            description: "Deal 14 damage. Draw 1. Apply 2 Vulnerable.",
-        },
-    }
-}
-
-pub(crate) fn upgraded_card(id: CardId) -> Option<CardId> {
-    match id {
-        CardId::FlareSlash => Some(CardId::FlareSlashPlus),
-        CardId::GuardStep => Some(CardId::GuardStepPlus),
-        CardId::Slipstream => Some(CardId::SlipstreamPlus),
-        CardId::QuickStrike => Some(CardId::QuickStrikePlus),
-        CardId::PinpointJab => Some(CardId::PinpointJabPlus),
-        CardId::SignalTap => Some(CardId::SignalTapPlus),
-        CardId::Reinforce => Some(CardId::ReinforcePlus),
-        CardId::PressurePoint => Some(CardId::PressurePointPlus),
-        CardId::BurstArray => Some(CardId::BurstArrayPlus),
-        CardId::CoverPulse => Some(CardId::CoverPulsePlus),
-        CardId::SunderingArc => Some(CardId::SunderingArcPlus),
-        CardId::TwinStrike => Some(CardId::TwinStrikePlus),
-        CardId::BarrierField => Some(CardId::BarrierFieldPlus),
-        CardId::TacticalBurst => Some(CardId::TacticalBurstPlus),
-        CardId::RazorNet => Some(CardId::RazorNetPlus),
-        CardId::FracturePulse => Some(CardId::FracturePulsePlus),
-        CardId::VectorLock => Some(CardId::VectorLockPlus),
-        CardId::BreachSignal => Some(CardId::BreachSignalPlus),
-        CardId::AnchorLoop => Some(CardId::AnchorLoopPlus),
-        CardId::ExecutionBeam => Some(CardId::ExecutionBeamPlus),
-        CardId::ChainBarrage => Some(CardId::ChainBarragePlus),
-        CardId::FortressMatrix => Some(CardId::FortressMatrixPlus),
-        CardId::OverwatchGrid => Some(CardId::OverwatchGridPlus),
-        CardId::RiftDart => Some(CardId::RiftDartPlus),
-        CardId::MarkPulse => Some(CardId::MarkPulsePlus),
-        CardId::BraceCircuit => Some(CardId::BraceCircuitPlus),
-        CardId::FaultShot => Some(CardId::FaultShotPlus),
-        CardId::SeverArc => Some(CardId::SeverArcPlus),
-        CardId::Lockbreaker => Some(CardId::LockbreakerPlus),
-        CardId::CounterLattice => Some(CardId::CounterLatticePlus),
-        CardId::TerminalLoop => Some(CardId::TerminalLoopPlus),
-        CardId::ZeroPoint => Some(CardId::ZeroPointPlus),
-        CardId::FlareSlashPlus
-        | CardId::GuardStepPlus
-        | CardId::SlipstreamPlus
-        | CardId::QuickStrikePlus
-        | CardId::PinpointJabPlus
-        | CardId::SignalTapPlus
-        | CardId::ReinforcePlus
-        | CardId::PressurePointPlus
-        | CardId::BurstArrayPlus
-        | CardId::CoverPulsePlus
-        | CardId::SunderingArcPlus
-        | CardId::TwinStrikePlus
-        | CardId::BarrierFieldPlus
-        | CardId::TacticalBurstPlus
-        | CardId::RazorNetPlus
-        | CardId::FracturePulsePlus
-        | CardId::VectorLockPlus
-        | CardId::BreachSignalPlus
-        | CardId::AnchorLoopPlus
-        | CardId::ExecutionBeamPlus
-        | CardId::ChainBarragePlus
-        | CardId::FortressMatrixPlus
-        | CardId::OverwatchGridPlus
-        | CardId::RiftDartPlus
-        | CardId::MarkPulsePlus
-        | CardId::BraceCircuitPlus
-        | CardId::FaultShotPlus
-        | CardId::SeverArcPlus
-        | CardId::LockbreakerPlus
-        | CardId::CounterLatticePlus
-        | CardId::TerminalLoopPlus
-        | CardId::ZeroPointPlus => None,
-    }
-}
-
-const BASE_CARD_CATALOG: &[CardId] = &[
-    CardId::FlareSlash,
-    CardId::GuardStep,
-    CardId::Slipstream,
-    CardId::QuickStrike,
-    CardId::PinpointJab,
-    CardId::SignalTap,
-    CardId::Reinforce,
-    CardId::PressurePoint,
-    CardId::BurstArray,
-    CardId::CoverPulse,
-    CardId::SunderingArc,
-    CardId::TwinStrike,
-    CardId::BarrierField,
-    CardId::TacticalBurst,
-    CardId::RazorNet,
-    CardId::FracturePulse,
-    CardId::VectorLock,
-    CardId::BreachSignal,
-    CardId::AnchorLoop,
-    CardId::ExecutionBeam,
-    CardId::ChainBarrage,
-    CardId::FortressMatrix,
-    CardId::OverwatchGrid,
-    CardId::ZeroPoint,
-    CardId::RiftDart,
-    CardId::MarkPulse,
-    CardId::BraceCircuit,
-    CardId::FaultShot,
-    CardId::SeverArc,
-    CardId::Lockbreaker,
-    CardId::CounterLattice,
-    CardId::TerminalLoop,
-];
-
-pub(crate) fn all_base_cards() -> &'static [CardId] {
-    BASE_CARD_CATALOG
-}
-
-pub(crate) fn starter_deck() -> Vec<CardId> {
-    let mut cards = Vec::with_capacity(12);
-    cards.extend(std::iter::repeat_n(CardId::FlareSlash, 5));
-    cards.extend(std::iter::repeat_n(CardId::GuardStep, 4));
-    cards.extend(std::iter::repeat_n(CardId::Slipstream, 2));
-    cards.push(CardId::SunderingArc);
-    cards
-}
-
 pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
     match id {
         ModuleId::AegisDrive => ModuleDef {
@@ -815,22 +168,22 @@ pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
         ModuleId::TargetingRelay => ModuleDef {
             id,
             name: "Targeting Relay",
-            description: "Start each combat by applying Vulnerable 1 to the enemy.",
+            description: "Start each combat with Focus +1.",
         },
         ModuleId::Nanoforge => ModuleDef {
             id,
             name: "Nanoforge",
-            description: "After each victory, recover 3 HP.",
+            description: "After each victory, recover 2 HP.",
         },
         ModuleId::CapacitorBank => ModuleDef {
             id,
             name: "Capacitor Bank",
-            description: "Start each combat with Strength 1.",
+            description: "Start each combat with Momentum +1.",
         },
         ModuleId::PrismScope => ModuleDef {
             id,
             name: "Prism Scope",
-            description: "Start each combat by applying Vulnerable 1 to all enemies.",
+            description: "Start each combat by applying Rhythm -1 to all enemies.",
         },
         ModuleId::SalvageLedger => ModuleDef {
             id,
@@ -845,7 +198,7 @@ pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
         ModuleId::SuppressionField => ModuleDef {
             id,
             name: "Suppression Field",
-            description: "Start each combat by applying Weak 1 to all enemies.",
+            description: "Start each combat by applying Focus -1 to all enemies.",
         },
         ModuleId::RecoveryMatrix => ModuleDef {
             id,
@@ -879,123 +232,6 @@ pub(crate) fn boss_module_choices(boss_level: usize) -> Vec<ModuleId> {
             ModuleId::SuppressionField,
             ModuleId::RecoveryMatrix,
         ],
-    }
-}
-
-pub(crate) fn reward_choices(seed: u64, tier: RewardTier, level: usize) -> Vec<CardId> {
-    let mut cards = reward_pool(tier, level).to_vec();
-    cards.sort_by_key(|card| reward_roll_key(seed, *card));
-    cards.truncate(3);
-    cards
-}
-
-pub(crate) fn shop_offers(seed: u64, level: usize) -> Vec<ShopOffer> {
-    let mut chosen = Vec::new();
-    let mut offers = Vec::with_capacity(3);
-
-    for (index, tier) in shop_offer_tiers(level).into_iter().enumerate() {
-        let offer_seed = seed ^ (index as u64 + 1).wrapping_mul(0xD6E8_FD50_19E3_7C4B);
-        let mut cards = reward_pool(tier, level).to_vec();
-        cards.sort_by_key(|card| reward_roll_key(offer_seed, *card));
-        let card = cards
-            .iter()
-            .copied()
-            .find(|card| !chosen.contains(card))
-            .or_else(|| cards.first().copied())
-            .expect("shop tier should always have at least one card");
-        chosen.push(card);
-        offers.push(ShopOffer {
-            card,
-            price: shop_price_for_tier(tier),
-        });
-    }
-
-    offers
-}
-
-fn reward_pool(tier: RewardTier, level: usize) -> &'static [CardId] {
-    match tier {
-        RewardTier::Combat => &[
-            CardId::FlareSlash,
-            CardId::GuardStep,
-            CardId::Slipstream,
-            CardId::QuickStrike,
-            CardId::PinpointJab,
-            CardId::SignalTap,
-            CardId::Reinforce,
-            CardId::PressurePoint,
-            CardId::BurstArray,
-            CardId::CoverPulse,
-            CardId::RiftDart,
-            CardId::MarkPulse,
-            CardId::BraceCircuit,
-            CardId::FaultShot,
-        ],
-        RewardTier::Elite => match level.clamp(1, 3) {
-            1 => &[
-                CardId::SunderingArc,
-                CardId::TwinStrike,
-                CardId::BarrierField,
-                CardId::TacticalBurst,
-                CardId::RazorNet,
-                CardId::FracturePulse,
-                CardId::VectorLock,
-                CardId::SeverArc,
-                CardId::Lockbreaker,
-                CardId::CounterLattice,
-            ],
-            2 => &[
-                CardId::SunderingArc,
-                CardId::TwinStrike,
-                CardId::BarrierField,
-                CardId::TacticalBurst,
-                CardId::RazorNet,
-                CardId::FracturePulse,
-                CardId::VectorLock,
-                CardId::SeverArc,
-                CardId::Lockbreaker,
-                CardId::CounterLattice,
-                CardId::BreachSignal,
-            ],
-            _ => &[
-                CardId::SunderingArc,
-                CardId::TwinStrike,
-                CardId::BarrierField,
-                CardId::TacticalBurst,
-                CardId::RazorNet,
-                CardId::FracturePulse,
-                CardId::VectorLock,
-                CardId::SeverArc,
-                CardId::Lockbreaker,
-                CardId::CounterLattice,
-                CardId::BreachSignal,
-                CardId::AnchorLoop,
-            ],
-        },
-        RewardTier::Boss => &[
-            CardId::ExecutionBeam,
-            CardId::ChainBarrage,
-            CardId::FortressMatrix,
-            CardId::OverwatchGrid,
-            CardId::TerminalLoop,
-            CardId::ZeroPoint,
-        ],
-    }
-}
-
-fn shop_offer_tiers(level: usize) -> [RewardTier; 3] {
-    match level.clamp(1, 3) {
-        1 => [RewardTier::Combat, RewardTier::Elite, RewardTier::Elite],
-        2 => [RewardTier::Combat, RewardTier::Elite, RewardTier::Boss],
-        _ => [RewardTier::Elite, RewardTier::Elite, RewardTier::Boss],
-    }
-}
-
-pub(crate) fn shop_price_for_tier(tier: RewardTier) -> u32 {
-    match tier {
-        RewardTier::Combat => 16,
-        RewardTier::Elite => 24,
-        RewardTier::Boss => 40,
     }
 }
 
@@ -1142,394 +378,11 @@ pub(crate) fn event_choice_body(
 }
 
 pub(crate) fn localized_card_def(id: CardId, language: Language) -> CardDef {
-    let mut def = card_def(id);
-    def.name = localized_card_name(id, language);
-    def.description = localized_card_description(id, language);
-    def
+    cards::localized_card_def(id, language)
 }
 
 pub(crate) fn localized_card_name(id: CardId, language: Language) -> &'static str {
-    match id {
-        CardId::FlareSlash => localized_text(language, "Strike", "Golpe"),
-        CardId::FlareSlashPlus => localized_text(language, "Strike+", "Golpe+"),
-        CardId::GuardStep => localized_text(language, "Defend", "Defensa"),
-        CardId::GuardStepPlus => localized_text(language, "Defend+", "Defensa+"),
-        CardId::Slipstream => localized_text(language, "Reposition", "Reposición"),
-        CardId::SlipstreamPlus => localized_text(language, "Reposition+", "Reposición+"),
-        CardId::QuickStrike => localized_text(language, "Quick Strike", "Golpe Veloz"),
-        CardId::QuickStrikePlus => localized_text(language, "Quick Strike+", "Golpe Veloz+"),
-        CardId::PinpointJab => localized_text(language, "Pinpoint Jab", "Golpe Certero"),
-        CardId::PinpointJabPlus => localized_text(language, "Pinpoint Jab+", "Golpe Certero+"),
-        CardId::SignalTap => localized_text(language, "Signal Tap", "Pulso de Señal"),
-        CardId::SignalTapPlus => localized_text(language, "Signal Tap+", "Pulso de Señal+"),
-        CardId::Reinforce => localized_text(language, "Reinforce", "Refuerzo"),
-        CardId::ReinforcePlus => localized_text(language, "Reinforce+", "Refuerzo+"),
-        CardId::PressurePoint => localized_text(language, "Pressure Point", "Punto de Presión"),
-        CardId::PressurePointPlus => {
-            localized_text(language, "Pressure Point+", "Punto de Presión+")
-        }
-        CardId::BurstArray => localized_text(language, "Burst Array", "Ráfaga en Serie"),
-        CardId::BurstArrayPlus => localized_text(language, "Burst Array+", "Ráfaga en Serie+"),
-        CardId::CoverPulse => localized_text(language, "Cover Pulse", "Pulso de Cobertura"),
-        CardId::CoverPulsePlus => localized_text(language, "Cover Pulse+", "Pulso de Cobertura+"),
-        CardId::SunderingArc => localized_text(language, "Precise Strike", "Golpe Preciso"),
-        CardId::SunderingArcPlus => localized_text(language, "Precise Strike+", "Golpe Preciso+"),
-        CardId::TwinStrike => localized_text(language, "Twin Strike", "Golpe Doble"),
-        CardId::TwinStrikePlus => localized_text(language, "Twin Strike+", "Golpe Doble+"),
-        CardId::BarrierField => localized_text(language, "Barrier Field", "Campo de Barrera"),
-        CardId::BarrierFieldPlus => localized_text(language, "Barrier Field+", "Campo de Barrera+"),
-        CardId::TacticalBurst => localized_text(language, "Tactical Burst", "Impulso Táctico"),
-        CardId::TacticalBurstPlus => {
-            localized_text(language, "Tactical Burst+", "Impulso Táctico+")
-        }
-        CardId::RazorNet => localized_text(language, "Razor Net", "Red Cortante"),
-        CardId::RazorNetPlus => localized_text(language, "Razor Net+", "Red Cortante+"),
-        CardId::FracturePulse => localized_text(language, "Fracture Pulse", "Pulso de Fractura"),
-        CardId::FracturePulsePlus => {
-            localized_text(language, "Fracture Pulse+", "Pulso de Fractura+")
-        }
-        CardId::VectorLock => localized_text(language, "Vector Lock", "Bloqueo Vectorial"),
-        CardId::VectorLockPlus => localized_text(language, "Vector Lock+", "Bloqueo Vectorial+"),
-        CardId::BreachSignal => localized_text(language, "Breach Signal", "Señal de Brecha"),
-        CardId::BreachSignalPlus => localized_text(language, "Breach Signal+", "Señal de Brecha+"),
-        CardId::AnchorLoop => localized_text(language, "Anchor Loop", "Bucle de Anclaje"),
-        CardId::AnchorLoopPlus => localized_text(language, "Anchor Loop+", "Bucle de Anclaje+"),
-        CardId::ExecutionBeam => localized_text(language, "Execution Beam", "Rayo de Ejecución"),
-        CardId::ExecutionBeamPlus => {
-            localized_text(language, "Execution Beam+", "Rayo de Ejecución+")
-        }
-        CardId::ChainBarrage => localized_text(language, "Chain Barrage", "Andanada en Cadena"),
-        CardId::ChainBarragePlus => {
-            localized_text(language, "Chain Barrage+", "Andanada en Cadena+")
-        }
-        CardId::FortressMatrix => {
-            localized_text(language, "Fortress Matrix", "Matriz de Fortaleza")
-        }
-        CardId::FortressMatrixPlus => {
-            localized_text(language, "Fortress Matrix+", "Matriz de Fortaleza+")
-        }
-        CardId::OverwatchGrid => localized_text(language, "Overwatch Grid", "Red de Vigilancia"),
-        CardId::OverwatchGridPlus => {
-            localized_text(language, "Overwatch Grid+", "Red de Vigilancia+")
-        }
-        CardId::RiftDart => localized_text(language, "Rift Dart", "Dardo de Brecha"),
-        CardId::RiftDartPlus => localized_text(language, "Rift Dart+", "Dardo de Brecha+"),
-        CardId::MarkPulse => localized_text(language, "Mark Pulse", "Pulso de Marca"),
-        CardId::MarkPulsePlus => localized_text(language, "Mark Pulse+", "Pulso de Marca+"),
-        CardId::BraceCircuit => localized_text(language, "Brace Circuit", "Circuito de Refuerzo"),
-        CardId::BraceCircuitPlus => {
-            localized_text(language, "Brace Circuit+", "Circuito de Refuerzo+")
-        }
-        CardId::FaultShot => localized_text(language, "Fault Shot", "Disparo de Falla"),
-        CardId::FaultShotPlus => localized_text(language, "Fault Shot+", "Disparo de Falla+"),
-        CardId::SeverArc => localized_text(language, "Sever Arc", "Arco de Corte"),
-        CardId::SeverArcPlus => localized_text(language, "Sever Arc+", "Arco de Corte+"),
-        CardId::Lockbreaker => localized_text(language, "Lockbreaker", "Rompebloqueo"),
-        CardId::LockbreakerPlus => localized_text(language, "Lockbreaker+", "Rompebloqueo+"),
-        CardId::CounterLattice => localized_text(language, "Counter Lattice", "Trama de Respuesta"),
-        CardId::CounterLatticePlus => {
-            localized_text(language, "Counter Lattice+", "Trama de Respuesta+")
-        }
-        CardId::TerminalLoop => localized_text(language, "Terminal Loop", "Bucle Terminal"),
-        CardId::TerminalLoopPlus => localized_text(language, "Terminal Loop+", "Bucle Terminal+"),
-        CardId::ZeroPoint => localized_text(language, "Zero Point", "Punto Cero"),
-        CardId::ZeroPointPlus => localized_text(language, "Zero Point+", "Punto Cero+"),
-    }
-}
-
-pub(crate) fn localized_card_description(id: CardId, language: Language) -> &'static str {
-    match id {
-        CardId::FlareSlash => localized_text(language, "Deal 6 damage.", "Inflige 6 de daño."),
-        CardId::FlareSlashPlus => localized_text(language, "Deal 9 damage.", "Inflige 9 de daño."),
-        CardId::GuardStep => localized_text(language, "Gain 5 Shield.", "Gana 5 de Escudo."),
-        CardId::GuardStepPlus => localized_text(language, "Gain 8 Shield.", "Gana 8 de Escudo."),
-        CardId::Slipstream => localized_text(
-            language,
-            "Draw 1. Gain 2 Shield.",
-            "Roba 1. Gana 2 de Escudo.",
-        ),
-        CardId::SlipstreamPlus => localized_text(
-            language,
-            "Draw 1. Gain 4 Shield.",
-            "Roba 1. Gana 4 de Escudo.",
-        ),
-        CardId::QuickStrike => localized_text(
-            language,
-            "Deal 5 damage. Draw 1.",
-            "Inflige 5 de daño. Roba 1.",
-        ),
-        CardId::QuickStrikePlus => localized_text(
-            language,
-            "Deal 7 damage. Draw 1.",
-            "Inflige 7 de daño. Roba 1.",
-        ),
-        CardId::PinpointJab => localized_text(
-            language,
-            "Deal 5 damage. Apply Bleed 1.",
-            "Inflige 5 de daño. Aplica Sangrado 1.",
-        ),
-        CardId::PinpointJabPlus => localized_text(
-            language,
-            "Deal 7 damage. Apply Bleed 1.",
-            "Inflige 7 de daño. Aplica Sangrado 1.",
-        ),
-        CardId::SignalTap => localized_text(
-            language,
-            "Apply 1 Vulnerable. Draw 1.",
-            "Aplica Vulnerable 1. Roba 1.",
-        ),
-        CardId::SignalTapPlus => localized_text(
-            language,
-            "Apply 1 Vulnerable. Draw 1. Gain 3 Shield.",
-            "Aplica Vulnerable 1. Roba 1. Gana 3 de Escudo.",
-        ),
-        CardId::Reinforce => localized_text(language, "Gain 8 Shield.", "Gana 8 de Escudo."),
-        CardId::ReinforcePlus => localized_text(language, "Gain 11 Shield.", "Gana 11 de Escudo."),
-        CardId::PressurePoint => localized_text(
-            language,
-            "Deal 4 damage. Apply Weak 1.",
-            "Inflige 4 de daño. Aplica Débil 1.",
-        ),
-        CardId::PressurePointPlus => localized_text(
-            language,
-            "Deal 6 damage. Apply Weak 2.",
-            "Inflige 6 de daño. Aplica Débil 2.",
-        ),
-        CardId::BurstArray => localized_text(
-            language,
-            "Deal 3 damage three times.",
-            "Inflige 3 de daño tres veces.",
-        ),
-        CardId::BurstArrayPlus => localized_text(
-            language,
-            "Deal 4 damage three times.",
-            "Inflige 4 de daño tres veces.",
-        ),
-        CardId::CoverPulse => localized_text(
-            language,
-            "Gain 6 Shield. Draw 1.",
-            "Gana 6 de Escudo. Roba 1.",
-        ),
-        CardId::CoverPulsePlus => localized_text(
-            language,
-            "Gain 8 Shield. Draw 1.",
-            "Gana 8 de Escudo. Roba 1.",
-        ),
-        CardId::SunderingArc => localized_text(
-            language,
-            "Deal 12 damage. Apply 1 Vulnerable.",
-            "Inflige 12 de daño. Aplica Vulnerable 1.",
-        ),
-        CardId::SunderingArcPlus => localized_text(
-            language,
-            "Deal 16 damage. Apply 1 Vulnerable.",
-            "Inflige 16 de daño. Aplica Vulnerable 1.",
-        ),
-        CardId::TwinStrike => localized_text(
-            language,
-            "Deal 4 damage twice.",
-            "Inflige 4 de daño dos veces.",
-        ),
-        CardId::TwinStrikePlus => localized_text(
-            language,
-            "Deal 5 damage twice.",
-            "Inflige 5 de daño dos veces.",
-        ),
-        CardId::BarrierField => localized_text(
-            language,
-            "Gain 10 Shield. Apply Frail 1.",
-            "Gana 10 de Escudo. Aplica Frágil 1.",
-        ),
-        CardId::BarrierFieldPlus => localized_text(
-            language,
-            "Gain 13 Shield. Apply Frail 2.",
-            "Gana 13 de Escudo. Aplica Frágil 2.",
-        ),
-        CardId::TacticalBurst => localized_text(
-            language,
-            "Draw 2. Gain Strength 1.",
-            "Roba 2. Gana Fuerza 1.",
-        ),
-        CardId::TacticalBurstPlus => localized_text(
-            language,
-            "Draw 2. Gain Strength 2.",
-            "Roba 2. Gana Fuerza 2.",
-        ),
-        CardId::RazorNet => localized_text(
-            language,
-            "Deal 4 damage twice. Apply Bleed 2.",
-            "Inflige 4 de daño dos veces. Aplica Sangrado 2.",
-        ),
-        CardId::RazorNetPlus => localized_text(
-            language,
-            "Deal 5 damage twice. Apply Bleed 2.",
-            "Inflige 5 de daño dos veces. Aplica Sangrado 2.",
-        ),
-        CardId::FracturePulse => localized_text(
-            language,
-            "Deal 9 damage. Apply Bleed 3.",
-            "Inflige 9 de daño. Aplica Sangrado 3.",
-        ),
-        CardId::FracturePulsePlus => localized_text(
-            language,
-            "Deal 12 damage. Apply Bleed 3.",
-            "Inflige 12 de daño. Aplica Sangrado 3.",
-        ),
-        CardId::VectorLock => localized_text(
-            language,
-            "Deal 6 damage. Apply 2 Vulnerable. Gain 5 Shield.",
-            "Inflige 6 de daño. Aplica Vulnerable 2. Gana 5 de Escudo.",
-        ),
-        CardId::VectorLockPlus => localized_text(
-            language,
-            "Deal 8 damage. Apply 2 Vulnerable. Gain 6 Shield.",
-            "Inflige 8 de daño. Aplica Vulnerable 2. Gana 6 de Escudo.",
-        ),
-        CardId::BreachSignal => localized_text(
-            language,
-            "Deal 7 damage. Draw 1. Apply 2 Vulnerable.",
-            "Inflige 7 de daño. Roba 1. Aplica Vulnerable 2.",
-        ),
-        CardId::BreachSignalPlus => localized_text(
-            language,
-            "Deal 9 damage. Draw 1. Apply 2 Vulnerable.",
-            "Inflige 9 de daño. Roba 1. Aplica Vulnerable 2.",
-        ),
-        CardId::AnchorLoop => localized_text(
-            language,
-            "Gain 14 Shield. Draw 2.",
-            "Gana 14 de Escudo. Roba 2.",
-        ),
-        CardId::AnchorLoopPlus => localized_text(
-            language,
-            "Gain 17 Shield. Draw 2.",
-            "Gana 17 de Escudo. Roba 2.",
-        ),
-        CardId::ExecutionBeam => localized_text(language, "Deal 20 damage.", "Inflige 20 de daño."),
-        CardId::ExecutionBeamPlus => {
-            localized_text(language, "Deal 26 damage.", "Inflige 26 de daño.")
-        }
-        CardId::ChainBarrage => localized_text(
-            language,
-            "Deal 8 damage twice. Apply Bleed 2.",
-            "Inflige 8 de daño dos veces. Aplica Sangrado 2.",
-        ),
-        CardId::ChainBarragePlus => localized_text(
-            language,
-            "Deal 10 damage twice. Apply Bleed 2.",
-            "Inflige 10 de daño dos veces. Aplica Sangrado 2.",
-        ),
-        CardId::FortressMatrix => localized_text(
-            language,
-            "Gain 16 Shield. Draw 1.",
-            "Gana 16 de Escudo. Roba 1.",
-        ),
-        CardId::FortressMatrixPlus => localized_text(
-            language,
-            "Gain 20 Shield. Draw 1.",
-            "Gana 20 de Escudo. Roba 1.",
-        ),
-        CardId::OverwatchGrid => localized_text(
-            language,
-            "Gain 18 Shield. Draw 2.",
-            "Gana 18 de Escudo. Roba 2.",
-        ),
-        CardId::OverwatchGridPlus => localized_text(
-            language,
-            "Gain 22 Shield. Draw 2.",
-            "Gana 22 de Escudo. Roba 2.",
-        ),
-        CardId::RiftDart => localized_text(
-            language,
-            "Deal 4 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
-            "Inflige 4 de daño. Aplica Sangrado 1. Si el objetivo tiene Vulnerable, roba 1.",
-        ),
-        CardId::RiftDartPlus => localized_text(
-            language,
-            "Deal 6 damage. Apply Bleed 1. If target has Vulnerable, draw 1.",
-            "Inflige 6 de daño. Aplica Sangrado 1. Si el objetivo tiene Vulnerable, roba 1.",
-        ),
-        CardId::MarkPulse => localized_text(
-            language,
-            "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield.",
-            "Aplica Vulnerable 1. Si el objetivo tiene Sangrado, gana 4 de Escudo.",
-        ),
-        CardId::MarkPulsePlus => localized_text(
-            language,
-            "Apply 1 Vulnerable. If target has Bleed, gain 6 Shield.",
-            "Aplica Vulnerable 1. Si el objetivo tiene Sangrado, gana 6 de Escudo.",
-        ),
-        CardId::BraceCircuit => localized_text(
-            language,
-            "Gain 6 Shield. If you already have Shield, draw 1.",
-            "Gana 6 de Escudo. Si ya tienes Escudo, roba 1.",
-        ),
-        CardId::BraceCircuitPlus => localized_text(
-            language,
-            "Gain 8 Shield. If you already have Shield, draw 1.",
-            "Gana 8 de Escudo. Si ya tienes Escudo, roba 1.",
-        ),
-        CardId::FaultShot => localized_text(
-            language,
-            "Deal 5 damage. If target has Weak or Frail, gain Strength 1.",
-            "Inflige 5 de daño. Si el objetivo tiene Débil o Frágil, gana Fuerza 1.",
-        ),
-        CardId::FaultShotPlus => localized_text(
-            language,
-            "Deal 7 damage. If target has Weak or Frail, gain Strength 1.",
-            "Inflige 7 de daño. Si el objetivo tiene Débil o Frágil, gana Fuerza 1.",
-        ),
-        CardId::SeverArc => localized_text(
-            language,
-            "Deal 8 damage. If target has Bleed, deal 8 damage again.",
-            "Inflige 8 de daño. Si el objetivo tiene Sangrado, inflige 8 de daño otra vez.",
-        ),
-        CardId::SeverArcPlus => localized_text(
-            language,
-            "Deal 10 damage. If target has Bleed, deal 10 damage again.",
-            "Inflige 10 de daño. Si el objetivo tiene Sangrado, inflige 10 de daño otra vez.",
-        ),
-        CardId::Lockbreaker => localized_text(
-            language,
-            "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield.",
-            "Inflige 6 de daño. Si el objetivo tiene Vulnerable, aplica Débil 1 y gana 6 de Escudo.",
-        ),
-        CardId::LockbreakerPlus => localized_text(
-            language,
-            "Deal 8 damage. If target has Vulnerable, apply Weak 1 and gain 8 Shield.",
-            "Inflige 8 de daño. Si el objetivo tiene Vulnerable, aplica Débil 1 y gana 8 de Escudo.",
-        ),
-        CardId::CounterLattice => localized_text(
-            language,
-            "Deal 6 damage. If target has Weak, gain 1 Energy.",
-            "Inflige 6 de daño. Si el objetivo tiene Débil, gana 1 de Energía.",
-        ),
-        CardId::CounterLatticePlus => localized_text(
-            language,
-            "Deal 8 damage. If target has Weak, gain 1 Energy.",
-            "Inflige 8 de daño. Si el objetivo tiene Débil, gana 1 de Energía.",
-        ),
-        CardId::TerminalLoop => localized_text(
-            language,
-            "Deal 12 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 1.",
-            "Inflige 12 de daño. Si el objetivo tiene Sangrado, roba 1. Si el objetivo tiene Vulnerable, gana Fuerza 1.",
-        ),
-        CardId::TerminalLoopPlus => localized_text(
-            language,
-            "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2.",
-            "Inflige 15 de daño. Si el objetivo tiene Sangrado, roba 1. Si el objetivo tiene Vulnerable, gana Fuerza 2.",
-        ),
-        CardId::ZeroPoint => localized_text(
-            language,
-            "Deal 10 damage. Draw 1. Apply 2 Vulnerable.",
-            "Inflige 10 de daño. Roba 1. Aplica Vulnerable 2.",
-        ),
-        CardId::ZeroPointPlus => localized_text(
-            language,
-            "Deal 14 damage. Draw 1. Apply 2 Vulnerable.",
-            "Inflige 14 de daño. Roba 1. Aplica Vulnerable 2.",
-        ),
-    }
+    cards::localized_card_name(id, language)
 }
 
 pub(crate) fn localized_module_def(id: ModuleId, language: Language) -> ModuleDef {
@@ -1572,18 +425,18 @@ pub(crate) fn localized_module_description(id: ModuleId, language: Language) -> 
         ModuleId::TargetingRelay => localized_text(
             language,
             english,
-            "Al comienzo de cada combate, aplica Vulnerable 1 al primer enemigo.",
+            "Al comienzo de cada combate, ganas Enfoque +1.",
         ),
         ModuleId::Nanoforge => {
-            localized_text(language, english, "Tras cada victoria, recupera 3 HP.")
+            localized_text(language, english, "Tras cada victoria, recupera 2 HP.")
         }
         ModuleId::CapacitorBank => {
-            localized_text(language, english, "Comienzas cada combate con Fuerza 1.")
+            localized_text(language, english, "Comienzas cada combate con Impulso +1.")
         }
         ModuleId::PrismScope => localized_text(
             language,
             english,
-            "Al comienzo de cada combate, aplica Vulnerable 1 a todos los enemigos.",
+            "Al comienzo de cada combate, aplica Ritmo -1 a todos los enemigos.",
         ),
         ModuleId::SalvageLedger => localized_text(
             language,
@@ -1598,7 +451,7 @@ pub(crate) fn localized_module_description(id: ModuleId, language: Language) -> 
         ModuleId::SuppressionField => localized_text(
             language,
             english,
-            "Al comienzo de cada combate, aplica Débil 1 a todos los enemigos.",
+            "Al comienzo de cada combate, aplica Enfoque -1 a todos los enemigos.",
         ),
         ModuleId::RecoveryMatrix => {
             localized_text(language, english, "Tras cada victoria, recupera 5 HP.")
@@ -1816,316 +669,116 @@ pub(crate) fn localized_enemy_intent(
     index: usize,
     language: Language,
 ) -> EnemyIntent {
+    if matches!(language, Language::English) {
+        return enemy_intent(profile, index);
+    }
+
     let mut intent = enemy_intent(profile, index);
     let translated = match (profile, index % 3) {
-        (EnemyProfileId::ScoutDrone, 0) => (
-            localized_text(language, "Shock Needle", "Aguja de Choque"),
-            localized_text(language, "Deal 5 damage.", "Inflige 5 de daño."),
-        ),
-        (EnemyProfileId::ScoutDrone, 1) => (
-            localized_text(language, "Crossfire", "Fuego Cruzado"),
-            localized_text(
-                language,
-                "Deal 3 damage twice.",
-                "Inflige 3 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::ScoutDrone, _) => (
-            localized_text(language, "Brace Cycle", "Ciclo de Refuerzo"),
-            localized_text(
-                language,
-                "Gain 4 Shield. Gain Strength 1.",
-                "Gana 4 de Escudo. Gana Fuerza 1.",
-            ),
-        ),
-        (EnemyProfileId::NeedlerDrone, 0) => (
-            localized_text(language, "Needle Tap", "Toque de Aguijón"),
-            localized_text(
-                language,
-                "Deal 4 damage. Apply Bleed 1.",
-                "Inflige 4 de daño. Aplica Sangrado 1.",
-            ),
-        ),
-        (EnemyProfileId::NeedlerDrone, 1) => (
-            localized_text(language, "Split Sting", "Picadura Múltiple"),
-            localized_text(
-                language,
-                "Deal 2 damage three times.",
-                "Inflige 2 de daño tres veces.",
-            ),
-        ),
-        (EnemyProfileId::NeedlerDrone, _) => (
-            localized_text(language, "Stabilize", "Estabilizar"),
-            localized_text(language, "Gain 4 Shield.", "Gana 4 de Escudo."),
-        ),
-        (EnemyProfileId::RampartDrone, 0) => (
-            localized_text(language, "Ram Plate", "Placa de Choque"),
-            localized_text(language, "Deal 8 damage.", "Inflige 8 de daño."),
-        ),
+        (EnemyProfileId::ScoutDrone, 0) => ("Aguja de Choque", "Inflige 5 de daño."),
+        (EnemyProfileId::ScoutDrone, 1) => ("Fuego Cruzado", "Inflige 3 de daño dos veces."),
+        (EnemyProfileId::ScoutDrone, _) => {
+            ("Ciclo de Refuerzo", "Gana 4 de Escudo. Gana Enfoque +1.")
+        }
+        (EnemyProfileId::NeedlerDrone, 0) => {
+            ("Toque de Aguijón", "Inflige 4 de daño. Aplica Sangrado 1.")
+        }
+        (EnemyProfileId::NeedlerDrone, 1) => ("Picadura Múltiple", "Inflige 2 de daño tres veces."),
+        (EnemyProfileId::NeedlerDrone, _) => ("Estabilizar", "Gana 4 de Escudo."),
+        (EnemyProfileId::RampartDrone, 0) => ("Placa de Choque", "Inflige 8 de daño."),
         (EnemyProfileId::RampartDrone, 1) => (
-            localized_text(language, "Pressure Clamp", "Mordaza de Presión"),
-            localized_text(
-                language,
-                "Deal 5 damage. Apply Weak 1.",
-                "Inflige 5 de daño. Aplica Débil 1.",
-            ),
+            "Mordaza de Presión",
+            "Inflige 5 de daño. Aplica Enfoque -1.",
         ),
         (EnemyProfileId::RampartDrone, _) => (
-            localized_text(language, "Reinforce Wall", "Muro Reforzado"),
-            localized_text(
-                language,
-                "Gain 8 Shield. Next hit applies Bleed 2.",
-                "Gana 8 de Escudo. El siguiente golpe aplica Sangrado 2.",
-            ),
+            "Muro Reforzado",
+            "Gana 8 de Escudo. El siguiente golpe aplica Sangrado 2.",
         ),
         (EnemyProfileId::SpineSentry, 0) => (
-            localized_text(language, "Spine Rack", "Bastidor de Púas"),
-            localized_text(
-                language,
-                "Deal 4 damage twice. Apply Bleed 1.",
-                "Inflige 4 de daño dos veces. Aplica Sangrado 1.",
-            ),
+            "Bastidor de Púas",
+            "Inflige 4 de daño dos veces. Aplica Sangrado 1.",
         ),
         (EnemyProfileId::SpineSentry, 1) => (
-            localized_text(language, "Target Lock", "Fijación de Blanco"),
-            localized_text(
-                language,
-                "Deal 7 damage. Apply 1 Vulnerable.",
-                "Inflige 7 de daño. Aplica Vulnerable 1.",
-            ),
+            "Fijación de Blanco",
+            "Inflige 7 de daño. Aplica Impulso -1.",
         ),
-        (EnemyProfileId::SpineSentry, _) => (
-            localized_text(language, "Quill Plating", "Blindaje de Púas"),
-            localized_text(language, "Gain 9 Shield.", "Gana 9 de Escudo."),
-        ),
+        (EnemyProfileId::SpineSentry, _) => ("Blindaje de Púas", "Gana 9 de Escudo."),
         (EnemyProfileId::PentaCore, 0) => (
-            localized_text(language, "Target Prism", "Prisma de Fijación"),
-            localized_text(
-                language,
-                "Deal 7 damage. Apply 1 Vulnerable.",
-                "Inflige 7 de daño. Aplica Vulnerable 1.",
-            ),
+            "Prisma de Fijación",
+            "Inflige 7 de daño. Aplica Impulso -1.",
         ),
         (EnemyProfileId::PentaCore, 1) => (
-            localized_text(language, "Penta Bulwark", "Baluarte Penta"),
-            localized_text(
-                language,
-                "Gain 10 Shield. Next hit applies Bleed 2.",
-                "Gana 10 de Escudo. El siguiente golpe aplica Sangrado 2.",
-            ),
+            "Baluarte Penta",
+            "Gana 10 de Escudo. El siguiente golpe aplica Sangrado 2.",
         ),
-        (EnemyProfileId::PentaCore, _) => (
-            localized_text(language, "Split Lattice", "Trama Fragmentada"),
-            localized_text(
-                language,
-                "Deal 4 damage three times.",
-                "Inflige 4 de daño tres veces.",
-            ),
-        ),
-        (EnemyProfileId::VoltMantis, 0) => (
-            localized_text(language, "Arc Cut", "Corte de Arco"),
-            localized_text(language, "Deal 8 damage.", "Inflige 8 de daño."),
-        ),
-        (EnemyProfileId::VoltMantis, 1) => (
-            localized_text(language, "Arc Lash", "Látigo de Arco"),
-            localized_text(
-                language,
-                "Deal 4 damage twice.",
-                "Inflige 4 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::VoltMantis, _) => (
-            localized_text(language, "Charge Shell", "Caparazón de Carga"),
-            localized_text(language, "Gain 7 Shield.", "Gana 7 de Escudo."),
-        ),
-        (EnemyProfileId::ShardWeaver, 0) => (
-            localized_text(language, "Glass Cut", "Corte de Vidrio"),
-            localized_text(
-                language,
-                "Deal 6 damage. Apply 1 Vulnerable.",
-                "Inflige 6 de daño. Aplica Vulnerable 1.",
-            ),
-        ),
+        (EnemyProfileId::PentaCore, _) => ("Trama Fragmentada", "Inflige 4 de daño tres veces."),
+        (EnemyProfileId::VoltMantis, 0) => ("Corte de Arco", "Inflige 8 de daño."),
+        (EnemyProfileId::VoltMantis, 1) => ("Látigo de Arco", "Inflige 4 de daño dos veces."),
+        (EnemyProfileId::VoltMantis, _) => {
+            ("Caparazón de Impulso", "Gana 7 de Escudo. Gana Impulso +1.")
+        }
+        (EnemyProfileId::ShardWeaver, 0) => {
+            ("Corte de Vidrio", "Inflige 6 de daño. Aplica Impulso -1.")
+        }
         (EnemyProfileId::ShardWeaver, 1) => (
-            localized_text(language, "Mirror Volley", "Andanada Reflejada"),
-            localized_text(
-                language,
-                "Deal 3 damage twice. Gain 4 Shield.",
-                "Inflige 3 de daño dos veces. Gana 4 de Escudo.",
-            ),
+            "Andanada Reflejada",
+            "Inflige 3 de daño dos veces. Gana 4 de Escudo.",
         ),
-        (EnemyProfileId::ShardWeaver, _) => (
-            localized_text(language, "Refocus", "Reenfocar"),
-            localized_text(
-                language,
-                "Gain 8 Shield. Apply Frail 1.",
-                "Gana 8 de Escudo. Aplica Frágil 1.",
-            ),
-        ),
-        (EnemyProfileId::PrismArray, 0) => (
-            localized_text(language, "Prism Bite", "Mordida Prisma"),
-            localized_text(
-                language,
-                "Deal 7 damage. Apply 1 Vulnerable.",
-                "Inflige 7 de daño. Aplica Vulnerable 1.",
-            ),
-        ),
-        (EnemyProfileId::PrismArray, 1) => (
-            localized_text(language, "Ion Salvo", "Salva Iónica"),
-            localized_text(
-                language,
-                "Deal 5 damage twice.",
-                "Inflige 5 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::PrismArray, _) => (
-            localized_text(language, "Prism Guard", "Guardia Prismática"),
-            localized_text(language, "Gain 10 Shield.", "Gana 10 de Escudo."),
-        ),
-        (EnemyProfileId::GlassBishop, 0) => (
-            localized_text(language, "Shatter Beam", "Rayo Astillado"),
-            localized_text(
-                language,
-                "Deal 8 damage. Apply 1 Vulnerable.",
-                "Inflige 8 de daño. Aplica Vulnerable 1.",
-            ),
-        ),
+        (EnemyProfileId::ShardWeaver, _) => ("Reenfocar", "Gana 8 de Escudo. Aplica Ritmo -1."),
+        (EnemyProfileId::PrismArray, 0) => {
+            ("Mordida Prisma", "Inflige 7 de daño. Aplica Impulso -1.")
+        }
+        (EnemyProfileId::PrismArray, 1) => ("Salva Iónica", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::PrismArray, _) => ("Guardia Prismática", "Gana 10 de Escudo."),
+        (EnemyProfileId::GlassBishop, 0) => {
+            ("Rayo Astillado", "Inflige 8 de daño. Aplica Impulso -1.")
+        }
         (EnemyProfileId::GlassBishop, 1) => (
-            localized_text(language, "Split Halo", "Halo Partido"),
-            localized_text(
-                language,
-                "Deal 5 damage twice. Gain 4 Shield.",
-                "Inflige 5 de daño dos veces. Gana 4 de Escudo.",
-            ),
+            "Halo Partido",
+            "Inflige 5 de daño dos veces. Gana 4 de Escudo.",
         ),
-        (EnemyProfileId::GlassBishop, _) => (
-            localized_text(language, "Faceted Ward", "Barrera Facetada"),
-            localized_text(
-                language,
-                "Gain 10 Shield. Apply Bleed 1.",
-                "Gana 10 de Escudo. Aplica Sangrado 1.",
-            ),
-        ),
-        (EnemyProfileId::HexarchCore, 0) => (
-            localized_text(language, "Hex Shell", "Coraza Hex"),
-            localized_text(
-                language,
-                "Gain 12 Shield. Apply 2 Vulnerable.",
-                "Gana 12 de Escudo. Aplica Vulnerable 2.",
-            ),
-        ),
-        (EnemyProfileId::HexarchCore, 1) => (
-            localized_text(language, "Hex Breaker", "Ruptor Hex"),
-            localized_text(language, "Deal 15 damage.", "Inflige 15 de daño."),
-        ),
-        (EnemyProfileId::HexarchCore, _) => (
-            localized_text(language, "Hex Volley", "Andanada Hex"),
-            localized_text(
-                language,
-                "Deal 5 damage three times.",
-                "Inflige 5 de daño tres veces.",
-            ),
-        ),
-        (EnemyProfileId::NullRaider, 0) => (
-            localized_text(language, "Null Shot", "Disparo Null"),
-            localized_text(language, "Deal 10 damage.", "Inflige 10 de daño."),
-        ),
-        (EnemyProfileId::NullRaider, 1) => (
-            localized_text(language, "Chain Burst", "Ráfaga en Cadena"),
-            localized_text(
-                language,
-                "Deal 5 damage twice.",
-                "Inflige 5 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::NullRaider, _) => (
-            localized_text(language, "Null Guard", "Guardia Null"),
-            localized_text(language, "Gain 9 Shield.", "Gana 9 de Escudo."),
-        ),
+        (EnemyProfileId::GlassBishop, _) => {
+            ("Barrera Facetada", "Gana 10 de Escudo. Aplica Sangrado 1.")
+        }
+        (EnemyProfileId::HexarchCore, 0) => ("Coraza Hex", "Gana 12 de Escudo. Aplica Enfoque -2."),
+        (EnemyProfileId::HexarchCore, 1) => ("Ruptor Hex", "Inflige 15 de daño."),
+        (EnemyProfileId::HexarchCore, _) => ("Andanada Hex", "Inflige 5 de daño tres veces."),
+        (EnemyProfileId::NullRaider, 0) => ("Disparo Null", "Inflige 10 de daño."),
+        (EnemyProfileId::NullRaider, 1) => ("Ráfaga en Cadena", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::NullRaider, _) => ("Guardia Null", "Gana 9 de Escudo."),
         (EnemyProfileId::RiftStalker, 0) => (
-            localized_text(language, "Rift Claw", "Garra de la Grieta"),
-            localized_text(
-                language,
-                "Deal 9 damage. Apply Bleed 1.",
-                "Inflige 9 de daño. Aplica Sangrado 1.",
-            ),
+            "Garra de la Grieta",
+            "Inflige 9 de daño. Aplica Sangrado 1.",
         ),
-        (EnemyProfileId::RiftStalker, 1) => (
-            localized_text(language, "Rend Salvo", "Salva Desgarradora"),
-            localized_text(
-                language,
-                "Deal 5 damage twice.",
-                "Inflige 5 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::RiftStalker, _) => (
-            localized_text(language, "Lock Anchor", "Ancla de Fijación"),
-            localized_text(
-                language,
-                "Gain 10 Shield. Apply 1 Vulnerable.",
-                "Gana 10 de Escudo. Aplica Vulnerable 1.",
-            ),
-        ),
-        (EnemyProfileId::SiegeSpider, 0) => (
-            localized_text(language, "Bulwark Hammer", "Martillo Baluarte"),
-            localized_text(language, "Deal 11 damage.", "Inflige 11 de daño."),
-        ),
-        (EnemyProfileId::SiegeSpider, 1) => (
-            localized_text(language, "Lock Volley", "Andanada de Fijación"),
-            localized_text(
-                language,
-                "Deal 6 damage twice.",
-                "Inflige 6 de daño dos veces.",
-            ),
-        ),
-        (EnemyProfileId::SiegeSpider, _) => (
-            localized_text(language, "Bulwark Seal", "Sello Baluarte"),
-            localized_text(
-                language,
-                "Gain 12 Shield. Apply 1 Vulnerable.",
-                "Gana 12 de Escudo. Aplica Vulnerable 1.",
-            ),
-        ),
-        (EnemyProfileId::RiftBastion, 0) => (
-            localized_text(language, "Grav Hammer", "Martillo Gravitatorio"),
-            localized_text(language, "Deal 12 damage.", "Inflige 12 de daño."),
-        ),
+        (EnemyProfileId::RiftStalker, 1) => ("Salva Desgarradora", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::RiftStalker, _) => {
+            ("Ancla de Fijación", "Gana 10 de Escudo. Aplica Enfoque -1.")
+        }
+        (EnemyProfileId::SiegeSpider, 0) => ("Martillo Baluarte", "Inflige 11 de daño."),
+        (EnemyProfileId::SiegeSpider, 1) => {
+            ("Andanada de Fijación", "Inflige 6 de daño dos veces.")
+        }
+        (EnemyProfileId::SiegeSpider, _) => {
+            ("Sello Baluarte", "Gana 12 de Escudo. Aplica Enfoque -1.")
+        }
+        (EnemyProfileId::RiftBastion, 0) => ("Martillo Gravitatorio", "Inflige 12 de daño."),
         (EnemyProfileId::RiftBastion, 1) => (
-            localized_text(language, "Collapse Grid", "Malla de Colapso"),
-            localized_text(
-                language,
-                "Deal 6 damage twice. Apply 1 Vulnerable.",
-                "Inflige 6 de daño dos veces. Aplica Vulnerable 1.",
-            ),
+            "Malla de Colapso",
+            "Inflige 6 de daño dos veces. Aplica Impulso -1.",
         ),
         (EnemyProfileId::RiftBastion, _) => (
-            localized_text(language, "Anchor Field", "Campo de Anclaje"),
-            localized_text(
-                language,
-                "Gain 12 Shield. Next hit applies Bleed 3.",
-                "Gana 12 de Escudo. El siguiente golpe aplica Sangrado 3.",
-            ),
+            "Campo de Anclaje",
+            "Gana 12 de Escudo. El siguiente golpe aplica Sangrado 3.",
         ),
         (EnemyProfileId::HeptarchCore, 0) => (
-            localized_text(language, "Singularity Shell", "Coraza de Singularidad"),
-            localized_text(
-                language,
-                "Gain 16 Shield. Next hit applies Bleed 3.",
-                "Gana 16 de Escudo. El siguiente golpe aplica Sangrado 3.",
-            ),
+            "Coraza de Singularidad",
+            "Gana 16 de Escudo. El siguiente golpe aplica Sangrado 3.",
         ),
         (EnemyProfileId::HeptarchCore, 1) => (
-            localized_text(language, "Array Collapse", "Colapso de Matriz"),
-            localized_text(
-                language,
-                "Deal 8 damage twice. Apply 1 Vulnerable.",
-                "Inflige 8 de daño dos veces. Aplica Vulnerable 1.",
-            ),
+            "Colapso de Matriz",
+            "Inflige 8 de daño dos veces. Aplica Impulso -1.",
         ),
-        (EnemyProfileId::HeptarchCore, _) => (
-            localized_text(language, "Crown Breaker", "Quebracoronas"),
-            localized_text(language, "Deal 20 damage.", "Inflige 20 de daño."),
-        ),
+        (EnemyProfileId::HeptarchCore, _) => ("Quebracoronas", "Inflige 20 de daño."),
     };
     intent.name = translated.0;
     intent.summary = translated.1;
@@ -2221,34 +874,34 @@ const fn pack_enemy_sprite_rows(rows: [u16; 16]) -> [u8; 32] {
 
 // Distinct layered 16x16 enemy icons with abstract mechanical silhouettes.
 const SCOUTDRONE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
-    0b0000001100000000,
-    0b0000011110000000,
-    0b0000110011000000,
-    0b0001100001100000,
-    0b0001111111110000,
-    0b0011111111011000,
-    0b0011011110011000,
-    0b0001111110010000,
-    0b0000111111000000,
-    0b0000000011000000,
+    0b0000001110000000,
+    0b0000011111000000,
+    0b0000110001100000,
+    0b0000110001100000,
+    0b0011100000110000,
+    0b0011111111111100,
+    0b0111111111101110,
+    0b0111011111001110,
+    0b0111011111001110,
+    0b0011111111001100,
+    0b0000111111100000,
     0b0000000001100000,
-    0b0000000011000000,
-    0b0000000110000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000000000110000,
+    0b0000000000110000,
+    0b0000000001100000,
+    0b0000000111000000,
 ]);
 const SCOUTDRONE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
+    0b0000001110000000,
+    0b0000001110000000,
+    0b0000011111000000,
     0b0000000000000000,
-    0b0000001100000000,
-    0b0000011110000000,
-    0b0000000000000000,
-    0b0000000000100000,
-    0b0000100001100000,
-    0b0000000001100000,
-    0b0000000000000000,
+    0b0000000000010000,
+    0b0000100000110000,
+    0b0000100000110000,
+    0b0000000000110000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2267,10 +920,10 @@ const SCOUTDRONE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
+    0b0000000000000000,
     0b0000110000000000,
-    0b0001100000000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0011100000000000,
+    0b0011100000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
@@ -2278,19 +931,19 @@ const NEEDLERDRONE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000001100000,
-    0b0000000011100000,
-    0b0000000110100000,
     0b0000000111100000,
-    0b0000111111110000,
-    0b0000011111100000,
-    0b0000001111000000,
-    0b0000001111000000,
-    0b0000011001100000,
-    0b0000011111100000,
-    0b0000001111000000,
-    0b0000001001100000,
-    0b0000010000110000,
-    0b0000000000000000,
+    0b0000001110100000,
+    0b0000001111100000,
+    0b0001111111110000,
+    0b0000111111100000,
+    0b0000111111100000,
+    0b0000011111000000,
+    0b0000011111000000,
+    0b0000110001100000,
+    0b0000111111100000,
+    0b0000011111000000,
+    0b0000010001100000,
+    0b0000100000110000,
 ]);
 const NEEDLERDRONE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
@@ -2303,8 +956,8 @@ const NEEDLERDRONE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000110000000,
     0b0000000000000000,
+    0b0000001110000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2313,7 +966,7 @@ const NEEDLERDRONE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 const NEEDLERDRONE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000001000000,
     0b0000000001100000,
-    0b0000000010000000,
+    0b0000000110000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2330,55 +983,55 @@ const NEEDLERDRONE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 ]);
 const RAMPARTDRONE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
-    0b0000011111100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0000110000110000,
-    0b0000011111100000,
+    0b0000111111100000,
+    0b0001100000110000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0011000000011000,
+    0b0001100000110000,
+    0b0000111111100000,
     0b0000000000000000,
-    0b0000001111000000,
-    0b0000011001100000,
-    0b0000000000000000,
+    0b0000011111000000,
+    0b0000110001100000,
 ]);
 const RAMPARTDRONE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000001111000000,
-    0b0000010000100000,
+    0b0000011111000000,
+    0b0000100000100000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000110000000,
+    0b0000001110000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000010000100000,
-    0b0000001111000000,
     0b0000000000000000,
+    0b0000100000100000,
+    0b0000011111000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const RAMPARTDRONE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000111111110000,
-    0b0001100000011000,
-    0b0011000000001100,
-    0b0010001111000100,
-    0b0010011111100100,
-    0b0010011111100100,
-    0b0010011001100100,
-    0b0010011111100100,
-    0b0010011111100100,
-    0b0010001111000100,
-    0b0011000000001100,
-    0b0001100000011000,
-    0b0000111111110000,
-    0b0000000000000000,
+    0b0001111111110000,
+    0b0011000000011000,
+    0b0110000000001100,
+    0b0100011111000100,
+    0b0100111111100100,
+    0b0100111111100100,
+    0b0100110001100100,
+    0b0100111111100100,
+    0b0100111111100100,
+    0b0100111111100100,
+    0b0100011111000100,
+    0b0110000000001100,
+    0b0011000000011000,
+    0b0001111111110000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
@@ -2419,28 +1072,28 @@ const SPINESENTRY_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const PENTACORE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000000110000000,
     0b0000001001000000,
     0b0000010000100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
+    0b0001110000111000,
+    0b0001110000111000,
     0b0011100000011100,
-    0b0000111111110000,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0111100000011110,
+    0b0111100000011110,
+    0b0001111111111000,
     0b0000011001100000,
-    0b0000000000000000,
     0b0000000000000000,
 ]);
 const PENTACORE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
+    0b0000000110000000,
     0b0000000110000000,
     0b0000001111000000,
     0b0000011001100000,
@@ -2457,62 +1110,62 @@ const PENTACORE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 const PENTACORE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
     0b0000001111000000,
     0b0000010000100000,
-    0b0000110000110000,
-    0b0000100000010000,
-    0b0000100000010000,
-    0b0000100000010000,
-    0b0000100000010000,
+    0b0000010000100000,
+    0b0001110000111000,
+    0b0001100000011000,
+    0b0001100000011000,
+    0b0001100000011000,
+    0b0001100000011000,
     0b0000011001100000,
     0b0000001111000000,
-    0b0000000000000000,
+    0b0000001111000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const PENTACORE_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000000110000000,
     0b0000000110000000,
     0b0000010000100000,
+    0b0000000000000000,
+    0b0000000000000000,
+    0b0100000000000010,
+    0b0000000000000000,
+    0b0000000110000000,
+    0b1000000000000001,
     0b0000000000000000,
     0b0010000000000100,
     0b0000000000000000,
-    0b0000000110000000,
-    0b0100000000000010,
     0b0000000000000000,
-    0b0001000000001000,
-    0b0000000000000000,
-    0b0000100000010000,
+    0b0001100000011000,
     0b0000010000100000,
     0b0000000110000000,
-    0b0000000000000000,
 ]);
 const VOLTMANTIS_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
-    0b0000100000010000,
-    0b0000110011100000,
-    0b0000110000110000,
+    0b0001100000011000,
+    0b0001110011100000,
+    0b0001110011100000,
+    0b0001110000111000,
     0b0000010000100000,
     0b0000011001100000,
     0b0000001111000000,
     0b0000000110000000,
     0b0000000110000000,
     0b0000000110000000,
+    0b0000000110000000,
     0b0000001001000000,
     0b0000010000100000,
-    0b0000100000010000,
-    0b0000000000000000,
+    0b0001100000011000,
 ]);
 const VOLTMANTIS_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
+    0b0000001100000000,
     0b0000001100000000,
     0b0000001111000000,
     0b0000001111000000,
@@ -2527,17 +1180,17 @@ const VOLTMANTIS_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const VOLTMANTIS_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
+    0b0001100000011000,
+    0b0011110000111000,
+    0b0110011001100000,
+    0b0010000000011000,
+    0b0010000000011000,
     0b0000000000000000,
-    0b0000100000010000,
-    0b0001110000110000,
-    0b0011011001100000,
-    0b0001000000010000,
     0b0000000000000000,
-    0b0000000000000000,
-    0b0001100000000000,
-    0b0011000000001100,
+    0b0011100000000000,
     0b0110000000000110,
-    0b0010000000000010,
+    0b1100000000000011,
+    0b0100000000000001,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2545,40 +1198,40 @@ const VOLTMANTIS_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const SHARDWEAVER_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
-    0b0000000000001000,
-    0b0000000000110000,
+    0b0000000000000100,
+    0b0000000000111000,
     0b0000000001100000,
-    0b0010000000000100,
-    0b0001100000011000,
-    0b0000100000010000,
-    0b0011000000000000,
-    0b0000000000001100,
-    0b0000100000010000,
-    0b0001100000011000,
-    0b0010000000000100,
-    0b0000011000000000,
-    0b0000110000000000,
-    0b0001000000000000,
-    0b0000000000000000,
+    0b0100000000000010,
+    0b0100000000000010,
+    0b0011000000011100,
+    0b0001000000011000,
+    0b0110000000000000,
+    0b0000000000000110,
+    0b0001000000011000,
+    0b0011000000011100,
+    0b0100000000000010,
+    0b0100000000000010,
+    0b0000111000000000,
+    0b0001110000000000,
+    0b0010000000000000,
 ]);
 const SHARDWEAVER_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
-    0b0001000000000000,
-    0b0000110000000000,
-    0b0000011000000000,
+    0b0010000000000000,
+    0b0001110000000000,
+    0b0000111000000000,
     0b0000001111000000,
-    0b0000011001100000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0000110000110000,
-    0b0000011001100000,
-    0b0000011001100000,
+    0b0000001111000000,
+    0b0000111001100000,
+    0b0000111001100000,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0000111001100000,
+    0b0000111001100000,
+    0b0000001111000000,
     0b0000001111000000,
     0b0000000001100000,
-    0b0000000000110000,
-    0b0000000000001000,
-    0b0000000000000000,
+    0b0000000000111000,
+    0b0000000000000100,
 ]);
 const SHARDWEAVER_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
@@ -2601,38 +1254,38 @@ const SHARDWEAVER_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 const PRISMARRAY_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
+    0b0000000110000000,
     0b0000000110000000,
     0b0000001111000000,
     0b0000000110000000,
     0b0000000000000000,
     0b0000000110000000,
+    0b0000000110000000,
     0b0000001111000000,
-    0b0000011011100000,
+    0b0000111011110000,
     0b0000001111000000,
     0b0000000110000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000000110000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const PRISMARRAY_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000000110000000,
     0b0000001111000000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0000011001100000,
+    0b0000111001110000,
+    0b0000111001110000,
+    0b0001110000111000,
+    0b0000111001110000,
     0b0000001010000000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0000110000110000,
-    0b0000011001100000,
+    0b0000111001110000,
+    0b0000111001110000,
+    0b0001110000111000,
+    0b0011000000001100,
+    0b0001110000111000,
+    0b0000111001110000,
+    0b0000111001110000,
     0b0000001111000000,
     0b0000000110000000,
-    0b0000000000000000,
-    0b0000000000000000,
 ]);
 const PRISMARRAY_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
@@ -2644,8 +1297,8 @@ const PRISMARRAY_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000100000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000100000000,
     0b0000000000000000,
+    0b0000000100000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2658,23 +1311,23 @@ const GLASSBISHOP_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000100000000,
-    0b0000001110000000,
+    0b0000001000000000,
+    0b0000011110000000,
+    0b0000111111000000,
+    0b0000111111000000,
     0b0000011111000000,
-    0b0000001111000000,
-    0b0000001111000000,
-    0b0000001111000000,
-    0b0000001111000000,
-    0b0000000000000000,
+    0b0000011111000000,
+    0b0000011111000000,
+    0b0000011111000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const GLASSBISHOP_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000100000000,
-    0b0000001110000000,
-    0b0000001110000000,
-    0b0000001110000000,
+    0b0000001000000000,
+    0b0000011110000000,
+    0b0000011110000000,
+    0b0000011110000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2691,72 +1344,72 @@ const GLASSBISHOP_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 const GLASSBISHOP_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000010001000000,
-    0b0000010001000000,
-    0b0000001110000000,
-    0b0000011011000000,
-    0b0000110001100000,
-    0b0000100000000000,
-    0b0000010000100000,
+    0b0000100001000000,
+    0b0000100001000000,
+    0b0000011110000000,
+    0b0000110111000000,
+    0b0001100001100000,
+    0b0001000000000000,
+    0b0001000000000000,
+    0b0000100000100000,
     0b0000000000100000,
-    0b0000010000100000,
-    0b0000110000110000,
-    0b0000111111110000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0000000000000000,
+    0b0000100000100000,
+    0b0001100000110000,
+    0b0001111111110000,
+    0b0000110001100000,
+    0b0001100000110000,
 ]);
 const HEXARCHCORE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000001111000000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0001100000011000,
-    0b0000110000110000,
-    0b0000011001100000,
+    0b0000111001100000,
+    0b0001110000111000,
+    0b0011000000011100,
+    0b0011000000011100,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0011000000011100,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0000111001100000,
     0b0000001111000000,
-    0b0000000000000000,
     0b0000000000000000,
 ]);
 const HEXARCHCORE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
     0b0000001111000000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0000110000110000,
-    0b0000110000110000,
-    0b0000110000110000,
-    0b0000011001100000,
     0b0000001111000000,
-    0b0000000000000000,
+    0b0000111001100000,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0000111001100000,
+    0b0000001111000000,
+    0b0000001111000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const HEXARCHCORE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
-    0b0000000000000000,
     0b0000001111000000,
-    0b0000011001100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0001000000001000,
-    0b0001000000001000,
-    0b0001100000011000,
-    0b0001100000011000,
-    0b0000110000110000,
-    0b0000011001100000,
+    0b0000111001100000,
+    0b0001110000111000,
+    0b0001110000111000,
+    0b0011000000011100,
+    0b0010000000000100,
+    0b0010000000000100,
+    0b0011000000011100,
+    0b0011000000011100,
+    0b0001110000111000,
+    0b0000111001100000,
+    0b0000111001100000,
     0b0000001111000000,
-    0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
@@ -2768,33 +1421,33 @@ const HEXARCHCORE_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000110000000,
     0b0000001111000000,
-    0b0000011001100000,
+    0b0000111001100000,
     0b0000001111000000,
     0b0000000110000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000100000000,
     0b0000000000000000,
+    0b0000000100000000,
 ]);
 const NULLRAIDER_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
-    0b0000011110000000,
-    0b0000110000100000,
-    0b0001100000010000,
-    0b0011101100011000,
-    0b0011001000001000,
-    0b0011010000101000,
-    0b0011100000011000,
-    0b0011010000111000,
-    0b0011001000011000,
-    0b0001100000110000,
-    0b0000111111100000,
-    0b0000011101100000,
-    0b0000110000110000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000011111000000,
+    0b0000110000010000,
+    0b0011100000001100,
+    0b0011100000001100,
+    0b0111101110001110,
+    0b0111001000000010,
+    0b0111010000010010,
+    0b0111100000001110,
+    0b0111100000001110,
+    0b0111010000011110,
+    0b0111001000001110,
+    0b0011100000011100,
+    0b0000111111110000,
+    0b0000111111110000,
+    0b0000011110110000,
+    0b0000110000011100,
 ]);
 const NULLRAIDER_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
@@ -2803,10 +1456,10 @@ const NULLRAIDER_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000110000000,
-    0b0000001111000000,
-    0b0000000110000000,
-    0b0000000000000000,
+    0b0000000111000000,
+    0b0000001111100000,
+    0b0000001111100000,
+    0b0000000111000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2816,17 +1469,17 @@ const NULLRAIDER_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 ]);
 const NULLRAIDER_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
+    0b0000001111100000,
+    0b0000011111110000,
+    0b0000011111110000,
+    0b0000010000010000,
+    0b0000110000011100,
+    0b0000100000001100,
     0b0000000000000000,
-    0b0000001111000000,
-    0b0000011111100000,
-    0b0000010000100000,
-    0b0000110000110000,
-    0b0000100000010000,
     0b0000000000000000,
     0b0000100000000000,
-    0b0000110000100000,
+    0b0000110000010000,
     0b0000010000000000,
-    0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2837,14 +1490,14 @@ const NULLRAIDER_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000011000000,
-    0b0000000111000000,
-    0b0000001001000000,
-    0b0000010000100000,
-    0b0000001001000000,
-    0b0000000111000000,
-    0b0000001111000000,
-    0b0000000000000000,
+    0b0000000001100000,
+    0b0000000111100000,
+    0b0000001000100000,
+    0b0000010000010000,
+    0b0000010000010000,
+    0b0000001000100000,
+    0b0000000111100000,
+    0b0000001111100000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2855,54 +1508,54 @@ const RIFTSTALKER_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000110000,
-    0b0000000001111000,
-    0b0000000011111000,
-    0b0000000011110000,
-    0b0000000011100000,
-    0b0000000011100000,
-    0b0000000011000000,
-    0b0000000011000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000000000011100,
+    0b0000000000111110,
+    0b0000000001111110,
+    0b0000000001111100,
+    0b0000000001111100,
+    0b0000000001110000,
+    0b0000000001110000,
+    0b0000000001100000,
+    0b0000000001100000,
+    0b0000000001100000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const RIFTSTALKER_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
+    0b0000000111000000,
+    0b0000000111000000,
+    0b0000001111100000,
+    0b0000011110000000,
+    0b0000110000000000,
+    0b0011100000000000,
+    0b0011100000000000,
+    0b0011100000000000,
+    0b0000110000000000,
+    0b0000011110000000,
     0b0000000110000000,
-    0b0000001111000000,
-    0b0000011100000000,
-    0b0000110000000000,
-    0b0001100000000000,
-    0b0001100000000000,
-    0b0000110000000000,
-    0b0000011100000000,
-    0b0000000100000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000000110000000,
     0b0000000000000000,
     0b0000000000000000,
 ]);
 const RIFTSTALKER_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
-    0b0000000110000000,
-    0b0000011111100000,
-    0b0000111001110000,
-    0b0001110000000000,
+    0b0000000111000000,
+    0b0000011111110000,
+    0b0000111000111100,
+    0b0000111000111100,
+    0b0011110000000000,
+    0b0111100000000000,
+    0b0111000000000000,
+    0b0100000000000000,
+    0b0100000000000000,
+    0b0100000000000000,
+    0b0111000000000000,
     0b0011100000000000,
-    0b0011000000000000,
-    0b0010000000000000,
-    0b0010000000000000,
-    0b0011000000000000,
-    0b0001100000000000,
     0b0000111000000000,
-    0b0000011110000000,
-    0b0000000110000000,
-    0b0000000000000000,
-    0b0000000000000000,
+    0b0000111000000000,
+    0b0000011111000000,
+    0b0000000111000000,
 ]);
 const RIFTSTALKER_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
@@ -2910,12 +1563,12 @@ const RIFTSTALKER_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000010000000,
-    0b0000001100000000,
-    0b0000011100000000,
-    0b0000011100000000,
-    0b0000001100000000,
-    0b0000000000000000,
+    0b0000000001000000,
+    0b0000001110000000,
+    0b0000011110000000,
+    0b0000011110000000,
+    0b0000011110000000,
+    0b0000001110000000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -2977,21 +1630,21 @@ const SIEGESPIDER_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const RIFTBASTION_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000011111100000,
-    0b0000110000110000,
-    0b0001100000011000,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0011000000001100,
-    0b0001100000011000,
-    0b0000111111110000,
+    0b0001110000111000,
+    0b0011100000011100,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0110000000000110,
+    0b0011100000011100,
+    0b0011100000011100,
+    0b0001111111111000,
     0b0000011001100000,
-    0b0000000000000000,
     0b0000000000000000,
 ]);
 const RIFTBASTION_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
@@ -3013,28 +1666,28 @@ const RIFTBASTION_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const RIFTBASTION_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000000000000,
     0b0000011111100000,
-    0b0001111111111000,
-    0b0011100000011100,
-    0b0011001111001100,
+    0b0011111111111100,
+    0b0111100000011110,
     0b0110001111000110,
-    0b0110011001100110,
-    0b0110011001100110,
-    0b0110011001100110,
-    0b0110011001100110,
-    0b0110011001100110,
-    0b0110011111100110,
-    0b0011001111001100,
-    0b0011100000011100,
-    0b0001111111111000,
-    0b0000000000000000,
+    0b0110001111000110,
+    0b1100001111000011,
+    0b1100011001100011,
+    0b1100011001100011,
+    0b1100011001100011,
+    0b1100011001100011,
+    0b1100011001100011,
+    0b1100011111100011,
+    0b1100011111100011,
+    0b0110001111000110,
+    0b0111100000011110,
+    0b0011111111111100,
 ]);
 const RIFTBASTION_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000000000000000,
+    0b0000001111000000,
     0b0000001111000000,
     0b0000001111000000,
     0b0000001100000000,
@@ -3050,20 +1703,20 @@ const RIFTBASTION_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
 ]);
 const HEPTARCHCORE_BASE_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
-    0b0000000100000000,
-    0b0000111111110000,
-    0b0001100000001000,
-    0b0011000010000100,
-    0b0010000000000100,
-    0b0110000000000110,
-    0b0110000000000010,
-    0b0110000000000110,
-    0b0010000000000100,
-    0b0011000010000100,
-    0b0001100000001000,
-    0b0000111111110000,
-    0b0000000100000000,
-    0b0000000000000000,
+    0b0000000110000000,
+    0b0000111111111000,
+    0b0001100000000100,
+    0b0011000001000010,
+    0b0010000000000010,
+    0b0110000000000011,
+    0b0110000000000001,
+    0b0110000000000001,
+    0b0110000000000011,
+    0b0010000000000010,
+    0b0011000001000010,
+    0b0001100000000100,
+    0b0000111111111000,
+    0b0000000110000000,
     0b0000000000000000,
 ]);
 const HEPTARCHCORE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
@@ -3071,14 +1724,14 @@ const HEPTARCHCORE_DETAIL_A_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000001101100000,
-    0b0000010000010000,
-    0b0000100000010000,
-    0b0000100000010000,
-    0b0000100000010000,
-    0b0000010000010000,
-    0b0000001101100000,
-    0b0000000000000000,
+    0b0000001110110000,
+    0b0000010000001000,
+    0b0000100000001000,
+    0b0000100000001000,
+    0b0000100000001000,
+    0b0000100000001000,
+    0b0000010000001000,
+    0b0000001110110000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -3088,16 +1741,16 @@ const HEPTARCHCORE_DETAIL_B_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000011111110000,
-    0b0000110000011000,
-    0b0001100000001000,
-    0b0001000000001000,
-    0b0001000000001100,
-    0b0001000000001000,
-    0b0001100000001000,
-    0b0000110000011000,
-    0b0000011111110000,
-    0b0000000000000000,
+    0b0000011111111000,
+    0b0000110000001100,
+    0b0001100000000100,
+    0b0001000000000100,
+    0b0001000000000110,
+    0b0001000000000110,
+    0b0001000000000100,
+    0b0001100000000100,
+    0b0000110000001100,
+    0b0000011111111000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -3108,12 +1761,12 @@ const HEPTARCHCORE_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
-    0b0000001111100000,
-    0b0000011111100000,
-    0b0000011001100000,
-    0b0000011111100000,
-    0b0000001111100000,
-    0b0000000000000000,
+    0b0000001111110000,
+    0b0000011111110000,
+    0b0000011000110000,
+    0b0000011000110000,
+    0b0000011111110000,
+    0b0000001111110000,
     0b0000000000000000,
     0b0000000000000000,
     0b0000000000000000,
@@ -3121,22 +1774,22 @@ const HEPTARCHCORE_DETAIL_C_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
     0b0000000000000000,
 ]);
 const HEPTARCHCORE_DETAIL_D_SPRITE_BITS: [u8; 32] = pack_enemy_sprite_rows([
-    0b0000000100000000,
-    0b0000111011100000,
-    0b0001000000001000,
-    0b0010000000000100,
+    0b0000000110000000,
+    0b0000111001110000,
+    0b0001000000000100,
+    0b0010000000000010,
     0b0000000000000000,
-    0b0100000000000010,
+    0b0100000000000001,
     0b0000000000000000,
-    0b1000000110000000,
+    0b1000000111000000,
+    0b1000000111000000,
     0b0000000000000000,
-    0b0100000000000010,
+    0b0100000000000001,
     0b0000000000000000,
-    0b0010000000000100,
-    0b0001000000001000,
-    0b0000111011100000,
-    0b0000000100000000,
-    0b0000000000000000,
+    0b0010000000000010,
+    0b0001000000000100,
+    0b0000111001110000,
+    0b0000000110000000,
 ]);
 
 const SCOUTDRONE_BASE_LAYER: EnemySpriteLayerDef = EnemySpriteLayerDef {
@@ -3604,6 +2257,80 @@ pub(crate) fn enemy_sprite_def(profile: EnemyProfileId) -> EnemySpriteDef {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
+fn enemy_sprite_union_bounds(sprite: EnemySpriteDef) -> EnemySpriteBounds {
+    let mut min_x = sprite.width as usize;
+    let mut max_x = 0usize;
+    let mut min_y = sprite.height as usize;
+    let mut max_y = 0usize;
+    let mut any_active = false;
+
+    for y in 0..sprite.height as usize {
+        for x in 0..sprite.width as usize {
+            if !sprite
+                .layers
+                .iter()
+                .any(|layer| enemy_sprite_layer_has_pixel(*layer, x, y))
+            {
+                continue;
+            }
+            any_active = true;
+            min_x = min_x.min(x);
+            max_x = max_x.max(x);
+            min_y = min_y.min(y);
+            max_y = max_y.max(y);
+        }
+    }
+
+    if !any_active {
+        return EnemySpriteBounds {
+            left: 0,
+            top: 0,
+            width: sprite.width.max(1),
+            height: sprite.height.max(1),
+        };
+    }
+
+    EnemySpriteBounds {
+        left: min_x as u8,
+        top: min_y as u8,
+        width: (max_x - min_x + 1) as u8,
+        height: (max_y - min_y + 1) as u8,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn enemy_sprite_bounds(profile: EnemyProfileId) -> EnemySpriteBounds {
+    enemy_sprite_union_bounds(enemy_sprite_def(profile))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn enemy_profile_for_sprite_code(code: u8) -> Option<EnemyProfileId> {
+    match code {
+        1..=3 => Some(EnemyProfileId::ScoutDrone),
+        4..=6 => Some(EnemyProfileId::NeedlerDrone),
+        7..=9 => Some(EnemyProfileId::RampartDrone),
+        10..=11 => Some(EnemyProfileId::SpineSentry),
+        12..=15 => Some(EnemyProfileId::PentaCore),
+        16..=18 => Some(EnemyProfileId::VoltMantis),
+        19..=21 => Some(EnemyProfileId::ShardWeaver),
+        22..=24 => Some(EnemyProfileId::PrismArray),
+        25..=27 => Some(EnemyProfileId::GlassBishop),
+        28..=31 => Some(EnemyProfileId::HexarchCore),
+        32..=35 => Some(EnemyProfileId::NullRaider),
+        36..=39 => Some(EnemyProfileId::RiftStalker),
+        40..=42 => Some(EnemyProfileId::SiegeSpider),
+        43..=46 => Some(EnemyProfileId::RiftBastion),
+        47..=51 => Some(EnemyProfileId::HeptarchCore),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn enemy_sprite_bounds_by_code(code: u8) -> Option<EnemySpriteBounds> {
+    enemy_profile_for_sprite_code(code).map(enemy_sprite_bounds)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 fn enemy_sprite_layer_has_pixel(layer: EnemySpriteLayerDef, x: usize, y: usize) -> bool {
     let width = layer.width as usize;
     let bit_index = y * width + x;
@@ -3670,593 +2397,704 @@ pub(crate) fn enemy_sprite_layer_def_by_code(code: u8) -> Option<EnemySpriteLaye
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn intent_def(
+    name: &'static str,
+    summary: &'static str,
+    damage: i32,
+    hits: u8,
+    gain_block: i32,
+    prime_bleed: u8,
+    self_focus: i8,
+    self_rhythm: i8,
+    self_momentum: i8,
+    target_focus: i8,
+    target_rhythm: i8,
+    target_momentum: i8,
+    apply_bleed: u8,
+) -> EnemyIntent {
+    EnemyIntent {
+        name,
+        summary,
+        damage,
+        hits,
+        gain_block,
+        prime_bleed,
+        self_focus,
+        self_rhythm,
+        self_momentum,
+        target_focus,
+        target_rhythm,
+        target_momentum,
+        apply_bleed,
+    }
+}
+
 pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent {
     match (profile, index % 3) {
-        (EnemyProfileId::ScoutDrone, 0) => EnemyIntent {
-            name: "Shock Needle",
-            summary: "Deal 5 damage.",
-            damage: 5,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::ScoutDrone, 1) => EnemyIntent {
-            name: "Crossfire",
-            summary: "Deal 3 damage twice.",
-            damage: 3,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::ScoutDrone, _) => EnemyIntent {
-            name: "Brace Cycle",
-            summary: "Gain 4 Shield. Gain Strength 1.",
-            damage: 0,
-            hits: 0,
-            gain_block: 4,
-            gain_strength: 1,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::NeedlerDrone, 0) => EnemyIntent {
-            name: "Needle Tap",
-            summary: "Deal 4 damage. Apply Bleed 1.",
-            damage: 4,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 1,
-        },
-        (EnemyProfileId::NeedlerDrone, 1) => EnemyIntent {
-            name: "Split Sting",
-            summary: "Deal 2 damage three times.",
-            damage: 2,
-            hits: 3,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::NeedlerDrone, _) => EnemyIntent {
-            name: "Stabilize",
-            summary: "Gain 4 Shield.",
-            damage: 0,
-            hits: 0,
-            gain_block: 4,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RampartDrone, 0) => EnemyIntent {
-            name: "Ram Plate",
-            summary: "Deal 8 damage.",
-            damage: 8,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RampartDrone, 1) => EnemyIntent {
-            name: "Pressure Clamp",
-            summary: "Deal 5 damage. Apply Weak 1.",
-            damage: 5,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 1,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RampartDrone, _) => EnemyIntent {
-            name: "Reinforce Wall",
-            summary: "Gain 8 Shield. Next hit applies Bleed 2.",
-            damage: 0,
-            hits: 0,
-            gain_block: 8,
-            gain_strength: 0,
-            prime_bleed: 2,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::SpineSentry, 0) => EnemyIntent {
-            name: "Spine Rack",
-            summary: "Deal 4 damage twice. Apply Bleed 1.",
-            damage: 4,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 1,
-        },
-        (EnemyProfileId::SpineSentry, 1) => EnemyIntent {
-            name: "Target Lock",
-            summary: "Deal 7 damage. Apply 1 Vulnerable.",
-            damage: 7,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::SpineSentry, _) => EnemyIntent {
-            name: "Quill Plating",
-            summary: "Gain 9 Shield.",
-            damage: 0,
-            hits: 0,
-            gain_block: 9,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PentaCore, 0) => EnemyIntent {
-            name: "Target Prism",
-            summary: "Deal 7 damage. Apply 1 Vulnerable.",
-            damage: 7,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PentaCore, 1) => EnemyIntent {
-            name: "Penta Bulwark",
-            summary: "Gain 10 Shield. Next hit applies Bleed 2.",
-            damage: 0,
-            hits: 0,
-            gain_block: 10,
-            gain_strength: 0,
-            prime_bleed: 2,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PentaCore, _) => EnemyIntent {
-            name: "Split Lattice",
-            summary: "Deal 4 damage three times.",
-            damage: 4,
-            hits: 3,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::VoltMantis, 0) => EnemyIntent {
-            name: "Arc Cut",
-            summary: "Deal 8 damage.",
-            damage: 8,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::VoltMantis, 1) => EnemyIntent {
-            name: "Arc Lash",
-            summary: "Deal 4 damage twice.",
-            damage: 4,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::VoltMantis, _) => EnemyIntent {
-            name: "Charge Shell",
-            summary: "Gain 7 Shield.",
-            damage: 0,
-            hits: 0,
-            gain_block: 7,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::ShardWeaver, 0) => EnemyIntent {
-            name: "Glass Cut",
-            summary: "Deal 6 damage. Apply 1 Vulnerable.",
-            damage: 6,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::ShardWeaver, 1) => EnemyIntent {
-            name: "Mirror Volley",
-            summary: "Deal 3 damage twice. Gain 4 Shield.",
-            damage: 3,
-            hits: 2,
-            gain_block: 4,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::ShardWeaver, _) => EnemyIntent {
-            name: "Refocus",
-            summary: "Gain 8 Shield. Apply Frail 1.",
-            damage: 0,
-            hits: 0,
-            gain_block: 8,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 1,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PrismArray, 0) => EnemyIntent {
-            name: "Prism Bite",
-            summary: "Deal 7 damage. Apply 1 Vulnerable.",
-            damage: 7,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PrismArray, 1) => EnemyIntent {
-            name: "Ion Salvo",
-            summary: "Deal 5 damage twice.",
-            damage: 5,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::PrismArray, _) => EnemyIntent {
-            name: "Prism Guard",
-            summary: "Gain 10 Shield.",
-            damage: 0,
-            hits: 0,
-            gain_block: 10,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::GlassBishop, 0) => EnemyIntent {
-            name: "Shatter Beam",
-            summary: "Deal 8 damage. Apply 1 Vulnerable.",
-            damage: 8,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::GlassBishop, 1) => EnemyIntent {
-            name: "Split Halo",
-            summary: "Deal 5 damage twice. Gain 4 Shield.",
-            damage: 5,
-            hits: 2,
-            gain_block: 4,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::GlassBishop, _) => EnemyIntent {
-            name: "Faceted Ward",
-            summary: "Gain 10 Shield. Apply Bleed 1.",
-            damage: 0,
-            hits: 0,
-            gain_block: 10,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 1,
-        },
-        (EnemyProfileId::HexarchCore, 0) => EnemyIntent {
-            name: "Hex Shell",
-            summary: "Gain 12 Shield. Apply 2 Vulnerable.",
-            damage: 0,
-            hits: 0,
-            gain_block: 12,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 2,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::HexarchCore, 1) => EnemyIntent {
-            name: "Hex Breaker",
-            summary: "Deal 15 damage.",
-            damage: 15,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::HexarchCore, _) => EnemyIntent {
-            name: "Hex Volley",
-            summary: "Deal 5 damage three times.",
-            damage: 5,
-            hits: 3,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::NullRaider, 0) => EnemyIntent {
-            name: "Null Shot",
-            summary: "Deal 10 damage.",
-            damage: 10,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::NullRaider, 1) => EnemyIntent {
-            name: "Chain Burst",
-            summary: "Deal 5 damage twice.",
-            damage: 5,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::NullRaider, _) => EnemyIntent {
-            name: "Null Guard",
-            summary: "Gain 9 Shield.",
-            damage: 0,
-            hits: 0,
-            gain_block: 9,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RiftStalker, 0) => EnemyIntent {
-            name: "Rift Claw",
-            summary: "Deal 9 damage. Apply Bleed 1.",
-            damage: 9,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 1,
-        },
-        (EnemyProfileId::RiftStalker, 1) => EnemyIntent {
-            name: "Rend Salvo",
-            summary: "Deal 5 damage twice.",
-            damage: 5,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RiftStalker, _) => EnemyIntent {
-            name: "Lock Anchor",
-            summary: "Gain 10 Shield. Apply 1 Vulnerable.",
-            damage: 0,
-            hits: 0,
-            gain_block: 10,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::SiegeSpider, 0) => EnemyIntent {
-            name: "Bulwark Hammer",
-            summary: "Deal 11 damage.",
-            damage: 11,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::SiegeSpider, 1) => EnemyIntent {
-            name: "Lock Volley",
-            summary: "Deal 6 damage twice.",
-            damage: 6,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::SiegeSpider, _) => EnemyIntent {
-            name: "Bulwark Seal",
-            summary: "Gain 12 Shield. Apply 1 Vulnerable.",
-            damage: 0,
-            hits: 0,
-            gain_block: 12,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RiftBastion, 0) => EnemyIntent {
-            name: "Grav Hammer",
-            summary: "Deal 12 damage.",
-            damage: 12,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RiftBastion, 1) => EnemyIntent {
-            name: "Collapse Grid",
-            summary: "Deal 6 damage twice. Apply 1 Vulnerable.",
-            damage: 6,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::RiftBastion, _) => EnemyIntent {
-            name: "Anchor Field",
-            summary: "Gain 12 Shield. Next hit applies Bleed 3.",
-            damage: 0,
-            hits: 0,
-            gain_block: 12,
-            gain_strength: 0,
-            prime_bleed: 3,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::HeptarchCore, 0) => EnemyIntent {
-            name: "Singularity Shell",
-            summary: "Gain 16 Shield. Next hit applies Bleed 3.",
-            damage: 0,
-            hits: 0,
-            gain_block: 16,
-            gain_strength: 0,
-            prime_bleed: 3,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::HeptarchCore, 1) => EnemyIntent {
-            name: "Array Collapse",
-            summary: "Deal 8 damage twice. Apply 1 Vulnerable.",
-            damage: 8,
-            hits: 2,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 1,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
-        (EnemyProfileId::HeptarchCore, _) => EnemyIntent {
-            name: "Crown Breaker",
-            summary: "Deal 20 damage.",
-            damage: 20,
-            hits: 1,
-            gain_block: 0,
-            gain_strength: 0,
-            prime_bleed: 0,
-            apply_expose: 0,
-            apply_weak: 0,
-            apply_frail: 0,
-            apply_bleed: 0,
-        },
+        (EnemyProfileId::ScoutDrone, 0) => intent_def(
+            "Shock Needle",
+            "Deal 5 damage.",
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::ScoutDrone, 1) => intent_def(
+            "Crossfire",
+            "Deal 3 damage twice.",
+            3,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::ScoutDrone, _) => intent_def(
+            "Brace Cycle",
+            "Gain 4 Shield. Gain Focus +1.",
+            0,
+            0,
+            4,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::NeedlerDrone, 0) => intent_def(
+            "Needle Tap",
+            "Deal 4 damage. Apply Bleed 1.",
+            4,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ),
+        (EnemyProfileId::NeedlerDrone, 1) => intent_def(
+            "Split Sting",
+            "Deal 2 damage three times.",
+            2,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::NeedlerDrone, _) => intent_def(
+            "Stabilize",
+            "Gain 4 Shield.",
+            0,
+            0,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RampartDrone, 0) => intent_def(
+            "Ram Plate",
+            "Deal 8 damage.",
+            8,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RampartDrone, 1) => intent_def(
+            "Pressure Clamp",
+            "Deal 5 damage. Apply Focus -1.",
+            5,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RampartDrone, _) => intent_def(
+            "Reinforce Wall",
+            "Gain 8 Shield. Next hit applies Bleed 2.",
+            0,
+            0,
+            8,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::SpineSentry, 0) => intent_def(
+            "Spine Rack",
+            "Deal 4 damage twice. Apply Bleed 1.",
+            4,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ),
+        (EnemyProfileId::SpineSentry, 1) => intent_def(
+            "Target Lock",
+            "Deal 7 damage. Apply Momentum -1.",
+            7,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::SpineSentry, _) => intent_def(
+            "Quill Plating",
+            "Gain 9 Shield.",
+            0,
+            0,
+            9,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::PentaCore, 0) => intent_def(
+            "Target Prism",
+            "Deal 7 damage. Apply Momentum -1.",
+            7,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::PentaCore, 1) => intent_def(
+            "Penta Bulwark",
+            "Gain 10 Shield. Next hit applies Bleed 2.",
+            0,
+            0,
+            10,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::PentaCore, _) => intent_def(
+            "Split Lattice",
+            "Deal 4 damage three times.",
+            4,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::VoltMantis, 0) => {
+            intent_def("Arc Cut", "Deal 8 damage.", 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        }
+        (EnemyProfileId::VoltMantis, 1) => intent_def(
+            "Arc Lash",
+            "Deal 4 damage twice.",
+            4,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::VoltMantis, _) => intent_def(
+            "Surge Shell",
+            "Gain 7 Shield. Gain Momentum +1.",
+            0,
+            0,
+            7,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::ShardWeaver, 0) => intent_def(
+            "Glass Cut",
+            "Deal 6 damage. Apply Momentum -1.",
+            6,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::ShardWeaver, 1) => intent_def(
+            "Mirror Volley",
+            "Deal 3 damage twice. Gain 4 Shield.",
+            3,
+            2,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::ShardWeaver, _) => intent_def(
+            "Refocus",
+            "Gain 8 Shield. Apply Rhythm -1.",
+            0,
+            0,
+            8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+        ),
+        (EnemyProfileId::PrismArray, 0) => intent_def(
+            "Prism Bite",
+            "Deal 7 damage. Apply Momentum -1.",
+            7,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::PrismArray, 1) => intent_def(
+            "Ion Salvo",
+            "Deal 5 damage twice.",
+            5,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::PrismArray, _) => intent_def(
+            "Prism Guard",
+            "Gain 10 Shield.",
+            0,
+            0,
+            10,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::GlassBishop, 0) => intent_def(
+            "Shatter Beam",
+            "Deal 8 damage. Apply Momentum -1.",
+            8,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::GlassBishop, 1) => intent_def(
+            "Split Halo",
+            "Deal 5 damage twice. Gain 4 Shield.",
+            5,
+            2,
+            4,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::GlassBishop, _) => intent_def(
+            "Faceted Ward",
+            "Gain 10 Shield. Apply Bleed 1.",
+            0,
+            0,
+            10,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ),
+        (EnemyProfileId::HexarchCore, 0) => intent_def(
+            "Hex Shell",
+            "Gain 12 Shield. Apply Focus -2.",
+            0,
+            0,
+            12,
+            0,
+            0,
+            0,
+            0,
+            -2,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::HexarchCore, 1) => intent_def(
+            "Hex Breaker",
+            "Deal 15 damage.",
+            15,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::HexarchCore, _) => intent_def(
+            "Hex Volley",
+            "Deal 5 damage three times.",
+            5,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::NullRaider, 0) => intent_def(
+            "Null Shot",
+            "Deal 10 damage.",
+            10,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::NullRaider, 1) => intent_def(
+            "Chain Burst",
+            "Deal 5 damage twice.",
+            5,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::NullRaider, _) => intent_def(
+            "Null Guard",
+            "Gain 9 Shield.",
+            0,
+            0,
+            9,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RiftStalker, 0) => intent_def(
+            "Rift Claw",
+            "Deal 9 damage. Apply Bleed 1.",
+            9,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+        ),
+        (EnemyProfileId::RiftStalker, 1) => intent_def(
+            "Rend Salvo",
+            "Deal 5 damage twice.",
+            5,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RiftStalker, _) => intent_def(
+            "Lock Anchor",
+            "Gain 10 Shield. Apply Focus -1.",
+            0,
+            0,
+            10,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::SiegeSpider, 0) => intent_def(
+            "Bulwark Hammer",
+            "Deal 11 damage.",
+            11,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::SiegeSpider, 1) => intent_def(
+            "Lock Volley",
+            "Deal 6 damage twice.",
+            6,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::SiegeSpider, _) => intent_def(
+            "Bulwark Seal",
+            "Gain 12 Shield. Apply Focus -1.",
+            0,
+            0,
+            12,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RiftBastion, 0) => intent_def(
+            "Grav Hammer",
+            "Deal 12 damage.",
+            12,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::RiftBastion, 1) => intent_def(
+            "Collapse Grid",
+            "Deal 6 damage twice. Apply Momentum -1.",
+            6,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::RiftBastion, _) => intent_def(
+            "Anchor Field",
+            "Gain 12 Shield. Next hit applies Bleed 3.",
+            0,
+            0,
+            12,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::HeptarchCore, 0) => intent_def(
+            "Singularity Shell",
+            "Gain 16 Shield. Next hit applies Bleed 3.",
+            0,
+            0,
+            16,
+            3,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        (EnemyProfileId::HeptarchCore, 1) => intent_def(
+            "Array Collapse",
+            "Deal 8 damage twice. Apply Momentum -1.",
+            8,
+            2,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            -1,
+            0,
+        ),
+        (EnemyProfileId::HeptarchCore, _) => intent_def(
+            "Crown Breaker",
+            "Deal 20 damage.",
+            20,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
     }
 }
 
@@ -4267,8 +3105,6 @@ mod tests {
     const TEST_PRIMARY_SEED: u64 = 0x0BAD_5EED;
     const TEST_ALT_SEED: u64 = 0xDEAD_BEEF;
     const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
-    const TEST_ELITE_REWARD_SEED: u64 = 0xFACE_FEED;
-    const TEST_SHOP_SEED: u64 = 0xD15C_A11C;
 
     #[test]
     fn event_order_is_deterministic_and_non_repeating_within_each_level() {
@@ -4493,77 +3329,6 @@ mod tests {
     }
 
     #[test]
-    fn elite_rewards_are_distinct() {
-        let choices = reward_choices(TEST_ELITE_REWARD_SEED, RewardTier::Elite, 2);
-        let mut sorted = choices.clone();
-        sorted.sort_by_key(|card| *card as u8);
-        sorted.dedup();
-
-        assert_eq!(choices.len(), 3);
-        assert_eq!(sorted.len(), 3);
-    }
-
-    #[test]
-    fn elite_rewards_scale_by_level() {
-        let act_one_pool = reward_pool(RewardTier::Elite, 1);
-        let act_two_pool = reward_pool(RewardTier::Elite, 2);
-        let act_three_pool = reward_pool(RewardTier::Elite, 3);
-
-        assert!(act_one_pool.contains(&CardId::RazorNet));
-        assert!(act_one_pool.contains(&CardId::FracturePulse));
-        assert!(act_one_pool.contains(&CardId::VectorLock));
-        assert!(act_one_pool.contains(&CardId::SeverArc));
-        assert!(act_one_pool.contains(&CardId::Lockbreaker));
-        assert!(act_one_pool.contains(&CardId::CounterLattice));
-        assert!(!act_one_pool.contains(&CardId::BreachSignal));
-        assert!(!act_one_pool.contains(&CardId::AnchorLoop));
-
-        assert!(act_two_pool.contains(&CardId::RazorNet));
-        assert!(act_two_pool.contains(&CardId::FracturePulse));
-        assert!(act_two_pool.contains(&CardId::VectorLock));
-        assert!(act_two_pool.contains(&CardId::SeverArc));
-        assert!(act_two_pool.contains(&CardId::Lockbreaker));
-        assert!(act_two_pool.contains(&CardId::CounterLattice));
-        assert!(act_two_pool.contains(&CardId::BreachSignal));
-        assert!(!act_two_pool.contains(&CardId::AnchorLoop));
-
-        assert!(act_three_pool.contains(&CardId::RazorNet));
-        assert!(act_three_pool.contains(&CardId::FracturePulse));
-        assert!(act_three_pool.contains(&CardId::VectorLock));
-        assert!(act_three_pool.contains(&CardId::SeverArc));
-        assert!(act_three_pool.contains(&CardId::Lockbreaker));
-        assert!(act_three_pool.contains(&CardId::CounterLattice));
-        assert!(act_three_pool.contains(&CardId::BreachSignal));
-        assert!(act_three_pool.contains(&CardId::AnchorLoop));
-    }
-
-    #[test]
-    fn shop_offers_stay_distinct_when_act_one_repeats_elite_tiers() {
-        let offers = shop_offers(TEST_SHOP_SEED, 1);
-        let mut cards: Vec<_> = offers.iter().map(|offer| offer.card).collect();
-        cards.sort_by_key(|card| *card as u8);
-        cards.dedup();
-
-        assert_eq!(offers.len(), 3);
-        assert_eq!(cards.len(), 3);
-        assert_eq!(offers[0].price, 16);
-        assert_eq!(offers[1].price, 24);
-        assert_eq!(offers[2].price, 24);
-    }
-
-    #[test]
-    fn later_act_shop_offers_include_boss_cards() {
-        let act_two_offers = shop_offers(TEST_BOSS_REWARD_SEED, 2);
-        let act_three_offers = shop_offers(TEST_BOSS_REWARD_SEED, 3);
-        let boss_pool = reward_pool(RewardTier::Boss, 3);
-
-        assert!(boss_pool.contains(&act_two_offers[2].card));
-        assert!(boss_pool.contains(&act_three_offers[2].card));
-        assert_eq!(act_two_offers[2].price, 40);
-        assert_eq!(act_three_offers[2].price, 40);
-    }
-
-    #[test]
     fn base_cards_have_upgrades_but_upgraded_cards_do_not_chain() {
         assert_eq!(
             upgraded_card(CardId::FlareSlash),
@@ -4607,7 +3372,7 @@ mod tests {
         unique_cards.sort_by_key(|card| *card as u8);
         unique_cards.dedup();
 
-        assert_eq!(cards.len(), 32);
+        assert_eq!(cards.len(), 64);
         assert_eq!(unique_cards.len(), cards.len());
         assert!(cards.iter().all(|card| upgraded_card(*card).is_some()));
         assert!(
@@ -4635,7 +3400,7 @@ mod tests {
         assert_eq!(mark.cost, 0);
         assert_eq!(
             mark.description,
-            "Apply 1 Vulnerable. If target has Bleed, gain 4 Shield."
+            "Apply Momentum -1. If target has Bleed, gain 4 Shield."
         );
         assert_eq!(brace.target, CardTarget::SelfOnly);
         assert_eq!(
@@ -4644,18 +3409,18 @@ mod tests {
         );
         assert_eq!(
             fault.description,
-            "Deal 5 damage. If target has Weak or Frail, gain Strength 1."
+            "Deal 5 damage. If target Focus < 0, gain Focus +1."
         );
         assert_eq!(sever.cost, 2);
         assert_eq!(sever.target, CardTarget::Enemy);
         assert_eq!(
             lockbreaker.description,
-            "Deal 6 damage. If target has Vulnerable, apply Weak 1 and gain 6 Shield."
+            "Deal 6 damage. If target Focus < 0, apply Focus -1 and gain 6 Shield."
         );
         assert_eq!(counter.target, CardTarget::Enemy);
         assert_eq!(
             counter.description,
-            "Deal 6 damage. If target has Weak, gain 1 Energy."
+            "Deal 6 damage. If target Focus < 0, gain 1 Energy."
         );
         assert_eq!(terminal.cost, 2);
         assert_eq!(terminal.target, CardTarget::Enemy);
@@ -4676,16 +3441,16 @@ mod tests {
             "Trama de Respuesta"
         );
         assert_eq!(
-            localized_card_description(CardId::BraceCircuit, Language::Spanish),
+            localized_card_def(CardId::BraceCircuit, Language::Spanish).description,
             "Gana 6 de Escudo. Si ya tienes Escudo, roba 1."
         );
         assert_eq!(
-            localized_card_description(CardId::CounterLatticePlus, Language::Spanish),
-            "Inflige 8 de daño. Si el objetivo tiene Débil, gana 1 de Energía."
+            localized_card_def(CardId::CounterLatticePlus, Language::Spanish).description,
+            "Inflige 8 de daño. Si el objetivo tiene Enfoque < 0, gana 1 de Energía."
         );
         assert_eq!(
-            localized_card_description(CardId::TerminalLoopPlus, Language::English),
-            "Deal 15 damage. If target has Bleed, draw 1. If target has Vulnerable, gain Strength 2."
+            localized_card_def(CardId::TerminalLoopPlus, Language::English).description,
+            "Deal 15 damage. If target has Bleed, draw 1. If target Momentum < 0, gain Focus +2."
         );
     }
 
@@ -4696,17 +3461,17 @@ mod tests {
         let shard_refocus = enemy_intent(EnemyProfileId::ShardWeaver, 2);
 
         assert_eq!(scout_brace.gain_block, 4);
-        assert_eq!(scout_brace.gain_strength, 1);
-        assert_eq!(scout_brace.summary, "Gain 4 Shield. Gain Strength 1.");
+        assert_eq!(scout_brace.self_focus, 1);
+        assert_eq!(scout_brace.summary, "Gain 4 Shield. Gain Focus +1.");
 
         assert_eq!(rampart_clamp.damage, 5);
-        assert_eq!(rampart_clamp.apply_weak, 1);
-        assert_eq!(rampart_clamp.apply_expose, 0);
-        assert_eq!(rampart_clamp.summary, "Deal 5 damage. Apply Weak 1.");
+        assert_eq!(rampart_clamp.target_focus, -1);
+        assert_eq!(rampart_clamp.target_rhythm, 0);
+        assert_eq!(rampart_clamp.summary, "Deal 5 damage. Apply Focus -1.");
 
         assert_eq!(shard_refocus.gain_block, 8);
-        assert_eq!(shard_refocus.apply_frail, 1);
-        assert_eq!(shard_refocus.summary, "Gain 8 Shield. Apply Frail 1.");
+        assert_eq!(shard_refocus.target_rhythm, -1);
+        assert_eq!(shard_refocus.summary, "Gain 8 Shield. Apply Rhythm -1.");
     }
 
     #[test]
@@ -4737,7 +3502,7 @@ mod tests {
 
         assert_eq!(penta_open.name, "Target Prism");
         assert_eq!(penta_open.damage, 7);
-        assert_eq!(penta_open.apply_expose, 1);
+        assert_eq!(penta_open.target_momentum, -1);
         assert_eq!(penta_mid.name, "Penta Bulwark");
         assert_eq!(penta_mid.gain_block, 10);
         assert_eq!(penta_mid.prime_bleed, 2);
@@ -4747,7 +3512,7 @@ mod tests {
 
         assert_eq!(hex_open.name, "Hex Shell");
         assert_eq!(hex_open.gain_block, 12);
-        assert_eq!(hex_open.apply_expose, 2);
+        assert_eq!(hex_open.target_focus, -2);
         assert_eq!(hex_mid.name, "Hex Breaker");
         assert_eq!(hex_mid.damage, 15);
         assert_eq!(hex_close.name, "Hex Volley");
@@ -4760,7 +3525,7 @@ mod tests {
         assert_eq!(hept_mid.name, "Array Collapse");
         assert_eq!(hept_mid.damage, 8);
         assert_eq!(hept_mid.hits, 2);
-        assert_eq!(hept_mid.apply_expose, 1);
+        assert_eq!(hept_mid.target_momentum, -1);
         assert_eq!(hept_close.name, "Crown Breaker");
         assert_eq!(hept_close.damage, 20);
     }
@@ -4840,7 +3605,7 @@ mod tests {
         }
     }
     #[test]
-    fn enemy_sprites_have_centered_union_bounds() {
+    fn enemy_sprites_fill_at_least_one_canvas_axis() {
         let profiles = [
             EnemyProfileId::ScoutDrone,
             EnemyProfileId::NeedlerDrone,
@@ -4861,6 +3626,7 @@ mod tests {
 
         for profile in profiles {
             let sprite = enemy_sprite_def(profile);
+            let bounds = enemy_sprite_bounds(profile);
             let mut min_x = sprite.width as i32;
             let mut max_x = -1i32;
             let mut min_y = sprite.height as i32;
@@ -4883,12 +3649,42 @@ mod tests {
             }
 
             assert!(max_x >= min_x && max_y >= min_y);
-            let centered_x = (min_x + max_x + 1) as f32 * 0.5;
-            let centered_y = (min_y + max_y + 1) as f32 * 0.5;
-            let target_x = sprite.width as f32 * 0.5;
-            let target_y = sprite.height as f32 * 0.5;
-            assert!((centered_x - target_x).abs() <= 0.5);
-            assert!((centered_y - target_y).abs() <= 0.5);
+            assert_eq!(bounds.left, min_x as u8);
+            assert_eq!(bounds.top, min_y as u8);
+            assert_eq!(bounds.width, (max_x - min_x + 1) as u8);
+            assert_eq!(bounds.height, (max_y - min_y + 1) as u8);
+            assert!(
+                bounds.width == sprite.width || bounds.height == sprite.height,
+                "{profile:?} should fill width or height after source normalization"
+            );
+        }
+    }
+
+    #[test]
+    fn enemy_sprite_codes_share_their_profile_union_bounds() {
+        let profiles = [
+            EnemyProfileId::ScoutDrone,
+            EnemyProfileId::NeedlerDrone,
+            EnemyProfileId::RampartDrone,
+            EnemyProfileId::SpineSentry,
+            EnemyProfileId::PentaCore,
+            EnemyProfileId::VoltMantis,
+            EnemyProfileId::ShardWeaver,
+            EnemyProfileId::PrismArray,
+            EnemyProfileId::GlassBishop,
+            EnemyProfileId::HexarchCore,
+            EnemyProfileId::NullRaider,
+            EnemyProfileId::RiftStalker,
+            EnemyProfileId::SiegeSpider,
+            EnemyProfileId::RiftBastion,
+            EnemyProfileId::HeptarchCore,
+        ];
+
+        for profile in profiles {
+            let expected = enemy_sprite_bounds(profile);
+            for layer in enemy_sprite_def(profile).layers {
+                assert_eq!(enemy_sprite_bounds_by_code(layer.code), Some(expected));
+            }
         }
     }
 }

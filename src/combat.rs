@@ -1,13 +1,17 @@
 use std::collections::VecDeque;
 
 use crate::content::{
-    CardId, CardTarget, EnemyIntent, EnemyProfileId, card_def, enemy_intent, starter_deck,
+    AxisKind, CardId, CardTarget, EnemyIntent, EnemyProfileId, ModuleId, card_def,
+    card_requirement, enemy_intent, starter_deck,
 };
 use crate::rng::XorShift64;
 
 pub(crate) const DEFAULT_PLAYER_HP: i32 = 32;
 pub(crate) const MAX_ENEMIES_PER_ENCOUNTER: usize = 2;
 pub(crate) const MAX_HAND_CARDS: usize = 9;
+const MAX_AXIS_ABS_VALUE: i8 = 9;
+const AXIS_STEP_UP_BASIS_POINTS: i32 = 11_000;
+const AXIS_STEP_DOWN_BASIS_POINTS: i32 = 9_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Actor {
@@ -27,10 +31,9 @@ impl Actor {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StatusKind {
     Bleed,
-    Expose,
-    Weak,
-    Frail,
-    Strength,
+    Focus,
+    Rhythm,
+    Momentum,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,10 +88,9 @@ impl Default for EncounterSetup {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct StatusSet {
     pub(crate) bleed: u8,
-    pub(crate) expose: u8,
-    pub(crate) weak: u8,
-    pub(crate) frail: u8,
-    pub(crate) strength: u8,
+    pub(crate) focus: i8,
+    pub(crate) rhythm: i8,
+    pub(crate) momentum: i8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,6 +151,9 @@ pub(crate) enum CombatEvent {
     CardBurned {
         card: CardId,
     },
+    CardCreated {
+        card: CardId,
+    },
     CardsDiscarded {
         count: usize,
     },
@@ -156,6 +161,11 @@ pub(crate) enum CombatEvent {
     EnergySpent {
         amount: u8,
         remaining: u8,
+    },
+    RequirementNotMet {
+        axis: AxisKind,
+        threshold: i8,
+        actual: i8,
     },
     DamageDealt {
         source: Actor,
@@ -177,7 +187,7 @@ pub(crate) enum CombatEvent {
     StatusApplied {
         target: Actor,
         status: StatusKind,
-        amount: u8,
+        amount: i8,
     },
     StatusTicked {
         actor: Actor,
@@ -374,19 +384,73 @@ impl CombatState {
         self.rng.state
     }
 
-    pub(crate) fn first_enemy_index(&self) -> Option<usize> {
-        self.enemies
-            .iter()
-            .enumerate()
-            .find(|(_, enemy)| enemy.fighter.hp > 0)
-            .map(|(index, _)| index)
-            .or_else(|| (!self.enemies.is_empty()).then_some(0))
-    }
-
     pub(crate) fn enemy_is_alive(&self, index: usize) -> bool {
         self.enemy(index)
             .map(|enemy| enemy.fighter.hp > 0)
             .unwrap_or(false)
+    }
+
+    pub(crate) fn apply_module_start_of_combat(&mut self, module: ModuleId) -> bool {
+        match module {
+            ModuleId::AegisDrive => {
+                self.player.fighter.block = self.player.fighter.block.saturating_add(5);
+                true
+            }
+            ModuleId::TargetingRelay => {
+                self.player.fighter.statuses.focus =
+                    self.player.fighter.statuses.focus.saturating_add(1);
+                self.player.fighter.statuses.focus =
+                    clamp_axis_value(self.player.fighter.statuses.focus);
+                true
+            }
+            ModuleId::Nanoforge => false,
+            ModuleId::CapacitorBank => {
+                self.player.fighter.statuses.momentum =
+                    self.player.fighter.statuses.momentum.saturating_add(1);
+                self.player.fighter.statuses.momentum =
+                    clamp_axis_value(self.player.fighter.statuses.momentum);
+                true
+            }
+            ModuleId::PrismScope => {
+                let mut changed = false;
+                for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
+                    enemy.fighter.statuses.rhythm =
+                        clamp_axis_value(enemy.fighter.statuses.rhythm.saturating_sub(1));
+                    changed = true;
+                }
+                changed
+            }
+            ModuleId::SalvageLedger => false,
+            ModuleId::OverclockCore => {
+                self.player.max_energy = self.player.max_energy.saturating_add(1);
+                self.player.energy = self
+                    .player
+                    .energy
+                    .saturating_add(1)
+                    .min(self.player.max_energy);
+                true
+            }
+            ModuleId::SuppressionField => {
+                let mut changed = false;
+                for enemy in self.enemies.iter_mut().filter(|enemy| enemy.fighter.hp > 0) {
+                    enemy.fighter.statuses.focus =
+                        clamp_axis_value(enemy.fighter.statuses.focus.saturating_sub(1));
+                    changed = true;
+                }
+                changed
+            }
+            ModuleId::RecoveryMatrix => false,
+        }
+    }
+
+    pub(crate) fn apply_start_of_combat_modules(&mut self, modules: &[ModuleId]) -> Vec<ModuleId> {
+        let mut applied = Vec::new();
+        for &module in modules {
+            if self.apply_module_start_of_combat(module) {
+                applied.push(module);
+            }
+        }
+        applied
     }
 
     pub(crate) fn from_persisted_parts(
@@ -420,7 +484,7 @@ impl CombatState {
         let Some(card) = self.hand_card(index) else {
             return false;
         };
-        self.player.energy >= card_def(card).cost
+        self.player.energy >= card_def(card).cost && self.meets_card_requirement(card)
     }
 
     pub(crate) fn card_requires_enemy(&self, index: usize) -> bool {
@@ -429,23 +493,46 @@ impl CombatState {
             .unwrap_or(false)
     }
 
-    fn status_amount(&self, actor: Actor, status: StatusKind) -> u8 {
+    pub(crate) fn card_targets_all_enemies(&self, index: usize) -> bool {
+        self.hand_card(index)
+            .map(|card| matches!(card_def(card).target, CardTarget::AllEnemies))
+            .unwrap_or(false)
+    }
+
+    fn axis_value(&self, actor: Actor, axis: AxisKind) -> i8 {
         let statuses = self.fighter(actor).statuses;
-        match status {
-            StatusKind::Bleed => statuses.bleed,
-            StatusKind::Expose => statuses.expose,
-            StatusKind::Weak => statuses.weak,
-            StatusKind::Frail => statuses.frail,
-            StatusKind::Strength => statuses.strength,
+        match axis {
+            AxisKind::Focus => statuses.focus,
+            AxisKind::Rhythm => statuses.rhythm,
+            AxisKind::Momentum => statuses.momentum,
         }
     }
 
     fn has_status(&self, actor: Actor, status: StatusKind) -> bool {
-        self.status_amount(actor, status) > 0
+        let statuses = self.fighter(actor).statuses;
+        match status {
+            StatusKind::Bleed => statuses.bleed > 0,
+            StatusKind::Focus => statuses.focus != 0,
+            StatusKind::Rhythm => statuses.rhythm != 0,
+            StatusKind::Momentum => statuses.momentum != 0,
+        }
     }
 
     fn gain_energy(&mut self, amount: u8) {
-        self.player.energy = self.player.energy.saturating_add(amount);
+        if amount == 0 {
+            return;
+        }
+        // Energy refunds intentionally share momentum scaling with other gains,
+        // so a gain of 1 can still round down to 0 under sufficiently negative momentum.
+        let scaled = scale_axis_value(amount as i32, self.player.fighter.statuses.momentum);
+        self.player.energy = self.player.energy.saturating_add(scaled.max(0) as u8);
+    }
+
+    fn meets_card_requirement(&self, card: CardId) -> bool {
+        let Some(requirement) = card_requirement(card) else {
+            return true;
+        };
+        self.axis_value(Actor::Player, requirement.axis) > requirement.threshold
     }
 
     fn process_commands<I>(&mut self, commands: I) -> Vec<CombatEvent>
@@ -503,7 +590,12 @@ impl CombatState {
                 self.clear_block(actor, events);
                 self.turn += 1;
                 self.phase = TurnPhase::PlayerTurn;
-                self.player.energy = self.player.max_energy;
+                let scaled_energy = scale_axis_value(
+                    self.player.max_energy as i32,
+                    self.player.fighter.statuses.momentum,
+                )
+                .max(1);
+                self.player.energy = scaled_energy as u8;
                 events.push(CombatEvent::TurnStarted {
                     actor,
                     turn: self.turn,
@@ -546,6 +638,18 @@ impl CombatState {
 
         let def = card_def(card);
 
+        if let Some(requirement) = card_requirement(card) {
+            let actual = self.axis_value(Actor::Player, requirement.axis);
+            if actual <= requirement.threshold {
+                events.push(CombatEvent::RequirementNotMet {
+                    axis: requirement.axis,
+                    threshold: requirement.threshold,
+                    actual,
+                });
+                return;
+            }
+        }
+
         if self.player.energy < def.cost {
             events.push(CombatEvent::NotEnoughEnergy {
                 needed: def.cost,
@@ -554,8 +658,8 @@ impl CombatState {
             return;
         }
 
-        let target_enemy = if matches!(def.target, CardTarget::Enemy) {
-            match target.and_then(Actor::enemy_index) {
+        let target_enemy = match def.target {
+            CardTarget::Enemy => match target.and_then(Actor::enemy_index) {
                 Some(enemy_index) if self.enemy_is_alive(enemy_index) => Some(enemy_index),
                 _ => {
                     events.push(CombatEvent::InvalidAction {
@@ -563,11 +667,9 @@ impl CombatState {
                     });
                     return;
                 }
-            }
-        } else {
-            None
+            },
+            CardTarget::SelfOnly | CardTarget::AllEnemies => None,
         };
-
         self.player.energy -= def.cost;
         self.deck.hand.remove(hand_index);
         self.deck.discard_pile.push(card);
@@ -592,20 +694,22 @@ impl CombatState {
                 self.gain_block(Actor::Player, 8, events);
             }
             CardId::Slipstream => {
+                self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
                 self.gain_block(Actor::Player, 2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::SlipstreamPlus => {
+                self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
                 self.gain_block(Actor::Player, 4, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::SunderingArc => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
             }
             CardId::SunderingArcPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 16, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
             }
             CardId::QuickStrike => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
@@ -624,27 +728,29 @@ impl CombatState {
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 1, events);
             }
             CardId::SignalTap => {
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::SignalTapPlus => {
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
                 self.gain_block(Actor::Player, 3, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::Reinforce => {
+                self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
                 self.gain_block(Actor::Player, 8, events);
             }
             CardId::ReinforcePlus => {
+                self.apply_status(Actor::Player, StatusKind::Rhythm, 2, events);
                 self.gain_block(Actor::Player, 11, events);
             }
             CardId::PressurePoint => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Weak, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
             }
             CardId::PressurePointPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Weak, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
             }
             CardId::BurstArray => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
@@ -686,18 +792,18 @@ impl CombatState {
             }
             CardId::BarrierField => {
                 self.gain_block(Actor::Player, 10, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Frail, 1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
             }
             CardId::BarrierFieldPlus => {
                 self.gain_block(Actor::Player, 13, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Frail, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
             }
             CardId::TacticalBurst => {
-                self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::TacticalBurstPlus => {
-                self.apply_status(Actor::Player, StatusKind::Strength, 2, events);
+                self.apply_status(Actor::Player, StatusKind::Focus, 2, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::RazorNet => {
@@ -724,22 +830,22 @@ impl CombatState {
             }
             CardId::VectorLock => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 self.gain_block(Actor::Player, 5, events);
             }
             CardId::VectorLockPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 self.gain_block(Actor::Player, 6, events);
             }
             CardId::BreachSignal => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::BreachSignalPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::AnchorLoop => {
@@ -788,26 +894,26 @@ impl CombatState {
             }
             CardId::RiftDart => {
                 let enemy = target_enemy.unwrap();
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
                 self.damage_enemy(Actor::Player, enemy, 4, events);
                 self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
-                if exposed {
+                if disrupted {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
             }
             CardId::RiftDartPlus => {
                 let enemy = target_enemy.unwrap();
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
                 self.damage_enemy(Actor::Player, enemy, 6, events);
                 self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
-                if exposed {
+                if disrupted {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
             }
             CardId::MarkPulse => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                self.apply_enemy_status(enemy, StatusKind::Expose, 1, events);
+                self.apply_enemy_status(enemy, StatusKind::Momentum, -1, events);
                 if bleeding {
                     self.gain_block(Actor::Player, 4, events);
                 }
@@ -815,7 +921,7 @@ impl CombatState {
             CardId::MarkPulsePlus => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                self.apply_enemy_status(enemy, StatusKind::Expose, 1, events);
+                self.apply_enemy_status(enemy, StatusKind::Momentum, -1, events);
                 if bleeding {
                     self.gain_block(Actor::Player, 6, events);
                 }
@@ -836,20 +942,18 @@ impl CombatState {
             }
             CardId::FaultShot => {
                 let enemy = target_enemy.unwrap();
-                let primed = self.has_status(Actor::Enemy(enemy), StatusKind::Weak)
-                    || self.has_status(Actor::Enemy(enemy), StatusKind::Frail);
+                let primed = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 5, events);
                 if primed {
-                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                    self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 }
             }
             CardId::FaultShotPlus => {
                 let enemy = target_enemy.unwrap();
-                let primed = self.has_status(Actor::Enemy(enemy), StatusKind::Weak)
-                    || self.has_status(Actor::Enemy(enemy), StatusKind::Frail);
+                let primed = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 7, events);
                 if primed {
-                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                    self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 }
             }
             CardId::SeverArc => {
@@ -870,25 +974,25 @@ impl CombatState {
             }
             CardId::Lockbreaker => {
                 let enemy = target_enemy.unwrap();
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 6, events);
-                if exposed {
-                    self.apply_enemy_status(enemy, StatusKind::Weak, 1, events);
+                if disrupted {
+                    self.apply_enemy_status(enemy, StatusKind::Focus, -1, events);
                     self.gain_block(Actor::Player, 6, events);
                 }
             }
             CardId::LockbreakerPlus => {
                 let enemy = target_enemy.unwrap();
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 8, events);
-                if exposed {
-                    self.apply_enemy_status(enemy, StatusKind::Weak, 1, events);
+                if disrupted {
+                    self.apply_enemy_status(enemy, StatusKind::Focus, -1, events);
                     self.gain_block(Actor::Player, 8, events);
                 }
             }
             CardId::CounterLattice => {
                 let enemy = target_enemy.unwrap();
-                let weakened = self.has_status(Actor::Enemy(enemy), StatusKind::Weak);
+                let weakened = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 6, events);
                 if weakened {
                     self.gain_energy(1);
@@ -896,7 +1000,7 @@ impl CombatState {
             }
             CardId::CounterLatticePlus => {
                 let enemy = target_enemy.unwrap();
-                let weakened = self.has_status(Actor::Enemy(enemy), StatusKind::Weak);
+                let weakened = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
                 self.damage_enemy(Actor::Player, enemy, 8, events);
                 if weakened {
                     self.gain_energy(1);
@@ -905,36 +1009,327 @@ impl CombatState {
             CardId::TerminalLoop => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
                 self.damage_enemy(Actor::Player, enemy, 12, events);
                 if bleeding {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
-                if exposed {
-                    self.apply_status(Actor::Player, StatusKind::Strength, 1, events);
+                if disrupted {
+                    self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 }
             }
             CardId::TerminalLoopPlus => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                let exposed = self.has_status(Actor::Enemy(enemy), StatusKind::Expose);
+                let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
                 self.damage_enemy(Actor::Player, enemy, 15, events);
                 if bleeding {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
-                if exposed {
-                    self.apply_status(Actor::Player, StatusKind::Strength, 2, events);
+                if disrupted {
+                    self.apply_status(Actor::Player, StatusKind::Focus, 2, events);
                 }
             }
             CardId::ZeroPoint => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::ZeroPointPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 14, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Expose, 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::ArcSpark => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.apply_status(Actor::Player, StatusKind::Momentum, 2, events);
+            }
+            CardId::ArcSparkPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
+            }
+            CardId::CapacitiveShell => {
+                self.gain_block(Actor::Player, 5, events);
+                self.apply_status(Actor::Player, StatusKind::Momentum, 2, events);
+            }
+            CardId::CapacitiveShellPlus => {
+                self.gain_block(Actor::Player, 8, events);
+                self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
+            }
+            CardId::PrimeRoutine => {
+                self.apply_status(Actor::Player, StatusKind::Momentum, 2, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::PrimeRoutinePlus => {
+                self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
+                queue.push_front(CombatCommand::DrawCards(3));
+            }
+            CardId::Stockpile => {
+                self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
+            }
+            CardId::StockpilePlus => {
+                self.apply_status(Actor::Player, StatusKind::Momentum, 4, events);
+            }
+            CardId::PulseConverter => {
+                self.set_axis(
+                    Actor::Enemy(target_enemy.unwrap()),
+                    AxisKind::Focus,
+                    0,
+                    events,
+                );
+            }
+            CardId::PulseConverterPlus => {
+                self.set_axis(
+                    Actor::Enemy(target_enemy.unwrap()),
+                    AxisKind::Focus,
+                    0,
+                    events,
+                );
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::ReservoirGuard => {
+                self.gain_block(Actor::Player, 10, events);
+                if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
+                    self.gain_energy(1);
+                }
+            }
+            CardId::ReservoirGuardPlus => {
+                self.gain_block(Actor::Player, 13, events);
+                if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
+                    self.gain_energy(1);
+                }
+            }
+            CardId::VoltaicDrive => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 11, events);
+                if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
+                    queue.push_front(CombatCommand::DrawCards(2));
+                }
+            }
+            CardId::VoltaicDrivePlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 14, events);
+                if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
+                    queue.push_front(CombatCommand::DrawCards(2));
+                }
+            }
+            CardId::StormVault => {
+                self.set_all_momentum(0, events);
+            }
+            CardId::StormVaultPlus => {
+                self.set_all_momentum(0, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::SparkSmith => {
+                self.create_card_in_hand(CardId::Spark, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::SparkSmithPlus => {
+                self.create_card_in_hand(CardId::Spark, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::PatchBay => {
+                self.gain_block(Actor::Player, 6, events);
+                self.create_card_in_hand(CardId::Patch, events);
+            }
+            CardId::PatchBayPlus => {
+                self.gain_block(Actor::Player, 8, events);
+                self.create_card_in_hand(CardId::Patch, events);
+            }
+            CardId::TracerWeave => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.create_card_in_hand(CardId::Tracer, events);
+            }
+            CardId::TracerWeavePlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.create_card_in_hand(CardId::Tracer, events);
+            }
+            CardId::NeedleNest => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
+                self.create_card_in_hand(CardId::Needler, events);
+            }
+            CardId::NeedleNestPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.create_card_in_hand(CardId::Needler, events);
+            }
+            CardId::AssemblyLine => {
+                self.create_card_in_hand(CardId::Spark, events);
+                self.create_card_in_hand(CardId::Patch, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::AssemblyLinePlus => {
+                self.create_card_in_hand(CardId::Spark, events);
+                self.create_card_in_hand(CardId::Patch, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::ToolCache => {
+                self.create_card_in_hand(CardId::Tracer, events);
+                self.create_card_in_hand(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::ToolCachePlus => {
+                self.create_card_in_hand(CardId::Tracer, events);
+                self.create_card_in_hand(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::ImprovisedArsenal => {
+                self.create_card_in_discard(CardId::Spark, events);
+                self.create_card_in_discard(CardId::Patch, events);
+                self.create_card_in_discard(CardId::Tracer, events);
+                self.create_card_in_discard(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::ImprovisedArsenalPlus => {
+                self.create_card_in_discard(CardId::Spark, events);
+                self.create_card_in_discard(CardId::Patch, events);
+                self.create_card_in_discard(CardId::Tracer, events);
+                self.create_card_in_discard(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::ForgeStorm => {
+                self.create_card_in_hand(CardId::Spark, events);
+                self.create_card_in_hand(CardId::Patch, events);
+                self.create_card_in_hand(CardId::Tracer, events);
+                self.create_card_in_hand(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::ForgeStormPlus => {
+                self.create_card_in_hand(CardId::Spark, events);
+                self.create_card_in_hand(CardId::Patch, events);
+                self.create_card_in_hand(CardId::Tracer, events);
+                self.create_card_in_hand(CardId::Needler, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::SweepPulse => {
+                self.damage_all_enemies(Actor::Player, 4, events, false);
+            }
+            CardId::SweepPulsePlus => {
+                self.damage_all_enemies(Actor::Player, 6, events, false);
+            }
+            CardId::DimmingWave => {
+                self.apply_status_to_all_enemies(StatusKind::Focus, -1, events);
+            }
+            CardId::DimmingWavePlus => {
+                self.apply_status_to_all_enemies(StatusKind::Focus, -2, events);
+            }
+            CardId::ShrapnelVeil => {
+                self.damage_all_enemies(Actor::Player, 2, events, false);
+                self.gain_block(Actor::Player, 4, events);
+            }
+            CardId::ShrapnelVeilPlus => {
+                self.damage_all_enemies(Actor::Player, 3, events, false);
+                self.gain_block(Actor::Player, 6, events);
+            }
+            CardId::ScouringWind => {
+                self.damage_all_enemies(Actor::Player, 6, events, false);
+                self.apply_status_to_all_enemies(StatusKind::Bleed, 1, events);
+            }
+            CardId::ScouringWindPlus => {
+                self.damage_all_enemies(Actor::Player, 8, events, false);
+                self.apply_status_to_all_enemies(StatusKind::Bleed, 2, events);
+            }
+            CardId::CollapsePattern => {
+                self.apply_status_to_all_enemies(StatusKind::Momentum, -1, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::CollapsePatternPlus => {
+                self.apply_status_to_all_enemies(StatusKind::Momentum, -2, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::Linebreaker => {
+                self.damage_all_enemies(Actor::Player, 5, events, true);
+            }
+            CardId::LinebreakerPlus => {
+                self.damage_all_enemies(Actor::Player, 7, events, true);
+            }
+            CardId::NovaCollapse => {
+                self.damage_all_enemies(Actor::Player, 9, events, true);
+            }
+            CardId::NovaCollapsePlus => {
+                self.damage_all_enemies(Actor::Player, 12, events, true);
+            }
+            CardId::SuppressionNet => {
+                self.gain_block(Actor::Player, 8, events);
+                self.apply_status_to_all_enemies(StatusKind::Focus, -1, events);
+                self.apply_status_to_all_enemies(StatusKind::Momentum, -1, events);
+            }
+            CardId::SuppressionNetPlus => {
+                self.gain_block(Actor::Player, 11, events);
+                self.apply_status_to_all_enemies(StatusKind::Focus, -2, events);
+                self.apply_status_to_all_enemies(StatusKind::Momentum, -1, events);
+            }
+            CardId::RazorRush => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+            }
+            CardId::RazorRushPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
+            }
+            CardId::HardReset => {
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::HardResetPlus => {
+                queue.push_front(CombatCommand::DrawCards(3));
+            }
+            CardId::EmergencyPlating => {
+                self.gain_block(Actor::Player, 12, events);
+            }
+            CardId::EmergencyPlatingPlus => {
+                self.gain_block(Actor::Player, 16, events);
+            }
+            CardId::Cauterize => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
+            }
+            CardId::CauterizePlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
+            }
+            CardId::EmberBurst => {
+                self.gain_energy(1);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::EmberBurstPlus => {
+                self.gain_energy(1);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::AshenVector => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::AshenVectorPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 15, events);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::PurgeArray => {
+                self.damage_all_enemies(Actor::Player, 7, events, false);
+                self.damage_all_enemies(Actor::Player, 7, events, false);
+            }
+            CardId::PurgeArrayPlus => {
+                self.damage_all_enemies(Actor::Player, 9, events, false);
+                self.damage_all_enemies(Actor::Player, 9, events, false);
+            }
+            CardId::LastProtocol => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 18, events);
+                self.gain_energy(1);
+                queue.push_front(CombatCommand::DrawCards(1));
+            }
+            CardId::LastProtocolPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 22, events);
+                self.gain_energy(1);
+                queue.push_front(CombatCommand::DrawCards(2));
+            }
+            CardId::Spark => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+            }
+            CardId::Patch => {
+                self.gain_block(Actor::Player, 5, events);
+            }
+            CardId::Tracer => {
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
+            }
+            CardId::Needler => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 2, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 1, events);
             }
         }
     }
@@ -942,8 +1337,9 @@ impl CombatState {
     fn end_turn(&mut self, actor: Actor, events: &mut Vec<CombatEvent>) {
         match actor {
             Actor::Player => {
-                let discard_count = self.deck.hand.len();
-                self.deck.discard_pile.append(&mut self.deck.hand);
+                let discarded: Vec<_> = self.deck.hand.drain(..).collect();
+                let discard_count = discarded.len();
+                self.deck.discard_pile.extend(discarded);
                 events.push(CombatEvent::TurnEnded { actor });
                 if discard_count > 0 {
                     events.push(CombatEvent::CardsDiscarded {
@@ -955,6 +1351,70 @@ impl CombatState {
                 events.push(CombatEvent::TurnEnded {
                     actor: Actor::Enemy(0),
                 });
+            }
+        }
+    }
+
+    fn set_axis(&mut self, actor: Actor, axis: AxisKind, value: i8, events: &mut Vec<CombatEvent>) {
+        let current = self.axis_value(actor, axis);
+        let clamped = clamp_axis_value(value);
+        let delta = clamped - current;
+        if delta != 0 {
+            self.apply_status(actor, axis_status(axis), delta, events);
+        }
+    }
+
+    fn set_all_momentum(&mut self, value: i8, events: &mut Vec<CombatEvent>) {
+        self.set_axis(Actor::Player, AxisKind::Momentum, value, events);
+        for enemy_index in 0..self.enemy_count() {
+            if self.enemy_is_alive(enemy_index) {
+                self.set_axis(Actor::Enemy(enemy_index), AxisKind::Momentum, value, events);
+            }
+        }
+    }
+
+    fn create_card_in_hand(&mut self, card: CardId, events: &mut Vec<CombatEvent>) {
+        if self.deck.hand.len() >= MAX_HAND_CARDS {
+            self.deck.discard_pile.push(card);
+        } else {
+            self.deck.hand.push(card);
+        }
+        events.push(CombatEvent::CardCreated { card });
+    }
+
+    fn create_card_in_discard(&mut self, card: CardId, events: &mut Vec<CombatEvent>) {
+        self.deck.discard_pile.push(card);
+        events.push(CombatEvent::CardCreated { card });
+    }
+
+    fn apply_status_to_all_enemies(
+        &mut self,
+        status: StatusKind,
+        amount: i8,
+        events: &mut Vec<CombatEvent>,
+    ) {
+        for enemy_index in 0..self.enemy_count() {
+            if self.enemy_is_alive(enemy_index) {
+                self.apply_enemy_status(enemy_index, status, amount, events);
+            }
+        }
+    }
+
+    fn damage_all_enemies(
+        &mut self,
+        source: Actor,
+        amount: i32,
+        events: &mut Vec<CombatEvent>,
+        piercing: bool,
+    ) {
+        for enemy_index in 0..self.enemy_count() {
+            if !self.enemy_is_alive(enemy_index) {
+                continue;
+            }
+            if piercing {
+                self.damage_enemy_piercing(source, enemy_index, amount, events);
+            } else {
+                self.damage_enemy(source, enemy_index, amount, events);
             }
         }
     }
@@ -988,35 +1448,22 @@ impl CombatState {
                 amount: bleed,
             });
         }
+        self.decay_axis_toward_zero(actor, AxisKind::Focus);
+        self.decay_axis_toward_zero(actor, AxisKind::Rhythm);
+        self.decay_axis_toward_zero(actor, AxisKind::Momentum);
+    }
 
-        let expose = self.fighter(actor).statuses.expose;
-        if expose > 0 {
-            self.fighter_mut(actor).statuses.expose = expose.saturating_sub(1);
-            events.push(CombatEvent::StatusTicked {
-                actor,
-                status: StatusKind::Expose,
-                amount: self.fighter(actor).statuses.expose,
-            });
-        }
-
-        let weak = self.fighter(actor).statuses.weak;
-        if weak > 0 {
-            self.fighter_mut(actor).statuses.weak = weak.saturating_sub(1);
-            events.push(CombatEvent::StatusTicked {
-                actor,
-                status: StatusKind::Weak,
-                amount: self.fighter(actor).statuses.weak,
-            });
-        }
-
-        let frail = self.fighter(actor).statuses.frail;
-        if frail > 0 {
-            self.fighter_mut(actor).statuses.frail = frail.saturating_sub(1);
-            events.push(CombatEvent::StatusTicked {
-                actor,
-                status: StatusKind::Frail,
-                amount: self.fighter(actor).statuses.frail,
-            });
+    fn decay_axis_toward_zero(&mut self, actor: Actor, axis: AxisKind) {
+        let statuses = &mut self.fighter_mut(actor).statuses;
+        let value = match axis {
+            AxisKind::Focus => &mut statuses.focus,
+            AxisKind::Rhythm => &mut statuses.rhythm,
+            AxisKind::Momentum => &mut statuses.momentum,
+        };
+        if *value > 0 {
+            *value -= 1;
+        } else if *value < 0 {
+            *value += 1;
         }
     }
 
@@ -1034,12 +1481,19 @@ impl CombatState {
                 continue;
             };
             let enemy_actor = Actor::Enemy(enemy_index);
+            let enemy_momentum = self.axis_value(enemy_actor, AxisKind::Momentum);
+            let scaled_damage = scale_axis_value(intent.damage, enemy_momentum);
+            let scaled_block = scale_axis_value(intent.gain_block, enemy_momentum);
+            let scaled_prime_bleed =
+                scale_axis_value(intent.prime_bleed as i32, enemy_momentum).max(0) as u8;
+            let scaled_apply_bleed =
+                scale_axis_value(intent.apply_bleed as i32, enemy_momentum).max(0) as u8;
 
             for hit_index in 0..intent.hits {
-                if intent.damage <= 0 {
+                if scaled_damage <= 0 {
                     break;
                 }
-                self.enemy_attack(enemy_index, intent.damage, events);
+                self.enemy_attack(enemy_index, scaled_damage, events);
                 if hit_index + 1 < intent.hits && self.player.fighter.hp <= 0 {
                     break;
                 }
@@ -1049,48 +1503,57 @@ impl CombatState {
                 break;
             }
 
-            if intent.gain_block > 0 {
-                self.gain_block(enemy_actor, intent.gain_block, events);
+            if scaled_block > 0 {
+                self.gain_block(enemy_actor, scaled_block, events);
             }
 
-            if intent.gain_strength > 0 {
-                self.apply_status(
-                    enemy_actor,
-                    StatusKind::Strength,
-                    intent.gain_strength,
-                    events,
-                );
+            let self_focus = scale_intent_axis_delta(intent.self_focus, enemy_momentum);
+            if self_focus != 0 {
+                self.apply_status(enemy_actor, StatusKind::Focus, self_focus, events);
             }
 
-            if intent.prime_bleed > 0 {
+            let self_rhythm = scale_intent_axis_delta(intent.self_rhythm, enemy_momentum);
+            if self_rhythm != 0 {
+                self.apply_status(enemy_actor, StatusKind::Rhythm, self_rhythm, events);
+            }
+
+            let self_momentum = scale_intent_axis_delta(intent.self_momentum, enemy_momentum);
+            if self_momentum != 0 {
+                self.apply_status(enemy_actor, StatusKind::Momentum, self_momentum, events);
+            }
+
+            if scaled_prime_bleed > 0 {
                 if let Some(enemy) = self.enemy_mut(enemy_index) {
-                    enemy.on_hit_bleed = intent.prime_bleed;
+                    enemy.on_hit_bleed = scaled_prime_bleed;
                 }
                 events.push(CombatEvent::EnemyPrimedBleed {
                     enemy_index,
-                    amount: intent.prime_bleed,
+                    amount: scaled_prime_bleed,
                 });
             }
 
-            if intent.apply_expose > 0 {
+            let target_focus = scale_intent_axis_delta(intent.target_focus, enemy_momentum);
+            if target_focus != 0 {
+                self.apply_status(Actor::Player, StatusKind::Focus, target_focus, events);
+            }
+
+            let target_rhythm = scale_intent_axis_delta(intent.target_rhythm, enemy_momentum);
+            if target_rhythm != 0 {
+                self.apply_status(Actor::Player, StatusKind::Rhythm, target_rhythm, events);
+            }
+
+            let target_momentum = scale_intent_axis_delta(intent.target_momentum, enemy_momentum);
+            if target_momentum != 0 {
+                self.apply_status(Actor::Player, StatusKind::Momentum, target_momentum, events);
+            }
+
+            if scaled_apply_bleed > 0 {
                 self.apply_status(
                     Actor::Player,
-                    StatusKind::Expose,
-                    intent.apply_expose,
+                    StatusKind::Bleed,
+                    scaled_apply_bleed as i8,
                     events,
                 );
-            }
-
-            if intent.apply_weak > 0 {
-                self.apply_status(Actor::Player, StatusKind::Weak, intent.apply_weak, events);
-            }
-
-            if intent.apply_frail > 0 {
-                self.apply_status(Actor::Player, StatusKind::Frail, intent.apply_frail, events);
-            }
-
-            if intent.apply_bleed > 0 {
-                self.apply_status(Actor::Player, StatusKind::Bleed, intent.apply_bleed, events);
             }
 
             if let Some(enemy) = self.enemy_mut(enemy_index) {
@@ -1122,7 +1585,7 @@ impl CombatState {
             if let Some(enemy) = self.enemy_mut(enemy_index) {
                 enemy.on_hit_bleed = 0;
             }
-            self.apply_status(Actor::Player, StatusKind::Bleed, bleed, events);
+            self.apply_status(Actor::Player, StatusKind::Bleed, bleed as i8, events);
         }
     }
 
@@ -1158,7 +1621,7 @@ impl CombatState {
     }
 
     fn gain_block(&mut self, actor: Actor, amount: i32, events: &mut Vec<CombatEvent>) {
-        let adjusted_amount = scale_down_for_frail(amount, self.fighter(actor).statuses.frail);
+        let adjusted_amount = scale_axis_value(amount, self.fighter(actor).statuses.rhythm);
         if adjusted_amount <= 0 {
             return;
         }
@@ -1182,32 +1645,43 @@ impl CombatState {
         &mut self,
         actor: Actor,
         status: StatusKind,
-        amount: u8,
+        amount: i8,
         events: &mut Vec<CombatEvent>,
     ) {
         let statuses = &mut self.fighter_mut(actor).statuses;
-        match status {
+        let applied_amount = match status {
             StatusKind::Bleed => {
-                statuses.bleed = statuses.bleed.saturating_add(amount);
+                if amount <= 0 {
+                    return;
+                }
+                statuses.bleed = statuses.bleed.saturating_add(amount as u8);
+                amount
             }
-            StatusKind::Expose => {
-                statuses.expose = statuses.expose.saturating_add(amount);
+            StatusKind::Focus => {
+                let previous = statuses.focus;
+                statuses.focus = clamp_axis_value(statuses.focus.saturating_add(amount));
+                statuses.focus - previous
             }
-            StatusKind::Weak => {
-                statuses.weak = statuses.weak.saturating_add(amount);
+            StatusKind::Rhythm => {
+                let previous = statuses.rhythm;
+                statuses.rhythm = clamp_axis_value(statuses.rhythm.saturating_add(amount));
+                statuses.rhythm - previous
             }
-            StatusKind::Frail => {
-                statuses.frail = statuses.frail.saturating_add(amount);
+            StatusKind::Momentum => {
+                let previous = statuses.momentum;
+                statuses.momentum = clamp_axis_value(statuses.momentum.saturating_add(amount));
+                statuses.momentum - previous
             }
-            StatusKind::Strength => {
-                statuses.strength = statuses.strength.saturating_add(amount);
-            }
+        };
+
+        if applied_amount == 0 {
+            return;
         }
 
         events.push(CombatEvent::StatusApplied {
             target: actor,
             status,
-            amount,
+            amount: applied_amount,
         });
     }
 
@@ -1215,7 +1689,7 @@ impl CombatState {
         &mut self,
         enemy_index: usize,
         status: StatusKind,
-        amount: u8,
+        amount: i8,
         events: &mut Vec<CombatEvent>,
     ) {
         self.apply_status(Actor::Enemy(enemy_index), status, amount, events);
@@ -1229,6 +1703,16 @@ impl CombatState {
         events: &mut Vec<CombatEvent>,
     ) {
         self.damage(source, Actor::Enemy(enemy_index), base_amount, events);
+    }
+
+    fn damage_enemy_piercing(
+        &mut self,
+        source: Actor,
+        enemy_index: usize,
+        base_amount: i32,
+        events: &mut Vec<CombatEvent>,
+    ) {
+        self.damage_piercing(source, Actor::Enemy(enemy_index), base_amount, events);
     }
 
     fn damage(
@@ -1264,6 +1748,28 @@ impl CombatState {
                 amount: dealt,
             });
         }
+    }
+
+    fn damage_piercing(
+        &mut self,
+        source: Actor,
+        target: Actor,
+        base_amount: i32,
+        events: &mut Vec<CombatEvent>,
+    ) {
+        let attacker_statuses = self.fighter(source).statuses;
+        let defender_statuses = self.fighter(target).statuses;
+        let dealt = scale_damage_amount(base_amount, attacker_statuses, defender_statuses);
+        if dealt <= 0 {
+            return;
+        }
+        let fighter = self.fighter_mut(target);
+        fighter.hp = (fighter.hp - dealt).max(0);
+        events.push(CombatEvent::DamageDealt {
+            source,
+            target,
+            amount: dealt,
+        });
     }
 
     fn direct_damage(&mut self, actor: Actor, amount: i32, events: &mut Vec<CombatEvent>) {
@@ -1328,26 +1834,52 @@ impl CombatState {
 }
 
 fn scale_damage_amount(base_amount: i32, attacker: StatusSet, defender: StatusSet) -> i32 {
-    let with_strength = base_amount.saturating_add(attacker.strength as i32);
-    if with_strength <= 0 {
-        return 0;
-    }
-    let weakened = scale_down_for_weak(with_strength, attacker.weak);
-    if weakened <= 0 {
-        return 0;
-    }
-    let expose_multiplier = 100 + (defender.expose as i32 * 50);
-    weakened.saturating_mul(expose_multiplier).max(0) / 100
+    let _ = defender;
+    scale_axis_value(base_amount, attacker.focus)
 }
 
-fn scale_down_for_weak(amount: i32, weak: u8) -> i32 {
-    let multiplier = (100 - weak as i32 * 25).max(0);
-    amount.saturating_mul(multiplier) / 100
+pub(crate) fn preview_scaled_value(amount: i32, axis_value: i8) -> i32 {
+    scale_axis_value(amount, axis_value)
 }
 
-fn scale_down_for_frail(amount: i32, frail: u8) -> i32 {
-    let multiplier = (100 - frail as i32 * 25).max(0);
-    amount.saturating_mul(multiplier) / 100
+fn axis_multiplier_basis_points(value: i8) -> i32 {
+    let mut basis_points = 10_000i32;
+    for _ in 0..value.unsigned_abs() {
+        basis_points = if value >= 0 {
+            basis_points.saturating_mul(AXIS_STEP_UP_BASIS_POINTS) / 10_000
+        } else {
+            basis_points.saturating_mul(AXIS_STEP_DOWN_BASIS_POINTS) / 10_000
+        };
+    }
+    basis_points
+}
+
+pub(crate) fn scale_axis_value(amount: i32, axis_value: i8) -> i32 {
+    if amount == 0 {
+        return 0;
+    }
+    // The shared axis curve can round a small positive value down to 0 when
+    // the axis is sufficiently negative.
+    let basis_points = axis_multiplier_basis_points(axis_value);
+    let magnitude = amount.saturating_abs();
+    let scaled = (magnitude.saturating_mul(basis_points) + 5_000) / 10_000;
+    amount.signum().saturating_mul(scaled)
+}
+
+fn scale_intent_axis_delta(delta: i8, momentum: i8) -> i8 {
+    scale_axis_value(delta as i32, momentum) as i8
+}
+
+fn clamp_axis_value(value: i8) -> i8 {
+    value.clamp(-MAX_AXIS_ABS_VALUE, MAX_AXIS_ABS_VALUE)
+}
+
+fn axis_status(axis: AxisKind) -> StatusKind {
+    match axis {
+        AxisKind::Focus => StatusKind::Focus,
+        AxisKind::Rhythm => StatusKind::Rhythm,
+        AxisKind::Momentum => StatusKind::Momentum,
+    }
 }
 
 fn shuffle<T>(items: &mut [T], rng: &mut XorShift64) {
@@ -1442,6 +1974,36 @@ mod tests {
     }
 
     #[test]
+    fn start_of_combat_modules_use_shared_axis_clamp_limits() {
+        let mut state = blank_state();
+        state.player.fighter.statuses.focus = 8;
+        state.player.fighter.statuses.momentum = 8;
+        primary_enemy_mut(&mut state).fighter.statuses.rhythm = -8;
+        primary_enemy_mut(&mut state).fighter.statuses.focus = -8;
+
+        let applied = state.apply_start_of_combat_modules(&[
+            ModuleId::TargetingRelay,
+            ModuleId::CapacitorBank,
+            ModuleId::PrismScope,
+            ModuleId::SuppressionField,
+        ]);
+
+        assert_eq!(
+            applied,
+            vec![
+                ModuleId::TargetingRelay,
+                ModuleId::CapacitorBank,
+                ModuleId::PrismScope,
+                ModuleId::SuppressionField,
+            ]
+        );
+        assert_eq!(state.player.fighter.statuses.focus, 9);
+        assert_eq!(state.player.fighter.statuses.momentum, 9);
+        assert_eq!(primary_enemy(&state).fighter.statuses.rhythm, -9);
+        assert_eq!(primary_enemy(&state).fighter.statuses.focus, -9);
+    }
+
+    #[test]
     fn refuses_cards_when_energy_is_too_low() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::SunderingArc];
@@ -1464,49 +2026,44 @@ mod tests {
     }
 
     #[test]
-    fn expose_increases_damage_taken() {
+    fn focus_increases_damage_dealt() {
         let mut state = blank_state();
-        primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+        state.player.fighter.statuses.focus = 1;
 
         let mut events = Vec::new();
         state.damage(Actor::Player, PRIMARY_ENEMY, 6, &mut events);
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 31);
+        assert_eq!(primary_enemy(&state).fighter.hp, 33);
         assert!(events.contains(&CombatEvent::DamageDealt {
             source: Actor::Player,
             target: PRIMARY_ENEMY,
-            amount: 9,
+            amount: 7,
         }));
     }
 
     #[test]
-    fn weak_reduces_outgoing_damage_and_decays_at_end_of_turn() {
+    fn negative_focus_reduces_damage_and_decays_at_end_of_turn() {
         let mut state = blank_state();
-        state.player.fighter.statuses.weak = 1;
+        state.player.fighter.statuses.focus = -1;
 
         let mut damage_events = Vec::new();
         state.damage(Actor::Player, PRIMARY_ENEMY, 8, &mut damage_events);
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 34);
+        assert_eq!(primary_enemy(&state).fighter.hp, 33);
         assert!(damage_events.contains(&CombatEvent::DamageDealt {
             source: Actor::Player,
             target: PRIMARY_ENEMY,
-            amount: 6,
+            amount: 7,
         }));
 
-        let tick_events = state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
-        assert_eq!(state.player.fighter.statuses.weak, 0);
-        assert!(tick_events.contains(&CombatEvent::StatusTicked {
-            actor: Actor::Player,
-            status: StatusKind::Weak,
-            amount: 0,
-        }));
+        state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
+        assert_eq!(state.player.fighter.statuses.focus, 0);
     }
 
     #[test]
-    fn strength_adds_damage_per_hit_and_persists() {
+    fn focus_scales_each_hit_and_decays_toward_zero() {
         let mut state = blank_state();
-        state.player.fighter.statuses.strength = 2;
+        state.player.fighter.statuses.focus = 2;
         state.deck.hand = vec![CardId::BurstArray];
 
         state.dispatch(CombatAction::PlayCard {
@@ -1514,67 +2071,88 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 25);
+        assert_eq!(primary_enemy(&state).fighter.hp, 28);
 
-        let tick_events = state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
-        assert_eq!(state.player.fighter.statuses.strength, 2);
-        assert!(!tick_events.iter().any(|event| matches!(
-            event,
-            CombatEvent::StatusTicked {
-                status: StatusKind::Strength,
-                ..
-            }
-        )));
+        state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
+        assert_eq!(state.player.fighter.statuses.focus, 1);
     }
 
     #[test]
-    fn frail_reduces_block_gain_from_cards_and_enemy_intents() {
+    fn axis_values_clamp_to_plus_and_minus_nine() {
         let mut state = blank_state();
-        state.player.fighter.statuses.frail = 1;
-        primary_enemy_mut(&mut state).fighter.statuses.frail = 1;
-        state.deck.hand = vec![CardId::GuardStep];
+        let mut events = Vec::new();
+
+        state.apply_status(Actor::Player, StatusKind::Focus, 12, &mut events);
+        state.apply_status(Actor::Player, StatusKind::Rhythm, -12, &mut events);
+        state.apply_status(Actor::Player, StatusKind::Momentum, 15, &mut events);
+
+        assert_eq!(state.player.fighter.statuses.focus, 9);
+        assert_eq!(state.player.fighter.statuses.rhythm, -9);
+        assert_eq!(state.player.fighter.statuses.momentum, 9);
+    }
+
+    #[test]
+    fn status_applied_event_uses_effective_axis_delta_after_clamp() {
+        let mut state = blank_state();
+        let mut events = Vec::new();
+        state.player.fighter.statuses.focus = 8;
+
+        state.apply_status(Actor::Player, StatusKind::Focus, 3, &mut events);
+
+        assert_eq!(state.player.fighter.statuses.focus, 9);
+        assert!(events.contains(&CombatEvent::StatusApplied {
+            target: Actor::Player,
+            status: StatusKind::Focus,
+            amount: 1,
+        }));
+    }
+
+    #[test]
+    fn rhythm_scales_block_gain_from_cards_and_enemy_intents_with_new_curve() {
+        let mut state = blank_state();
+        state.player.fighter.statuses.rhythm = -1;
+        primary_enemy_mut(&mut state).fighter.statuses.rhythm = -1;
+        state.deck.hand = vec![CardId::CoverPulse];
 
         state.dispatch(CombatAction::PlayCard {
             hand_index: 0,
             target: Some(Actor::Player),
         });
 
-        assert_eq!(state.player.fighter.block, 3);
+        assert_eq!(state.player.fighter.block, 5);
 
         let mut events = Vec::new();
         state.gain_block(PRIMARY_ENEMY, 8, &mut events);
-        assert_eq!(primary_enemy(&state).fighter.block, 6);
+        assert_eq!(primary_enemy(&state).fighter.block, 7);
         assert!(events.contains(&CombatEvent::BlockGained {
             actor: PRIMARY_ENEMY,
-            amount: 6,
+            amount: 7,
         }));
     }
 
     #[test]
-    fn strength_weak_and_expose_apply_in_the_defined_order() {
+    fn focus_scales_damage_multiplicatively() {
         let mut state = blank_state();
-        state.player.fighter.statuses.strength = 2;
-        state.player.fighter.statuses.weak = 1;
-        primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+        state.player.fighter.statuses.focus = 2;
 
         let mut events = Vec::new();
         state.damage(Actor::Player, PRIMARY_ENEMY, 6, &mut events);
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 31);
+        assert_eq!(primary_enemy(&state).fighter.hp, 33);
         assert!(events.contains(&CombatEvent::DamageDealt {
             source: Actor::Player,
             target: PRIMARY_ENEMY,
-            amount: 9,
+            amount: 7,
         }));
     }
 
     #[test]
-    fn bleed_still_ignores_strength_weak_and_expose() {
+    fn bleed_still_ignores_focus_rhythm_and_momentum() {
         let mut state = blank_state();
         state.player.fighter.statuses.bleed = 3;
-        state.player.fighter.statuses.weak = 2;
-        state.player.fighter.statuses.strength = 4;
-        primary_enemy_mut(&mut state).fighter.statuses.expose = 2;
+        state.player.fighter.statuses.focus = -2;
+        state.player.fighter.statuses.rhythm = 3;
+        primary_enemy_mut(&mut state).fighter.statuses.momentum = -2;
 
         state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
 
@@ -1611,6 +2189,64 @@ mod tests {
             actor: Actor::Player,
             amount: 8,
         }));
+    }
+
+    #[test]
+    fn guard_step_now_only_gains_block() {
+        let mut state = blank_state();
+        state.deck.hand = vec![CardId::GuardStep];
+
+        state.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: None,
+        });
+
+        assert_eq!(state.player.fighter.statuses.rhythm, 0);
+        assert_eq!(state.player.fighter.block, 5);
+    }
+
+    #[test]
+    fn pulse_converter_only_needs_rhythm_above_one() {
+        let mut state = blank_state();
+        state.deck.hand = vec![CardId::PulseConverter];
+        state.player.fighter.statuses.rhythm = 1;
+
+        assert!(!state.can_play_card(0));
+
+        state.player.fighter.statuses.rhythm = 2;
+        assert!(state.can_play_card(0));
+    }
+
+    #[test]
+    fn arc_spark_now_grants_two_momentum() {
+        let mut state = blank_state();
+        state.deck.hand = vec![CardId::ArcSpark];
+
+        state.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(PRIMARY_ENEMY),
+        });
+
+        assert_eq!(primary_enemy(&state).fighter.hp, 36);
+        assert_eq!(state.player.fighter.statuses.momentum, 2);
+    }
+
+    #[test]
+    fn stockpile_plus_accumulates_momentum_and_scales_next_turn_energy() {
+        let mut state = blank_state();
+        state.deck.hand = vec![CardId::StockpilePlus];
+
+        state.dispatch(CombatAction::PlayCard {
+            hand_index: 0,
+            target: None,
+        });
+
+        assert_eq!(state.player.fighter.statuses.momentum, 4);
+
+        state.phase = TurnPhase::EnemyTurn;
+        state.process_commands([CombatCommand::StartTurn(Actor::Player)]);
+
+        assert_eq!(state.player.energy, 4);
     }
 
     #[test]
@@ -1676,7 +2312,7 @@ mod tests {
     }
 
     #[test]
-    fn signal_tap_plus_applies_expose_draws_and_gains_block() {
+    fn signal_tap_plus_applies_momentum_draws_and_gains_block() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::SignalTapPlus];
         state.deck.draw_pile = vec![CardId::FlareSlash];
@@ -1686,13 +2322,13 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.statuses.expose, 1);
+        assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -1);
         assert_eq!(state.player.fighter.block, 3);
         assert_eq!(state.deck.hand, vec![CardId::FlareSlash]);
     }
 
     #[test]
-    fn pressure_point_applies_weak() {
+    fn pressure_point_applies_focus_loss() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::PressurePoint];
 
@@ -1702,7 +2338,7 @@ mod tests {
         });
 
         assert_eq!(primary_enemy(&state).fighter.hp, 36);
-        assert_eq!(primary_enemy(&state).fighter.statuses.weak, 1);
+        assert_eq!(primary_enemy(&state).fighter.statuses.focus, -1);
     }
 
     #[test]
@@ -1734,7 +2370,7 @@ mod tests {
     }
 
     #[test]
-    fn barrier_field_applies_frail_while_gaining_block() {
+    fn barrier_field_applies_focus_loss_while_gaining_block() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::BarrierField];
 
@@ -1744,11 +2380,11 @@ mod tests {
         });
 
         assert_eq!(state.player.fighter.block, 10);
-        assert_eq!(primary_enemy(&state).fighter.statuses.frail, 1);
+        assert_eq!(primary_enemy(&state).fighter.statuses.focus, -1);
     }
 
     #[test]
-    fn tactical_burst_draws_and_gains_strength() {
+    fn tactical_burst_draws_and_gains_focus() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::TacticalBurst];
         state.deck.draw_pile = vec![CardId::GuardStep, CardId::FlareSlash];
@@ -1758,7 +2394,7 @@ mod tests {
             target: None,
         });
 
-        assert_eq!(state.player.fighter.statuses.strength, 1);
+        assert_eq!(state.player.fighter.statuses.focus, 1);
         assert_eq!(state.deck.hand.len(), 2);
         assert!(state.deck.hand.contains(&CardId::GuardStep));
         assert!(state.deck.hand.contains(&CardId::FlareSlash));
@@ -1793,7 +2429,7 @@ mod tests {
     }
 
     #[test]
-    fn vector_lock_combines_damage_expose_and_block() {
+    fn vector_lock_combines_damage_momentum_loss_and_block() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::VectorLock];
 
@@ -1803,12 +2439,12 @@ mod tests {
         });
 
         assert_eq!(primary_enemy(&state).fighter.hp, 34);
-        assert_eq!(primary_enemy(&state).fighter.statuses.expose, 2);
+        assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -2);
         assert_eq!(state.player.fighter.block, 5);
     }
 
     #[test]
-    fn breach_signal_draws_and_applies_expose() {
+    fn breach_signal_draws_and_applies_momentum_loss() {
         let mut state = blank_state();
         state.deck.hand = vec![CardId::BreachSignal];
         state.deck.draw_pile = vec![CardId::FlareSlash];
@@ -1819,7 +2455,7 @@ mod tests {
         });
 
         assert_eq!(primary_enemy(&state).fighter.hp, 33);
-        assert_eq!(primary_enemy(&state).fighter.statuses.expose, 2);
+        assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -2);
         assert_eq!(state.deck.hand, vec![CardId::FlareSlash]);
     }
 
@@ -1855,18 +2491,18 @@ mod tests {
     }
 
     #[test]
-    fn rift_dart_variants_respect_the_expose_draw_condition() {
+    fn rift_dart_variants_respect_the_momentum_draw_condition() {
         for (card, primed, expected_hp, expect_draw) in [
             (CardId::RiftDart, false, 36, false),
-            (CardId::RiftDart, true, 34, true),
+            (CardId::RiftDart, true, 36, true),
             (CardId::RiftDartPlus, false, 34, false),
-            (CardId::RiftDartPlus, true, 31, true),
+            (CardId::RiftDartPlus, true, 34, true),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
             state.deck.draw_pile = vec![CardId::FlareSlash];
             if primed {
-                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
             }
 
             state.dispatch(CombatAction::PlayCard {
@@ -1920,8 +2556,8 @@ mod tests {
                 "{card:?} primed={primed}"
             );
             assert_eq!(
-                primary_enemy(&state).fighter.statuses.expose,
-                1,
+                primary_enemy(&state).fighter.statuses.momentum,
+                -1,
                 "{card:?} primed={primed}"
             );
         }
@@ -1962,8 +2598,8 @@ mod tests {
     }
 
     #[test]
-    fn fault_shot_variants_gain_strength_only_against_debuffed_targets() {
-        for (card, primed, expected_hp, expected_strength) in [
+    fn fault_shot_variants_gain_focus_only_against_disrupted_targets() {
+        for (card, primed, expected_hp, expected_focus) in [
             (CardId::FaultShot, false, 35, 0),
             (CardId::FaultShot, true, 35, 1),
             (CardId::FaultShotPlus, false, 33, 0),
@@ -1972,7 +2608,7 @@ mod tests {
             let mut state = blank_state();
             state.deck.hand = vec![card];
             if primed {
-                primary_enemy_mut(&mut state).fighter.statuses.weak = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.focus = -1;
             }
 
             state.dispatch(CombatAction::PlayCard {
@@ -1986,7 +2622,7 @@ mod tests {
                 "{card:?} primed={primed}"
             );
             assert_eq!(
-                state.player.fighter.statuses.strength, expected_strength,
+                state.player.fighter.statuses.focus, expected_focus,
                 "{card:?} primed={primed}"
             );
         }
@@ -2020,17 +2656,17 @@ mod tests {
     }
 
     #[test]
-    fn lockbreaker_variants_convert_expose_into_weak_and_block() {
-        for (card, primed, expected_hp, expected_block, expected_weak) in [
+    fn lockbreaker_variants_convert_focus_disruption_into_more_focus_loss_and_block() {
+        for (card, primed, expected_hp, expected_block, expected_focus) in [
             (CardId::Lockbreaker, false, 34, 0, 0),
-            (CardId::Lockbreaker, true, 31, 6, 1),
+            (CardId::Lockbreaker, true, 34, 6, -2),
             (CardId::LockbreakerPlus, false, 32, 0, 0),
-            (CardId::LockbreakerPlus, true, 28, 8, 1),
+            (CardId::LockbreakerPlus, true, 32, 8, -2),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
             if primed {
-                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.focus = -1;
             }
 
             state.dispatch(CombatAction::PlayCard {
@@ -2048,15 +2684,15 @@ mod tests {
                 "{card:?} primed={primed}"
             );
             assert_eq!(
-                primary_enemy(&state).fighter.statuses.weak,
-                expected_weak,
+                primary_enemy(&state).fighter.statuses.focus,
+                expected_focus,
                 "{card:?} primed={primed}"
             );
         }
     }
 
     #[test]
-    fn counter_lattice_variants_refund_energy_only_against_weakened_targets() {
+    fn counter_lattice_variants_refund_energy_only_against_focus_broken_targets() {
         for (card, primed, expected_hp, expected_energy) in [
             (CardId::CounterLattice, false, 34, 2),
             (CardId::CounterLattice, true, 34, 3),
@@ -2066,7 +2702,7 @@ mod tests {
             let mut state = blank_state();
             state.deck.hand = vec![card];
             if primed {
-                primary_enemy_mut(&mut state).fighter.statuses.weak = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.focus = -1;
             }
 
             state.dispatch(CombatAction::PlayCard {
@@ -2087,19 +2723,30 @@ mod tests {
     }
 
     #[test]
-    fn terminal_loop_variants_reward_bleed_and_expose_setup() {
-        for (card, primed, expected_hp, expected_strength, expect_draw) in [
+    fn gain_energy_can_round_small_refunds_down_to_zero_under_negative_momentum() {
+        let mut state = blank_state();
+        state.player.energy = 2;
+        state.player.fighter.statuses.momentum = -7;
+
+        state.gain_energy(1);
+
+        assert_eq!(state.player.energy, 2);
+    }
+
+    #[test]
+    fn terminal_loop_variants_reward_bleed_and_momentum_setup() {
+        for (card, primed, expected_hp, expected_focus, expect_draw) in [
             (CardId::TerminalLoop, false, 28, 0, false),
-            (CardId::TerminalLoop, true, 22, 1, true),
+            (CardId::TerminalLoop, true, 28, 1, true),
             (CardId::TerminalLoopPlus, false, 25, 0, false),
-            (CardId::TerminalLoopPlus, true, 18, 2, true),
+            (CardId::TerminalLoopPlus, true, 25, 2, true),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
             state.deck.draw_pile = vec![CardId::GuardStep];
             if primed {
                 primary_enemy_mut(&mut state).fighter.statuses.bleed = 1;
-                primary_enemy_mut(&mut state).fighter.statuses.expose = 1;
+                primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
             }
 
             state.dispatch(CombatAction::PlayCard {
@@ -2113,7 +2760,7 @@ mod tests {
                 "{card:?} primed={primed}"
             );
             assert_eq!(
-                state.player.fighter.statuses.strength, expected_strength,
+                state.player.fighter.statuses.focus, expected_focus,
                 "{card:?} primed={primed}"
             );
             assert_eq!(
@@ -2129,31 +2776,33 @@ mod tests {
     }
 
     #[test]
-    fn scout_drone_brace_cycle_grants_strength_and_block() {
+    fn scout_drone_brace_cycle_keeps_focus_gain_under_negative_momentum() {
         let mut state = blank_state();
         set_primary_enemy_intent(&mut state, EnemyProfileId::ScoutDrone, 2);
+        primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
 
         let mut events = Vec::new();
         state.resolve_enemy_intent(&mut events);
 
         assert_eq!(primary_enemy(&state).fighter.block, 4);
-        assert_eq!(primary_enemy(&state).fighter.statuses.strength, 1);
+        assert_eq!(primary_enemy(&state).fighter.statuses.focus, 1);
         assert!(events.contains(&CombatEvent::StatusApplied {
             target: PRIMARY_ENEMY,
-            status: StatusKind::Strength,
+            status: StatusKind::Focus,
             amount: 1,
         }));
     }
 
     #[test]
-    fn rampart_drone_pressure_clamp_applies_weak() {
+    fn rampart_drone_pressure_clamp_keeps_focus_loss_under_negative_momentum() {
         let mut state = blank_state();
         set_primary_enemy_intent(&mut state, EnemyProfileId::RampartDrone, 1);
+        primary_enemy_mut(&mut state).fighter.statuses.momentum = -1;
 
         state.resolve_enemy_intent(&mut Vec::new());
 
         assert_eq!(state.player.fighter.hp, 35);
-        assert_eq!(state.player.fighter.statuses.weak, 1);
+        assert_eq!(state.player.fighter.statuses.focus, -1);
     }
 
     #[test]
@@ -2176,14 +2825,14 @@ mod tests {
     }
 
     #[test]
-    fn shard_weaver_refocus_applies_frail() {
+    fn shard_weaver_refocus_applies_rhythm_loss() {
         let mut state = blank_state();
         set_primary_enemy_intent(&mut state, EnemyProfileId::ShardWeaver, 2);
 
         state.resolve_enemy_intent(&mut Vec::new());
 
         assert_eq!(primary_enemy(&state).fighter.block, 8);
-        assert_eq!(state.player.fighter.statuses.frail, 1);
+        assert_eq!(state.player.fighter.statuses.rhythm, -1);
     }
 
     #[test]

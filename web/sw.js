@@ -17,10 +17,14 @@ const PRECACHE_URLS = [
   new URL("./styles.css", self.location.href).toString(),
   new URL("./mazocarta.wasm", self.location.href).toString(),
   new URL("./mazocarta.svg", self.location.href).toString(),
-  new URL("./manifest.webmanifest?v=1", self.location.href).toString(),
-  new URL("./apple-touch-icon.png?v=1", self.location.href).toString(),
-  new URL("./icons/icon-192.png?v=1", self.location.href).toString(),
-  new URL("./icons/icon-512.png?v=1", self.location.href).toString(),
+  new URL("./icons/combat/heart.svg", self.location.href).toString(),
+  new URL("./icons/combat/shield.svg", self.location.href).toString(),
+  new URL("./icons/combat/energy.svg", self.location.href).toString(),
+  new URL("./icons/combat/deck.svg", self.location.href).toString(),
+  new URL("./manifest.webmanifest?v=2", self.location.href).toString(),
+  new URL("./apple-touch-icon.png?v=2", self.location.href).toString(),
+  new URL("./icons/icon-192.png?v=2", self.location.href).toString(),
+  new URL("./icons/icon-512.png?v=2", self.location.href).toString(),
 ];
 
 self.addEventListener("install", (event) => {
