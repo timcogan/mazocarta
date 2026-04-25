@@ -1032,7 +1032,14 @@ function setAppPlayerName(raw) {
 }
 
 function isAllowedPlayerNameCharacter(char) {
-  return !/\p{Cc}/u.test(char) && (!/\s/u.test(char) || char === " ");
+  return (
+    /^[\p{L}\p{N}]$/u.test(char) ||
+    char === " " ||
+    char === "-" ||
+    char === "_" ||
+    char === "." ||
+    char === "'"
+  );
 }
 
 function limitPlayerNameInputValue(raw) {
@@ -1074,10 +1081,14 @@ function setPlayerNameEditingActive(active) {
 
 function updatePlayerNameFromKeyboard(nextValue) {
   const limitedValue = limitPlayerNameInputValue(nextValue);
+  if (limitedValue === playerNameInput.value) {
+    return false;
+  }
   playerNameInput.value = limitedValue;
   setAppPlayerName(limitedValue);
   syncStoredPlayerName();
   drawFrame();
+  return true;
 }
 
 function handlePlayerNameEditingKey(event) {
@@ -1103,22 +1114,25 @@ function handlePlayerNameEditingKey(event) {
 
   if (event.key === "Backspace") {
     event.preventDefault();
-    updatePlayerNameFromKeyboard(Array.from(currentValue).slice(0, -1).join(""));
-    showTypingPointerOverlay();
+    if (updatePlayerNameFromKeyboard(Array.from(currentValue).slice(0, -1).join(""))) {
+      showTypingPointerOverlay();
+    }
     return true;
   }
 
   if (event.key === "Delete") {
     event.preventDefault();
-    updatePlayerNameFromKeyboard("");
-    showTypingPointerOverlay();
+    if (updatePlayerNameFromKeyboard("")) {
+      showTypingPointerOverlay();
+    }
     return true;
   }
 
   if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
     event.preventDefault();
-    updatePlayerNameFromKeyboard(currentValue + event.key);
-    showTypingPointerOverlay();
+    if (updatePlayerNameFromKeyboard(currentValue + event.key)) {
+      showTypingPointerOverlay();
+    }
     return true;
   }
 
@@ -1988,19 +2002,13 @@ function syncPlayerNameSelection(event) {
 
 function onPlayerNameInputFocus(event) {
   event.stopPropagation();
-  playerNameEditingActive = true;
-  setAppPlayerNameInputFocused(true);
-  hideTypingPointerOverlay();
-  syncPlayerNameOverlay();
+  setPlayerNameEditingActive(true);
   drawFrame();
 }
 
 function onPlayerNameInputBlur(event) {
   event.stopPropagation();
-  playerNameEditingActive = false;
-  setAppPlayerNameInputFocused(false);
-  hideTypingPointerOverlay();
-  syncPlayerNameOverlay();
+  setPlayerNameEditingActive(false);
   drawFrame();
 }
 

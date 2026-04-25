@@ -122,8 +122,15 @@ const OVERLAY_BUTTON_STACK_GAP: f32 = 12.0;
 const SETTINGS_SECTION_LABEL_TO_CONTROL_GAP: f32 = 12.0;
 const SETTINGS_SECTION_CONTROL_TO_LABEL_GAP: f32 = 20.0;
 const BINARY_BACKGROUND_FONT_TOKEN: &str = "ambient";
+const BINARY_BACKGROUND_COL_DIV: f32 = 36.0;
 const BINARY_BACKGROUND_CELL_MIN: f32 = 22.0;
 const BINARY_BACKGROUND_CELL_MAX: f32 = 34.0;
+const BINARY_BACKGROUND_CELL_H_RATIO: f32 = 0.92;
+const BINARY_BACKGROUND_CELL_H_MIN: f32 = 20.0;
+const BINARY_BACKGROUND_CELL_H_MAX: f32 = 30.0;
+const BINARY_BACKGROUND_FONT_RATIO: f32 = 0.48;
+const BINARY_BACKGROUND_FONT_MIN: f32 = 10.0;
+const BINARY_BACKGROUND_FONT_MAX: f32 = 16.0;
 const BINARY_BACKGROUND_PARTICIPATION_RATE: f32 = 0.24;
 const BINARY_BACKGROUND_FADE_IN_MIN_MS: f32 = 480.0;
 const BINARY_BACKGROUND_FADE_IN_MAX_MS: f32 = 840.0;
@@ -2999,12 +3006,15 @@ impl App {
         }
     }
 
+    /// Returns a zero-filled buffer for the caller to write exactly `len` bytes into before
+    /// calling `set_player_name_from_buffer`; bytes beyond `len` are ignored.
     pub(crate) fn prepare_player_name_buffer(&mut self, len: usize) -> *mut u8 {
-        self.player_name_buffer.clear();
         self.player_name_buffer.resize(len, 0);
         self.player_name_buffer.as_mut_ptr()
     }
 
+    /// Validates UTF-8 in the first `len` bytes of the prepared player-name buffer and returns
+    /// `false` when `len` exceeds the buffer length or the bytes are invalid UTF-8.
     pub(crate) fn set_player_name_from_buffer(&mut self, len: usize) -> bool {
         let buffer_len = self.player_name_buffer.len();
         if len > buffer_len {
@@ -8457,11 +8467,17 @@ impl App {
     }
 
     fn render_binary_background(&self, scene: &mut SceneBuilder) {
+        debug_assert!(BINARY_BACKGROUND_FADE_IN_MIN_MS >= 1.0);
+        debug_assert!(BINARY_BACKGROUND_FADE_OUT_MIN_MS >= 1.0);
+
         let width = self.logical_width();
         let height = self.logical_height();
-        let cell_w = (width / 36.0).clamp(BINARY_BACKGROUND_CELL_MIN, BINARY_BACKGROUND_CELL_MAX);
-        let cell_h = (cell_w * 0.92).clamp(20.0, 30.0);
-        let font_size = (cell_w * 0.48).clamp(10.0, 16.0);
+        let cell_w = (width / BINARY_BACKGROUND_COL_DIV)
+            .clamp(BINARY_BACKGROUND_CELL_MIN, BINARY_BACKGROUND_CELL_MAX);
+        let cell_h = (cell_w * BINARY_BACKGROUND_CELL_H_RATIO)
+            .clamp(BINARY_BACKGROUND_CELL_H_MIN, BINARY_BACKGROUND_CELL_H_MAX);
+        let font_size = (cell_w * BINARY_BACKGROUND_FONT_RATIO)
+            .clamp(BINARY_BACKGROUND_FONT_MIN, BINARY_BACKGROUND_FONT_MAX);
         let cols = ((width / cell_w).floor() as usize).saturating_add(1).max(1);
         let rows = (((height - font_size).max(0.0) / cell_h).floor() as usize)
             .saturating_add(1)
@@ -8508,11 +8524,11 @@ impl App {
                 }
 
                 let phase_alpha = if local_time_ms < fade_in_ms {
-                    local_time_ms / fade_in_ms.max(1.0)
+                    local_time_ms / fade_in_ms
                 } else if local_time_ms < fade_in_ms + hold_ms {
                     1.0
                 } else {
-                    1.0 - ((local_time_ms - fade_in_ms - hold_ms) / fade_out_ms.max(1.0))
+                    1.0 - ((local_time_ms - fade_in_ms - hold_ms) / fade_out_ms)
                 };
                 let activation_index = (cycle_time_ms / cycle_ms).floor() as u32;
                 let glyph_seed = lo
@@ -12647,9 +12663,12 @@ fn fit_text_size(text: &str, desired_size: f32, max_width: f32) -> f32 {
     }
 }
 
+fn is_allowed_player_name_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == ' ' || matches!(ch, '-' | '_' | '.' | '\'')
+}
+
 fn filtered_player_name_chars(raw: &str) -> impl Iterator<Item = char> + '_ {
-    raw.chars()
-        .filter(|c| !c.is_control() && (!c.is_whitespace() || *c == ' '))
+    raw.chars().filter(|c| is_allowed_player_name_char(*c))
 }
 
 fn limit_player_name_input(raw: &str) -> String {
@@ -14365,14 +14384,13 @@ fn sanitize(value: &str) -> String {
 }
 
 fn encode_scene_text(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for ch in value.replace('\n', " ").chars() {
-        if ch == '%' {
-            encoded.push_str("%25");
-        } else if ch == '|' {
-            encoded.push_str("%7C");
-        } else {
-            encoded.push(ch);
+    let mut encoded = String::with_capacity(value.len() + 4);
+    for ch in value.chars() {
+        match ch {
+            '\n' => encoded.push(' '),
+            '%' => encoded.push_str("%25"),
+            '|' => encoded.push_str("%7C"),
+            _ => encoded.push(ch),
         }
     }
     encoded
@@ -14384,7 +14402,7 @@ fn decode_scene_text(value: &str) -> String {
     let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0usize;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
+        if bytes[index] == b'%' && index + 3 <= bytes.len() {
             if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
                 if let Ok(byte) = u8::from_str_radix(hex, 16) {
                     decoded.push(byte);
@@ -14912,6 +14930,8 @@ mod tests {
         assert_eq!(decode_scene_text("Se%C3%B1or"), "Señor");
         assert_eq!(decode_scene_text(&encode_scene_text("Señor%|")), "Señor%|");
         assert_eq!(decode_scene_text("100% ready"), "100% ready");
+        assert_eq!(decode_scene_text("%"), "%");
+        assert_eq!(decode_scene_text("%A"), "%A");
         assert_eq!(decode_scene_text("%zz"), "%zz");
     }
 
@@ -19490,14 +19510,14 @@ mod tests {
     }
 
     #[test]
-    fn focused_player_name_input_filters_control_and_non_space_whitespace() {
+    fn focused_player_name_input_rejects_invisible_formatting_and_keeps_allowed_punctuation() {
         let mut app = App::new();
 
         app.set_player_name_input_focused(true);
-        app.set_player_name("Jo\t hn\n\u{00a0}42");
+        app.set_player_name("Jo\u{200B}\u{202E}\t hn\n\u{00a0}-_.'42");
 
-        assert_eq!(app.player_name_input_value, "Jo hn42");
-        assert_eq!(app.player_name.as_deref(), Some("Jo hn42"));
+        assert_eq!(app.player_name_input_value, "Jo hn-_.'42");
+        assert_eq!(app.player_name.as_deref(), Some("Jo hn-_.'42"));
     }
 
     #[test]

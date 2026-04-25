@@ -169,7 +169,7 @@ build_legacy_site_with_resvg() {
     MAZOCARTA_APP_CHANNEL="$channel" \
       MAZOCARTA_APP_BUILD_TIMESTAMP_UTC="$BUILD_TIMESTAMP_UTC" \
       MAZOCARTA_APP_GIT_SHA_SHORT="$short_sha" \
-      cargo build --release --target wasm32-unknown-unknown --manifest-path "$worktree/Cargo.toml"
+      cargo build --lib --release --target wasm32-unknown-unknown --manifest-path "$worktree/Cargo.toml"
   )
 
   cp "$wasm_target" "$web_wasm"
@@ -186,6 +186,7 @@ build_worktree_site() {
 
   if [[ -f "$worktree/scripts/render-pwa-icons.sh" ]]; then
     install -m 0755 "$ROOT_DIR/scripts/render-pwa-icons.sh" "$worktree/scripts/render-pwa-icons.sh"
+    install -m 0755 "$ROOT_DIR/scripts/render-combat-icons.sh" "$worktree/scripts/render-combat-icons.sh"
     (
       cd "$worktree"
       MAZOCARTA_APP_CHANNEL="$channel" \
