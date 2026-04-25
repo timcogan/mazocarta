@@ -3005,16 +3005,31 @@ impl App {
         self.player_name_buffer.as_mut_ptr()
     }
 
-    pub(crate) fn set_player_name_from_buffer(&mut self, len: usize) {
-        if len > self.player_name_buffer.len() {
-            return;
+    pub(crate) fn set_player_name_from_buffer(&mut self, len: usize) -> bool {
+        let buffer_len = self.player_name_buffer.len();
+        if len > buffer_len {
+            log::debug!(
+                "Ignoring player name buffer update: len {} exceeds buffer length {}.",
+                len,
+                buffer_len
+            );
+            return false;
         }
 
-        let Ok(raw) = std::str::from_utf8(&self.player_name_buffer[..len]) else {
-            return;
+        let raw = match std::str::from_utf8(&self.player_name_buffer[..len]) {
+            Ok(raw) => raw.to_owned(),
+            Err(error) => {
+                log::debug!(
+                    "Ignoring player name buffer update: invalid UTF-8 for len {} in buffer length {}: {}",
+                    len,
+                    buffer_len,
+                    error
+                );
+                return false;
+            }
         };
-        let raw = raw.to_owned();
         self.set_player_name(&raw);
+        true
     }
 
     pub(crate) fn prepare_restore_buffer(&mut self, len: usize) -> *mut u8 {
@@ -8518,7 +8533,7 @@ impl App {
                 let alpha = max_alpha * phase_alpha.clamp(0.0, 1.0);
                 let x = (col as f32 + 0.5) * cell_w;
                 let y = font_size + row as f32 * cell_h;
-                if x < 0.0 || x > width || y < font_size || y > height {
+                if x > width || y > height {
                     continue;
                 }
 
@@ -12632,16 +12647,20 @@ fn fit_text_size(text: &str, desired_size: f32, max_width: f32) -> f32 {
     }
 }
 
+fn filtered_player_name_chars(raw: &str) -> impl Iterator<Item = char> + '_ {
+    raw.chars()
+        .filter(|c| !c.is_control() && (!c.is_whitespace() || *c == ' '))
+}
+
 fn limit_player_name_input(raw: &str) -> String {
-    raw.replace('\n', " ")
-        .chars()
+    filtered_player_name_chars(raw)
         .take(PLAYER_NAME_MAX_CHARS)
         .collect()
 }
 
 fn sanitize_player_name(raw: &str) -> Option<String> {
-    let trimmed = raw.replace('\n', " ");
-    let trimmed = trimmed.trim();
+    let filtered: String = filtered_player_name_chars(raw).collect();
+    let trimmed = filtered.trim();
     if trimmed.is_empty() {
         return None;
     }
@@ -19437,10 +19456,10 @@ mod tests {
     fn player_name_trims_whitespace_and_limits_length() {
         let mut app = App::new();
 
-        app.set_player_name("   123456789012345   ");
+        app.set_player_name(" \t1234\n5678\u{00a0}9012345 \r");
         assert_eq!(app.player_name.as_deref(), Some("123456789012"));
 
-        app.set_player_name("   ");
+        app.set_player_name("\t\n\u{00a0}  \r");
         assert_eq!(app.player_name, None);
     }
 
@@ -19468,6 +19487,53 @@ mod tests {
         let expected_caret_x = name_entry.0 + text_width("John ", name_entry.2);
 
         assert!((caret_entry.0 - expected_caret_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn focused_player_name_input_filters_control_and_non_space_whitespace() {
+        let mut app = App::new();
+
+        app.set_player_name_input_focused(true);
+        app.set_player_name("Jo\t hn\n\u{00a0}42");
+
+        assert_eq!(app.player_name_input_value, "Jo hn42");
+        assert_eq!(app.player_name.as_deref(), Some("Jo hn42"));
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_true_for_valid_utf8() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(4);
+        unsafe {
+            std::slice::from_raw_parts_mut(ptr, 4).copy_from_slice(b"John");
+        }
+
+        assert!(app.set_player_name_from_buffer(4));
+        assert_eq!(app.player_name.as_deref(), Some("John"));
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_false_when_len_exceeds_buffer() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(4);
+        unsafe {
+            std::slice::from_raw_parts_mut(ptr, 4).copy_from_slice(b"John");
+        }
+
+        assert!(!app.set_player_name_from_buffer(5));
+        assert_eq!(app.player_name, None);
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_false_for_invalid_utf8() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(1);
+        unsafe {
+            *ptr = 0xff;
+        }
+
+        assert!(!app.set_player_name_from_buffer(1));
+        assert_eq!(app.player_name, None);
     }
 
     #[test]

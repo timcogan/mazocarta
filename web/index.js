@@ -83,6 +83,7 @@ let lastBootScreenVisible = null;
 let playerNameInputVisible = false;
 let playerNameEditingActive = false;
 let lastMouseClientPoint = null;
+let lastPointerDownStartedOnPlayerNameInput = false;
 const MONO_STACK =
   '"IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Liberation Mono", monospace';
 const DEFAULT_GAME_TITLE = "Mazocarta";
@@ -1027,12 +1028,16 @@ function setAppPlayerName(raw) {
   const bytes = encoder.encode(raw);
   const ptr = wasm.prepare_player_name_buffer(bytes.length);
   new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
-  wasm.app_set_player_name_from_buffer(bytes.length);
-  return true;
+  return !!wasm.app_set_player_name_from_buffer(bytes.length);
+}
+
+function isAllowedPlayerNameCharacter(char) {
+  return !/\p{Cc}/u.test(char) && (!/\s/u.test(char) || char === " ");
 }
 
 function limitPlayerNameInputValue(raw) {
-  return Array.from(String(raw).replace(/\n/g, " "))
+  return Array.from(String(raw))
+    .filter((char) => isAllowedPlayerNameCharacter(char))
     .slice(0, 12)
     .join("");
 }
@@ -1365,13 +1370,13 @@ function playerNameInputHitTest(point) {
 }
 
 function focusHiddenPlayerNameInput() {
-  playerNameEditingActive = true;
+  setPlayerNameEditingActive(true);
   hideTypingPointerOverlay();
   if (document.activeElement !== playerNameInput) {
     playerNameInput.focus();
-    const end = playerNameInput.value.length;
-    playerNameInput.setSelectionRange(end, end);
   }
+  const end = playerNameInput.value.length;
+  playerNameInput.setSelectionRange(end, end);
   setAppPlayerNameInputFocused(true);
   syncPlayerNameOverlay();
 }
@@ -1833,6 +1838,7 @@ function onPointerDown(event) {
     }
   }
   if (playerNameInputHitTest(point)) {
+    lastPointerDownStartedOnPlayerNameInput = true;
     if (event.pointerType === "touch") {
       focusHiddenPlayerNameInput();
     } else {
@@ -1844,6 +1850,7 @@ function onPointerDown(event) {
   if (playerNameEditingActive) {
     setPlayerNameEditingActive(false);
   }
+  lastPointerDownStartedOnPlayerNameInput = false;
   wasm.pointer_down(point.x, point.y);
   drawFrame();
   void flushHostEffects({ allowPrivilegedAction: false });
@@ -1862,7 +1869,9 @@ function onPointerUp(event) {
     }
   }
   const point = toCanvasPoint(event);
-  if (playerNameInputHitTest(point)) {
+  const pointerDownStartedOnPlayerNameInput = lastPointerDownStartedOnPlayerNameInput;
+  lastPointerDownStartedOnPlayerNameInput = false;
+  if (pointerDownStartedOnPlayerNameInput) {
     if (event.pointerType === "touch") {
       clearHover();
       hideTypingPointerOverlay();
@@ -1871,6 +1880,14 @@ function onPointerUp(event) {
     return;
   }
   wasm.pointer_up(point.x, point.y);
+  if (playerNameInputHitTest(point)) {
+    if (event.pointerType === "touch") {
+      clearHover();
+      hideTypingPointerOverlay();
+    }
+    drawFrame();
+    return;
+  }
   if (event.pointerType === "touch") {
     clearHover();
   }
@@ -1879,6 +1896,7 @@ function onPointerUp(event) {
 }
 
 function onPointerCancel() {
+  lastPointerDownStartedOnPlayerNameInput = false;
   clearHover();
   hideTypingPointerOverlay();
   drawFrame();
@@ -1935,7 +1953,9 @@ function onPlayerNameInput(event) {
     return;
   }
 
-  setAppPlayerName(playerNameInput.value);
+  const limitedValue = limitPlayerNameInputValue(playerNameInput.value);
+  playerNameInput.value = limitedValue;
+  setAppPlayerName(limitedValue);
   syncStoredPlayerName();
   syncPlayerNameOverlay();
   drawFrame();

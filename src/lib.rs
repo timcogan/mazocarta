@@ -111,8 +111,8 @@ pub extern "C" fn prepare_player_name_buffer(len: usize) -> *mut u8 {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
-pub extern "C" fn app_set_player_name_from_buffer(len: usize) {
-    APP.with(|app| app.borrow_mut().set_player_name_from_buffer(len));
+pub extern "C" fn app_set_player_name_from_buffer(len: usize) -> bool {
+    APP.with(|app| app.borrow_mut().set_player_name_from_buffer(len))
 }
 
 #[cfg(target_arch = "wasm32")]

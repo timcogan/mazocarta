@@ -130,10 +130,10 @@ verify_site_branding() {
 
   if [[ "$channel" == "preview" ]]; then
     grep -q '<title>Mazocarta Preview</title>' "$destination/index.html"
-    grep -q '<meta name="theme-color" content="#000000"' "$destination/index.html"
+    grep -q "<meta name=\"theme-color\" content=\"$PREVIEW_SHELL_THEME_COLOR\"" "$destination/index.html"
     grep -q '"name": "Mazocarta Preview"' "$destination/manifest.webmanifest"
     grep -q '"short_name": "Mazo Preview"' "$destination/manifest.webmanifest"
-    grep -q '"theme_color": "#000000"' "$destination/manifest.webmanifest"
+    grep -q "\"theme_color\": \"$PREVIEW_SHELL_THEME_COLOR\"" "$destination/manifest.webmanifest"
     grep -q "${PREVIEW_ACCENT_COLOR}" "$destination/mazocarta.svg"
     if grep -Eq '#3f6\b|#33ff66\b' "$destination/mazocarta.svg"; then
       echo "Preview SVG still contains the stable green accent." >&2
@@ -162,7 +162,8 @@ build_legacy_site_with_resvg() {
   fi
 
   # Legacy release tags hardcode Inkscape in scripts/build-web.sh. Rebuild their
-  # icons directly with resvg so Pages packaging stays compatible without that dependency.
+  # icons with the shared PWA icon compositor so Pages packaging stays compatible
+  # without that dependency and keeps the modern opaque background/inset treatment.
   (
     cd "$worktree"
     MAZOCARTA_APP_CHANNEL="$channel" \
@@ -173,9 +174,8 @@ build_legacy_site_with_resvg() {
 
   cp "$wasm_target" "$web_wasm"
   mkdir -p "$icon_dir"
-  "$RESVG_BIN" --width 192 --height 192 "$svg_icon" "$icon_dir/icon-192.png"
-  "$RESVG_BIN" --width 512 --height 512 "$svg_icon" "$icon_dir/icon-512.png"
-  "$RESVG_BIN" --width 180 --height 180 "$svg_icon" "$apple_icon"
+  RESVG_BIN="$RESVG_BIN" \
+    "$ROOT_DIR/scripts/render-pwa-icons.sh" "$svg_icon" "$icon_dir" "$apple_icon"
   printf 'Copied %s -> %s\n' "$wasm_target" "$web_wasm"
 }
 
