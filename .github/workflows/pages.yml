@@ -20,6 +20,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RESVG_VERSION: v0.47.0
+
 concurrency:
   group: github-pages
   cancel-in-progress: true
@@ -45,10 +48,16 @@ jobs:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
 
-      - name: Install system dependencies
+      - name: Install resvg
         run: |
-          sudo apt-get update
-          sudo apt-get install -y inkscape
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          curl -fsSL "https://github.com/linebender/resvg/releases/download/${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
+            | tar -xz -C "$tmp_dir"
+          mkdir -p "$HOME/.local/bin"
+          install -m 0755 "$tmp_dir/resvg" "$HOME/.local/bin/resvg"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/resvg" --version
 
       - name: Install Rust target
         run: rustup target add wasm32-unknown-unknown

@@ -48,3 +48,110 @@ body {
   touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
+
+#player-name-input {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  display: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: transparent;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-align: left;
+  line-height: 1;
+  appearance: none;
+  -webkit-appearance: none;
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
+  box-shadow: none;
+  z-index: -1;
+}
+
+#player-name-input:focus {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+#player-name-input::placeholder {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  text-align: center;
+  opacity: 0;
+}
+
+#player-name-overlay {
+  position: fixed;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 11;
+  color: #f4e8cf;
+  font-family: var(--mono);
+  font-weight: 700;
+  white-space: pre;
+}
+
+#player-name-overlay[data-placeholder="true"] {
+  color: #dfb16a;
+  opacity: 0.55;
+}
+
+#player-name-overlay-prefix,
+#player-name-overlay-suffix {
+  display: inline-block;
+  max-width: 100%;
+}
+
+#player-name-overlay-caret {
+  display: none;
+  width: 2px;
+  height: 0.95em;
+  margin: 0 1px;
+  background: #dfb16a;
+  border-radius: 999px;
+}
+
+#player-name-overlay.is-focused #player-name-overlay-caret {
+  display: inline-block;
+  animation: player-name-caret-blink 1s steps(1, end) infinite;
+}
+
+#typing-pointer-overlay {
+  position: fixed;
+  display: none;
+  width: 18px;
+  height: 24px;
+  pointer-events: none;
+  z-index: 12;
+  transform: translate(-2px, -2px);
+  background: #f4e8cf;
+  clip-path: polygon(0 0, 0 100%, 28% 72%, 46% 100%, 61% 93%, 44% 66%, 100% 66%);
+  filter: drop-shadow(0 0 0 #000000) drop-shadow(1px 1px 0 #000000);
+  opacity: 0.96;
+}
+
+@keyframes player-name-caret-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+
+  50%,
+  100% {
+    opacity: 0;
+  }
+}

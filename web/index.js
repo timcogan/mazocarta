@@ -2,6 +2,30 @@ const canvas = document.getElementById("game");
 if (!(canvas instanceof HTMLCanvasElement)) {
   throw new Error("Canvas element `#game` not found");
 }
+const playerNameInput = document.getElementById("player-name-input");
+if (!(playerNameInput instanceof HTMLInputElement)) {
+  throw new Error("Input element `#player-name-input` not found");
+}
+const playerNameOverlay = document.getElementById("player-name-overlay");
+const playerNameOverlayPrefix = document.getElementById("player-name-overlay-prefix");
+const playerNameOverlayCaret = document.getElementById("player-name-overlay-caret");
+const playerNameOverlaySuffix = document.getElementById("player-name-overlay-suffix");
+const typingPointerOverlay = document.getElementById("typing-pointer-overlay");
+if (!(playerNameOverlay instanceof HTMLDivElement)) {
+  throw new Error("Overlay element `#player-name-overlay` not found");
+}
+if (!(playerNameOverlayPrefix instanceof HTMLSpanElement)) {
+  throw new Error("Overlay element `#player-name-overlay-prefix` not found");
+}
+if (!(playerNameOverlayCaret instanceof HTMLSpanElement)) {
+  throw new Error("Overlay element `#player-name-overlay-caret` not found");
+}
+if (!(playerNameOverlaySuffix instanceof HTMLSpanElement)) {
+  throw new Error("Overlay element `#player-name-overlay-suffix` not found");
+}
+if (!(typingPointerOverlay instanceof HTMLDivElement)) {
+  throw new Error("Overlay element `#typing-pointer-overlay` not found");
+}
 const ctx = canvas.getContext("2d");
 if (!ctx) {
   throw new Error("2D canvas context unavailable.");
@@ -49,21 +73,27 @@ let logicalWidth = 1280;
 let logicalHeight = 720;
 let lastRunSaveGeneration = 0;
 let lastLanguageGeneration = 0;
+let lastBackgroundModeGeneration = 0;
+let lastPlayerNameGeneration = 0;
 let deferredInstallPrompt = null;
 let serviceWorkerRegistration = null;
 let waitingServiceWorker = null;
 let reloadOnNextControllerChange = false;
 let lastBootScreenVisible = null;
+let playerNameInputVisible = false;
+let playerNameEditingActive = false;
+let lastMouseClientPoint = null;
 const MONO_STACK =
   '"IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Liberation Mono", monospace';
 const DEFAULT_GAME_TITLE = "Mazocarta";
 const PREVIEW_GAME_TITLE = "Mazocarta Preview";
 const LOGO_ASSET_PATH = "./mazocarta.svg";
 const COMBAT_ICON_ASSET_PATHS = [
-  "./icons/combat/heart.svg",
-  "./icons/combat/shield.svg",
-  "./icons/combat/energy.svg",
-  "./icons/combat/deck.svg",
+  "./icons/combat/heart.png",
+  "./icons/combat/shield.png",
+  "./icons/combat/energy.png",
+  "./icons/combat/deck.png",
+  "./icons/combat/arrow.png",
 ];
 const SHARE_CARD_WIDTH = 420;
 const SHARE_CARD_HEIGHT = 500;
@@ -88,6 +118,8 @@ const GAME_TITLE =
 const STORAGE_NAMESPACE = APP_CHANNEL === "preview" ? "mazocarta.preview" : "mazocarta";
 const ACTIVE_RUN_STORAGE_KEY = `${STORAGE_NAMESPACE}.active_run`;
 const LANGUAGE_STORAGE_KEY = `${STORAGE_NAMESPACE}.language`;
+const BACKGROUND_MODE_STORAGE_KEY = `${STORAGE_NAMESPACE}.background_mode`;
+const PLAYER_NAME_STORAGE_KEY = `${STORAGE_NAMESPACE}.player_name`;
 
 function isStandaloneMode() {
   return (
@@ -106,6 +138,14 @@ function isIosDevice() {
 function isSafariBrowser() {
   const userAgent = window.navigator.userAgent;
   return /Safari/i.test(userAgent) && !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium/i.test(userAgent);
+}
+
+function isLocalDevHost() {
+  return (
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname === "::1"
+  );
 }
 
 function resolveInstallCapabilityCode() {
@@ -187,6 +227,12 @@ function fontFor(token, size) {
     default:
       return `400 ${size}px ${MONO_STACK}`;
   }
+}
+
+function decodeSceneText(text) {
+  return text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
 }
 
 function roundedRectPath(context, x, y, w, h, radius) {
@@ -271,16 +317,20 @@ function buildTintedImageAsset(src, color) {
     return null;
   }
 
+  const rasterWidth = img.naturalWidth;
+  const rasterHeight = img.naturalHeight;
   const tintedCanvas = document.createElement("canvas");
-  tintedCanvas.width = img.naturalWidth;
-  tintedCanvas.height = img.naturalHeight;
+  tintedCanvas.width = rasterWidth;
+  tintedCanvas.height = rasterHeight;
   const tintedCtx = tintedCanvas.getContext("2d");
   if (!tintedCtx) {
     return null;
   }
 
   tintedCtx.clearRect(0, 0, tintedCanvas.width, tintedCanvas.height);
-  tintedCtx.drawImage(img, 0, 0);
+  tintedCtx.imageSmoothingEnabled = true;
+  tintedCtx.imageSmoothingQuality = "high";
+  tintedCtx.drawImage(img, 0, 0, rasterWidth, rasterHeight);
   tintedCtx.globalCompositeOperation = "source-in";
   tintedCtx.fillStyle = color;
   tintedCtx.fillRect(0, 0, tintedCanvas.width, tintedCanvas.height);
@@ -574,6 +624,7 @@ function applyBackdropBlur(x, y, w, h, radius, blurAmount, transform) {
 
 function drawFrame() {
   if (!wasm) {
+    hidePlayerNameInput();
     return;
   }
 
@@ -705,7 +756,8 @@ function drawFrame() {
       if (img) {
         ctx.save();
         ctx.globalAlpha *= Number.parseFloat(alpha);
-        ctx.imageSmoothingEnabled = false;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(
           img,
           Number.parseFloat(x),
@@ -795,11 +847,12 @@ function drawFrame() {
       ctx.textAlign = align;
       ctx.fillStyle = color;
       ctx.font = fontFor(fontToken, Number.parseFloat(size));
-      ctx.fillText(text, Number.parseFloat(x), Number.parseFloat(y));
+      ctx.fillText(decodeSceneText(text), Number.parseFloat(x), Number.parseFloat(y));
     }
   }
 
   ctx.restore();
+  syncPlayerNameInput();
 }
 
 function toCanvasPoint(event) {
@@ -878,6 +931,171 @@ function writeStoredLanguage(code) {
     console.error(error);
     return false;
   }
+}
+
+function readStoredBackgroundMode() {
+  try {
+    const raw = window.localStorage.getItem(BACKGROUND_MODE_STORAGE_KEY);
+    if (raw === "1") {
+      return 1;
+    }
+  } catch {}
+  return 0;
+}
+
+function writeStoredBackgroundMode(code) {
+  try {
+    window.localStorage.setItem(BACKGROUND_MODE_STORAGE_KEY, code === 1 ? "1" : "0");
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+function readStoredPlayerName() {
+  try {
+    return window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeStoredPlayerName(raw) {
+  try {
+    if (typeof raw === "string" && raw.length > 0) {
+      window.localStorage.setItem(PLAYER_NAME_STORAGE_KEY, raw);
+    } else {
+      window.localStorage.removeItem(PLAYER_NAME_STORAGE_KEY);
+    }
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+function readAppPlayerName() {
+  if (
+    !wasm ||
+    typeof wasm.app_player_name_len !== "function" ||
+    typeof wasm.app_player_name_ptr !== "function"
+  ) {
+    return "";
+  }
+
+  const len = wasm.app_player_name_len();
+  if (!len) {
+    return "";
+  }
+  const ptr = wasm.app_player_name_ptr();
+  const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
+  return decoder.decode(bytes.slice());
+}
+
+function setAppPlayerName(raw) {
+  if (
+    !wasm ||
+    typeof wasm.prepare_player_name_buffer !== "function" ||
+    typeof wasm.app_set_player_name_from_buffer !== "function"
+  ) {
+    return false;
+  }
+
+  const bytes = encoder.encode(raw);
+  const ptr = wasm.prepare_player_name_buffer(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  wasm.app_set_player_name_from_buffer(bytes.length);
+  return true;
+}
+
+function limitPlayerNameInputValue(raw) {
+  return Array.from(String(raw).replace(/\n/g, " "))
+    .slice(0, 12)
+    .join("");
+}
+
+function setAppPlayerNameInputFocused(focused) {
+  if (!wasm || typeof wasm.app_set_player_name_input_focused !== "function") {
+    return false;
+  }
+
+  wasm.app_set_player_name_input_focused(focused ? 1 : 0);
+  return true;
+}
+
+function setPlayerNameEditingActive(active) {
+  playerNameEditingActive = !!active;
+  if (playerNameEditingActive && document.activeElement !== playerNameInput) {
+    playerNameInput.value = readAppPlayerName();
+  }
+  setAppPlayerNameInputFocused(playerNameEditingActive);
+  if (!playerNameEditingActive && document.activeElement === playerNameInput) {
+    playerNameInput.blur();
+  }
+  if (
+    playerNameEditingActive &&
+    document.activeElement !== playerNameInput &&
+    lastMouseClientPoint
+  ) {
+    showTypingPointerOverlay();
+  } else {
+    hideTypingPointerOverlay();
+  }
+  syncPlayerNameOverlay();
+}
+
+function updatePlayerNameFromKeyboard(nextValue) {
+  const limitedValue = limitPlayerNameInputValue(nextValue);
+  playerNameInput.value = limitedValue;
+  setAppPlayerName(limitedValue);
+  syncStoredPlayerName();
+  drawFrame();
+}
+
+function handlePlayerNameEditingKey(event) {
+  if (!playerNameEditingActive || !wasm || document.activeElement === playerNameInput) {
+    return false;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setPlayerNameEditingActive(false);
+    drawFrame();
+    return true;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    setPlayerNameEditingActive(false);
+    drawFrame();
+    return true;
+  }
+
+  const currentValue = playerNameInput.value;
+
+  if (event.key === "Backspace") {
+    event.preventDefault();
+    updatePlayerNameFromKeyboard(Array.from(currentValue).slice(0, -1).join(""));
+    showTypingPointerOverlay();
+    return true;
+  }
+
+  if (event.key === "Delete") {
+    event.preventDefault();
+    updatePlayerNameFromKeyboard("");
+    showTypingPointerOverlay();
+    return true;
+  }
+
+  if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    updatePlayerNameFromKeyboard(currentValue + event.key);
+    showTypingPointerOverlay();
+    return true;
+  }
+
+  return false;
 }
 
 function syncStoredRunAvailability() {
@@ -1008,6 +1226,179 @@ function syncStoredLanguage() {
   return writeStoredLanguage(wasm.app_language_code());
 }
 
+function syncStoredBackgroundMode() {
+  if (
+    !wasm ||
+    typeof wasm.app_background_mode_generation !== "function" ||
+    typeof wasm.app_background_mode_code !== "function"
+  ) {
+    return false;
+  }
+
+  const generation = wasm.app_background_mode_generation();
+  if (generation === lastBackgroundModeGeneration) {
+    return false;
+  }
+  lastBackgroundModeGeneration = generation;
+  return writeStoredBackgroundMode(wasm.app_background_mode_code());
+}
+
+function syncStoredPlayerName() {
+  if (!wasm || typeof wasm.app_player_name_generation !== "function") {
+    return false;
+  }
+
+  const generation = wasm.app_player_name_generation();
+  if (generation === lastPlayerNameGeneration) {
+    return false;
+  }
+  lastPlayerNameGeneration = generation;
+  return writeStoredPlayerName(readAppPlayerName());
+}
+
+function currentPlayerNamePlaceholder() {
+  if (!wasm || typeof wasm.app_language_code !== "function") {
+    return "Player";
+  }
+  return wasm.app_language_code() === 1 ? "Jugador" : "Player";
+}
+
+function hidePlayerNameInput() {
+  if (!playerNameInputVisible) {
+    playerNameInput.style.display = "none";
+    playerNameOverlay.style.display = "none";
+    hideTypingPointerOverlay();
+    return;
+  }
+
+  playerNameInputVisible = false;
+  playerNameEditingActive = false;
+  playerNameInput.style.display = "none";
+  playerNameOverlay.style.display = "none";
+  playerNameOverlay.classList.remove("is-focused");
+  hideTypingPointerOverlay();
+  setAppPlayerNameInputFocused(false);
+  if (document.activeElement === playerNameInput) {
+    playerNameInput.blur();
+  }
+}
+
+function syncPlayerNameOverlay() {
+  playerNameOverlay.style.display = "none";
+}
+
+function updateLastMouseClientPoint(event) {
+  if (event.pointerType !== "mouse") {
+    return;
+  }
+  lastMouseClientPoint = {
+    x: event.clientX,
+    y: event.clientY,
+  };
+  if (playerNameEditingActive && document.activeElement !== playerNameInput) {
+    showTypingPointerOverlay();
+  }
+}
+
+function hideTypingPointerOverlay() {
+  typingPointerOverlay.style.display = "none";
+}
+
+function showTypingPointerOverlay() {
+  if (
+    !playerNameEditingActive ||
+    document.activeElement === playerNameInput ||
+    !lastMouseClientPoint
+  ) {
+    hideTypingPointerOverlay();
+    return;
+  }
+
+  typingPointerOverlay.style.left = `${lastMouseClientPoint.x}px`;
+  typingPointerOverlay.style.top = `${lastMouseClientPoint.y}px`;
+  typingPointerOverlay.style.display = "block";
+}
+
+function playerNameInputHitTest(point) {
+  if (
+    !wasm ||
+    typeof wasm.app_settings_player_name_input_visible !== "function" ||
+    typeof wasm.app_settings_player_name_input_x !== "function" ||
+    typeof wasm.app_settings_player_name_input_y !== "function" ||
+    typeof wasm.app_settings_player_name_input_w !== "function" ||
+    typeof wasm.app_settings_player_name_input_h !== "function"
+  ) {
+    return false;
+  }
+
+  if (!wasm.app_settings_player_name_input_visible()) {
+    return false;
+  }
+
+  const x = wasm.app_settings_player_name_input_x();
+  const y = wasm.app_settings_player_name_input_y();
+  const w = wasm.app_settings_player_name_input_w();
+  const h = wasm.app_settings_player_name_input_h();
+  return point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h;
+}
+
+function focusHiddenPlayerNameInput() {
+  playerNameEditingActive = true;
+  hideTypingPointerOverlay();
+  if (document.activeElement !== playerNameInput) {
+    playerNameInput.focus();
+    const end = playerNameInput.value.length;
+    playerNameInput.setSelectionRange(end, end);
+  }
+  setAppPlayerNameInputFocused(true);
+  syncPlayerNameOverlay();
+}
+
+function syncPlayerNameInput() {
+  if (
+    !wasm ||
+    typeof wasm.app_settings_player_name_input_visible !== "function" ||
+    typeof wasm.app_settings_player_name_input_x !== "function" ||
+    typeof wasm.app_settings_player_name_input_y !== "function" ||
+    typeof wasm.app_settings_player_name_input_w !== "function" ||
+    typeof wasm.app_settings_player_name_input_h !== "function"
+  ) {
+    hidePlayerNameInput();
+    return false;
+  }
+
+  const visible = !!wasm.app_settings_player_name_input_visible();
+  if (!visible) {
+    hidePlayerNameInput();
+    return false;
+  }
+
+  const nextValue = readAppPlayerName();
+  const becameVisible = !playerNameInputVisible;
+  const isFocused = document.activeElement === playerNameInput;
+  playerNameInputVisible = true;
+
+  if (!isFocused && !playerNameEditingActive && playerNameInput.value !== nextValue) {
+    playerNameInput.value = nextValue;
+  }
+
+  playerNameInput.placeholder = currentPlayerNamePlaceholder();
+  playerNameInput.style.display = "block";
+  playerNameInput.style.left = "0px";
+  playerNameInput.style.top = "0px";
+  playerNameInput.style.width = "1px";
+  playerNameInput.style.height = "1px";
+  playerNameInput.style.fontSize = "16px";
+  playerNameInput.style.lineHeight = "1";
+  syncPlayerNameOverlay();
+
+  if (becameVisible) {
+    syncPlayerNameOverlay();
+  }
+
+  return true;
+}
+
 async function flushInstallRequest({ allowPrivilegedAction = false } = {}) {
   if (
     !wasm ||
@@ -1121,6 +1512,8 @@ async function flushHostEffects(options = { allowPrivilegedAction: false }) {
   const installHandled = await flushInstallRequest(options);
   const updateHandled = await flushUpdateRequest(options);
   syncStoredLanguage();
+  syncStoredBackgroundMode();
+  syncStoredPlayerName();
   syncRunSaveSnapshot();
   const resumed = flushResumeRequest();
   if (installHandled || updateHandled || resumed) {
@@ -1384,8 +1777,15 @@ function onPointerMove(event) {
   }
   if (event.pointerType === "touch") {
     clearHover();
+    hideTypingPointerOverlay();
     drawFrame();
     return;
+  }
+  updateLastMouseClientPoint(event);
+  if (playerNameEditingActive) {
+    showTypingPointerOverlay();
+  } else {
+    hideTypingPointerOverlay();
   }
   const point = toCanvasPoint(event);
   wasm.pointer_move(point.x, point.y);
@@ -1401,6 +1801,26 @@ function onPointerDown(event) {
   const point = toCanvasPoint(event);
   if (event.pointerType === "touch") {
     clearHover();
+    hideTypingPointerOverlay();
+  } else {
+    updateLastMouseClientPoint(event);
+    if (playerNameEditingActive) {
+      showTypingPointerOverlay();
+    } else {
+      hideTypingPointerOverlay();
+    }
+  }
+  if (playerNameInputHitTest(point)) {
+    if (event.pointerType === "touch") {
+      focusHiddenPlayerNameInput();
+    } else {
+      setPlayerNameEditingActive(true);
+    }
+    drawFrame();
+    return;
+  }
+  if (playerNameEditingActive) {
+    setPlayerNameEditingActive(false);
   }
   wasm.pointer_down(point.x, point.y);
   drawFrame();
@@ -1411,7 +1831,23 @@ function onPointerUp(event) {
   if (!wasm) {
     return;
   }
+  if (event.pointerType === "mouse") {
+    updateLastMouseClientPoint(event);
+    if (playerNameEditingActive) {
+      showTypingPointerOverlay();
+    } else {
+      hideTypingPointerOverlay();
+    }
+  }
   const point = toCanvasPoint(event);
+  if (playerNameInputHitTest(point)) {
+    if (event.pointerType === "touch") {
+      clearHover();
+      hideTypingPointerOverlay();
+    }
+    drawFrame();
+    return;
+  }
   wasm.pointer_up(point.x, point.y);
   if (event.pointerType === "touch") {
     clearHover();
@@ -1422,11 +1858,13 @@ function onPointerUp(event) {
 
 function onPointerCancel() {
   clearHover();
+  hideTypingPointerOverlay();
   drawFrame();
 }
 
 function onPointerLeave() {
   clearHover();
+  hideTypingPointerOverlay();
   drawFrame();
 }
 
@@ -1453,6 +1891,12 @@ function onKeyDown(event) {
   if (!wasm) {
     return;
   }
+  if (handlePlayerNameEditingKey(event)) {
+    return;
+  }
+  if (document.activeElement === playerNameInput) {
+    return;
+  }
   const code = keyCodeFor(event);
   if (code == null) {
     return;
@@ -1464,8 +1908,92 @@ function onKeyDown(event) {
   void flushHostEffects({ allowPrivilegedAction: true });
 }
 
+function onPlayerNameInput(event) {
+  if (!wasm) {
+    return;
+  }
+
+  setAppPlayerName(playerNameInput.value);
+  syncStoredPlayerName();
+  syncPlayerNameOverlay();
+  drawFrame();
+}
+
+function onPlayerNameInputKeyDown(event) {
+  event.stopPropagation();
+  if (!wasm) {
+    return;
+  }
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    setPlayerNameEditingActive(false);
+    drawFrame();
+    return;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    setPlayerNameEditingActive(false);
+    drawFrame();
+  }
+}
+
+function stopPlayerNameInputPropagation(event) {
+  event.stopPropagation();
+}
+
+function focusPlayerNameInput(event) {
+  event.stopPropagation();
+  if (event.type === "touchend") {
+    focusHiddenPlayerNameInput();
+  } else {
+    setPlayerNameEditingActive(true);
+  }
+  drawFrame();
+}
+
+function syncPlayerNameSelection(event) {
+  event.stopPropagation();
+  syncPlayerNameOverlay();
+}
+
+function onPlayerNameInputFocus(event) {
+  event.stopPropagation();
+  playerNameEditingActive = true;
+  setAppPlayerNameInputFocused(true);
+  hideTypingPointerOverlay();
+  syncPlayerNameOverlay();
+  drawFrame();
+}
+
+function onPlayerNameInputBlur(event) {
+  event.stopPropagation();
+  playerNameEditingActive = false;
+  setAppPlayerNameInputFocused(false);
+  hideTypingPointerOverlay();
+  syncPlayerNameOverlay();
+  drawFrame();
+}
+
 async function registerServiceWorker() {
   if (!("serviceWorker" in window.navigator)) {
+    return;
+  }
+
+  if (isLocalDevHost()) {
+    try {
+      const registrations = await window.navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+      const cacheKeys = await caches.keys();
+      await Promise.all(
+        cacheKeys
+          .filter((key) => key.startsWith("mazocarta-shell-"))
+          .map((key) => caches.delete(key)),
+      );
+    } catch (error) {
+      console.error(error);
+    }
     return;
   }
 
@@ -1522,6 +2050,11 @@ async function loadWasm() {
     if (typeof wasm.app_set_language === "function") {
       wasm.app_set_language(readStoredLanguage());
     }
+    if (typeof wasm.app_set_background_mode === "function") {
+      wasm.app_set_background_mode(readStoredBackgroundMode());
+    }
+    setAppPlayerName(readStoredPlayerName());
+    setAppPlayerNameInputFocused(false);
     if (typeof wasm.app_set_debug_mode === "function") {
       wasm.app_set_debug_mode(debugEnabled ? 1 : 0);
     }
@@ -1533,6 +2066,12 @@ async function loadWasm() {
       typeof wasm.app_is_boot_screen === "function" ? !!wasm.app_is_boot_screen() : null;
     lastLanguageGeneration =
       typeof wasm.app_language_generation === "function" ? wasm.app_language_generation() : 0;
+    lastBackgroundModeGeneration =
+      typeof wasm.app_background_mode_generation === "function"
+        ? wasm.app_background_mode_generation()
+        : 0;
+    lastPlayerNameGeneration =
+      typeof wasm.app_player_name_generation === "function" ? wasm.app_player_name_generation() : 0;
     lastRunSaveGeneration =
       typeof wasm.run_save_generation === "function" ? wasm.run_save_generation() : 0;
     document.title = GAME_TITLE;
@@ -1561,6 +2100,17 @@ canvas.addEventListener("pointerdown", onPointerDown);
 canvas.addEventListener("pointerup", onPointerUp);
 canvas.addEventListener("pointercancel", onPointerCancel);
 canvas.addEventListener("pointerleave", onPointerLeave);
+playerNameInput.addEventListener("input", onPlayerNameInput);
+playerNameInput.addEventListener("keydown", onPlayerNameInputKeyDown);
+playerNameInput.addEventListener("keyup", syncPlayerNameSelection);
+playerNameInput.addEventListener("focus", onPlayerNameInputFocus);
+playerNameInput.addEventListener("blur", onPlayerNameInputBlur);
+playerNameInput.addEventListener("select", syncPlayerNameOverlay);
+playerNameInput.addEventListener("pointerdown", stopPlayerNameInputPropagation);
+playerNameInput.addEventListener("pointerup", focusPlayerNameInput);
+playerNameInput.addEventListener("mousedown", focusPlayerNameInput);
+playerNameInput.addEventListener("touchend", focusPlayerNameInput);
+playerNameInput.addEventListener("click", focusPlayerNameInput);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;
@@ -1582,6 +2132,8 @@ window
   });
 window.addEventListener("pagehide", () => {
   syncStoredLanguage();
+  syncStoredBackgroundMode();
+  syncStoredPlayerName();
   syncRunSaveSnapshot();
 });
 window.addEventListener("pageshow", () => {
@@ -1594,6 +2146,8 @@ window.addEventListener("pageshow", () => {
 });
 window.addEventListener("beforeunload", () => {
   syncStoredLanguage();
+  syncStoredBackgroundMode();
+  syncStoredPlayerName();
   syncRunSaveSnapshot();
   if (rafId) {
     window.cancelAnimationFrame(rafId);

@@ -17,6 +17,21 @@
   </head>
   <body>
     <canvas id="game" aria-label="Mazocarta game surface"></canvas>
+    <input
+      id="player-name-input"
+      type="text"
+      inputmode="text"
+      autocomplete="off"
+      autocapitalize="words"
+      spellcheck="false"
+      aria-label="Player name"
+    />
+    <div id="player-name-overlay" aria-hidden="true">
+      <span id="player-name-overlay-prefix"></span>
+      <span id="player-name-overlay-caret"></span>
+      <span id="player-name-overlay-suffix"></span>
+    </div>
+    <div id="typing-pointer-overlay" aria-hidden="true"></div>
     <script type="module" src="./index.js"></script>
   </body>
 </html>

@@ -3,9 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ARG="${1:-}"
-PREVIEW_THEME_COLOR="#3df5ff"
+PREVIEW_ACCENT_COLOR="#3df5ff"
+PREVIEW_SHELL_THEME_COLOR="#000000"
 PREVIEW_GAME_TITLE="Mazocarta Preview"
 PREVIEW_SHORT_NAME="Mazo Preview"
+RESVG_BIN="${RESVG_BIN:-resvg}"
 
 if [[ -z "$OUT_ARG" ]]; then
   echo "usage: $0 OUT_DIR" >&2
@@ -105,7 +107,7 @@ rewrite_manifest_branding() {
       manifest.theme_color = previewThemeColor;
     }
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  ' "$manifest_path" "$channel" "$PREVIEW_GAME_TITLE" "$PREVIEW_SHORT_NAME" "$PREVIEW_THEME_COLOR"
+  ' "$manifest_path" "$channel" "$PREVIEW_GAME_TITLE" "$PREVIEW_SHORT_NAME" "$PREVIEW_SHELL_THEME_COLOR"
 }
 
 apply_preview_branding() {
@@ -116,8 +118,8 @@ apply_preview_branding() {
   local icon_dir="$destination/icons"
   local apple_icon_path="$destination/apple-touch-icon.png"
 
-  perl -0pi -e 's/#3f6\b/#3df5ff/g; s/#33ff66\b/#3df5ff/g;' "$svg_path"
-  perl -0pi -e 's/content="#000000"/content="#3df5ff"/; s/content="stable"/content="preview"/; s/content="Mazocarta"/content="Mazocarta Preview"/g; s#<title>Mazocarta</title>#<title>Mazocarta Preview</title>#;' "$index_path"
+  perl -0pi -e "s/#3f6\\b/${PREVIEW_ACCENT_COLOR}/g; s/#33ff66\\b/${PREVIEW_ACCENT_COLOR}/g;" "$svg_path"
+  perl -0pi -e 's/content="stable"/content="preview"/; s/content="Mazocarta"/content="Mazocarta Preview"/g; s#<title>Mazocarta</title>#<title>Mazocarta Preview</title>#;' "$index_path"
   rewrite_manifest_branding "$manifest_path" "preview"
   "$ROOT_DIR/scripts/render-pwa-icons.sh" "$svg_path" "$icon_dir" "$apple_icon_path"
 }
@@ -128,10 +130,11 @@ verify_site_branding() {
 
   if [[ "$channel" == "preview" ]]; then
     grep -q '<title>Mazocarta Preview</title>' "$destination/index.html"
+    grep -q '<meta name="theme-color" content="#000000"' "$destination/index.html"
     grep -q '"name": "Mazocarta Preview"' "$destination/manifest.webmanifest"
     grep -q '"short_name": "Mazo Preview"' "$destination/manifest.webmanifest"
-    grep -q '"theme_color": "#3df5ff"' "$destination/manifest.webmanifest"
-    grep -q '#3df5ff' "$destination/mazocarta.svg"
+    grep -q '"theme_color": "#000000"' "$destination/manifest.webmanifest"
+    grep -q "${PREVIEW_ACCENT_COLOR}" "$destination/mazocarta.svg"
     if grep -Eq '#3f6\b|#33ff66\b' "$destination/mazocarta.svg"; then
       echo "Preview SVG still contains the stable green accent." >&2
       return 1
@@ -141,6 +144,54 @@ verify_site_branding() {
 
   grep -q '<title>Mazocarta</title>' "$destination/index.html"
   grep -q '"name": "Mazocarta"' "$destination/manifest.webmanifest"
+}
+
+build_legacy_site_with_resvg() {
+  local worktree="$1"
+  local channel="$2"
+  local short_sha="$3"
+  local wasm_target="$worktree/target/wasm32-unknown-unknown/release/mazocarta.wasm"
+  local web_wasm="$worktree/web/mazocarta.wasm"
+  local icon_dir="$worktree/web/icons"
+  local svg_icon="$worktree/web/mazocarta.svg"
+  local apple_icon="$worktree/web/apple-touch-icon.png"
+
+  # Legacy release tags hardcode Inkscape in scripts/build-web.sh. Rebuild their
+  # icons directly with resvg so Pages packaging stays compatible without that dependency.
+  (
+    cd "$worktree"
+    MAZOCARTA_APP_CHANNEL="$channel" \
+      MAZOCARTA_APP_BUILD_TIMESTAMP_UTC="$BUILD_TIMESTAMP_UTC" \
+      MAZOCARTA_APP_GIT_SHA_SHORT="$short_sha" \
+      cargo build --release --target wasm32-unknown-unknown --manifest-path "$worktree/Cargo.toml"
+  )
+
+  cp "$wasm_target" "$web_wasm"
+  mkdir -p "$icon_dir"
+  "$RESVG_BIN" --width 192 --height 192 "$svg_icon" "$icon_dir/icon-192.png"
+  "$RESVG_BIN" --width 512 --height 512 "$svg_icon" "$icon_dir/icon-512.png"
+  "$RESVG_BIN" --width 180 --height 180 "$svg_icon" "$apple_icon"
+  printf 'Copied %s -> %s\n' "$wasm_target" "$web_wasm"
+}
+
+build_worktree_site() {
+  local worktree="$1"
+  local channel="$2"
+  local short_sha="$3"
+
+  if [[ -f "$worktree/scripts/render-pwa-icons.sh" ]]; then
+    install -m 0755 "$ROOT_DIR/scripts/render-pwa-icons.sh" "$worktree/scripts/render-pwa-icons.sh"
+    (
+      cd "$worktree"
+      MAZOCARTA_APP_CHANNEL="$channel" \
+        MAZOCARTA_APP_BUILD_TIMESTAMP_UTC="$BUILD_TIMESTAMP_UTC" \
+        MAZOCARTA_APP_GIT_SHA_SHORT="$short_sha" \
+        ./scripts/build-web.sh
+    )
+    return 0
+  fi
+
+  build_legacy_site_with_resvg "$worktree" "$channel" "$short_sha"
 }
 
 build_site() {
@@ -154,13 +205,7 @@ build_site() {
   short_sha="$(git -C "$worktree" rev-parse --short=7 HEAD)"
 
   echo "==> building ${channel} site from ${ref}"
-  (
-    cd "$worktree"
-    MAZOCARTA_APP_CHANNEL="$channel" \
-      MAZOCARTA_APP_BUILD_TIMESTAMP_UTC="$BUILD_TIMESTAMP_UTC" \
-      MAZOCARTA_APP_GIT_SHA_SHORT="$short_sha" \
-      ./scripts/build-web.sh
-  )
+  build_worktree_site "$worktree" "$channel" "$short_sha"
 
   mkdir -p "$destination"
   cp -R "$worktree/web/." "$destination/"
