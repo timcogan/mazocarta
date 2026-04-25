@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RESVG_VERSION: v0.47.0
+
 jobs:
   checks:
     runs-on: ubuntu-latest
@@ -23,10 +26,10 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y inkscape
+      - name: Install resvg
+        uses: ./.github/actions/install-resvg
+        with:
+          version: ${{ env.RESVG_VERSION }}
 
       - name: Install Rust target
         run: rustup target add wasm32-unknown-unknown

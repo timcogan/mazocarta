@@ -104,8 +104,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "==> cargo test -q"
 cargo test -q
 
-echo "==> bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh"
-bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh
+echo "==> bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-combat-icons.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh"
+bash -n scripts/build-web.sh scripts/package-pages.sh scripts/render-combat-icons.sh scripts/render-pwa-icons.sh scripts/run-gitleaks.sh
 
 echo "==> node --check web/index.js"
 node --check web/index.js
@@ -159,6 +159,11 @@ expected_ignored=(
   "web/apple-touch-icon.png"
   "web/icons/icon-192.png"
   "web/icons/icon-512.png"
+  "web/icons/combat/heart.png"
+  "web/icons/combat/shield.png"
+  "web/icons/combat/energy.png"
+  "web/icons/combat/deck.png"
+  "web/icons/combat/arrow.png"
 )
 
 for path in "${expected_ignored[@]}"; do

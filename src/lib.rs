@@ -84,6 +84,101 @@ pub extern "C" fn app_language_generation() -> u32 {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
+pub extern "C" fn app_set_background_mode(code: u32) {
+    APP.with(|app| {
+        app.borrow_mut()
+            .set_background_mode(crate::app::BackgroundMode::from_code(code))
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_background_mode_code() -> u32 {
+    APP.with(|app| app.borrow().background_mode_code())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_background_mode_generation() -> u32 {
+    APP.with(|app| app.borrow().background_mode_generation())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn prepare_player_name_buffer(len: usize) -> *mut u8 {
+    APP.with(|app| app.borrow_mut().prepare_player_name_buffer(len))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_set_player_name_from_buffer(len: usize) -> bool {
+    APP.with(|app| app.borrow_mut().set_player_name_from_buffer(len))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_player_name_generation() -> u32 {
+    APP.with(|app| app.borrow().player_name_generation())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_player_name_ptr() -> *const u8 {
+    APP.with(|app| app.borrow().player_name_ptr())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_player_name_len() -> usize {
+    APP.with(|app| app.borrow().player_name_len())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_set_player_name_input_focused(focused: u32) {
+    APP.with(|app| {
+        app.borrow_mut().set_player_name_input_focused(focused != 0);
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_visible() -> u32 {
+    APP.with(|app| u32::from(app.borrow().settings_player_name_input_visible()))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_x() -> f32 {
+    APP.with(|app| app.borrow().settings_player_name_input_x())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_y() -> f32 {
+    APP.with(|app| app.borrow().settings_player_name_input_y())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_w() -> f32 {
+    APP.with(|app| app.borrow().settings_player_name_input_w())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_h() -> f32 {
+    APP.with(|app| app.borrow().settings_player_name_input_h())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_settings_player_name_input_font_size() -> f32 {
+    APP.with(|app| app.borrow().settings_player_name_input_font_size())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
 pub extern "C" fn app_set_install_capability(code: u32) {
     APP.with(|app| {
         app.borrow_mut()

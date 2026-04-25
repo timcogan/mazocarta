@@ -43,11 +43,14 @@ const BUILD_APP_CHANNEL: Option<&str> = option_env!("MAZOCARTA_APP_CHANNEL");
 const APP_BUILD_TIMESTAMP_UTC: Option<&str> = option_env!("MAZOCARTA_APP_BUILD_TIMESTAMP_UTC");
 const APP_GIT_SHA_SHORT: Option<&str> = option_env!("MAZOCARTA_APP_GIT_SHA_SHORT");
 const PLAYER_NAME: &str = "Player";
+const PLAYER_NAME_MAX_CHARS: usize = 12;
+const PLAYER_NAME_MAX_BUFFER_BYTES: usize = PLAYER_NAME_MAX_CHARS * 4;
 const GUARD_LABEL: &str = "Shield";
-const COMBAT_HEART_ICON_ASSET_PATH: &str = "./icons/combat/heart.svg";
-const COMBAT_SHIELD_ICON_ASSET_PATH: &str = "./icons/combat/shield.svg";
-const COMBAT_ENERGY_ICON_ASSET_PATH: &str = "./icons/combat/energy.svg";
-const COMBAT_DECK_ICON_ASSET_PATH: &str = "./icons/combat/deck.svg";
+const COMBAT_HEART_ICON_ASSET_PATH: &str = "./icons/combat/heart.png";
+const COMBAT_SHIELD_ICON_ASSET_PATH: &str = "./icons/combat/shield.png";
+const COMBAT_ENERGY_ICON_ASSET_PATH: &str = "./icons/combat/energy.png";
+const COMBAT_DECK_ICON_ASSET_PATH: &str = "./icons/combat/deck.png";
+const COMBAT_ARROW_ICON_ASSET_PATH: &str = "./icons/combat/arrow.png";
 const COMBAT_INLINE_ICON_HEIGHT_RATIO: f32 = 1.0;
 const COMBAT_INLINE_ICON_ASPECT_RATIO: f32 = 0.75;
 const COMBAT_INLINE_ICON_TEXT_GAP_RATIO: f32 = 0.24;
@@ -58,9 +61,14 @@ const TERM_GREEN: &str = "#33ff66";
 const TERM_GREEN_SOFT: &str = "#8dffad";
 const TERM_GREEN_TEXT: &str = "#c9ffd7";
 const TERM_GREEN_DIM: &str = "#6f9f7b";
+const TERM_GREEN_SOFT_RGB: (u8, u8, u8) = (141, 255, 173);
+const TERM_GREEN_TEXT_RGB: (u8, u8, u8) = (201, 255, 215);
+const TERM_GREEN_DIM_RGB: (u8, u8, u8) = (111, 159, 123);
 const TERM_CYAN: &str = "#3df5ff";
 const TERM_CYAN_SOFT: &str = "#a8fcff";
+const TERM_CYAN_DIM: &str = "#5aa5ab";
 const TERM_BLUE_SOFT: &str = "#9bb7ff";
+const TERM_BLUE_DIM: &str = "#6f81b3";
 const TERM_PINK: &str = "#ff4fd8";
 const TERM_PINK_SOFT: &str = "#ff9cf0";
 const TERM_ORANGE: &str = "#ffb852";
@@ -87,7 +95,7 @@ const COLOR_WHITE_STROKE_PATH: &str = "rgba(255, 255, 255, 0.78)";
 const BUTTON_RADIUS: f32 = 8.0;
 const CARD_RADIUS: f32 = 8.0;
 const ENEMY_PANEL_RADIUS: f32 = 8.0;
-const UI_TILE_FILL_ALPHA: f32 = 0.02;
+const UI_TILE_FILL_ALPHA: f32 = 0.04;
 const UI_TILE_STROKE_WIDTH: f32 = 0.5;
 const UI_TILE_STROKE_ALPHA_BOOST: f32 = 0.18;
 const UI_TILE_STROKE_ALPHA_SCALE: f32 = 1.0;
@@ -112,6 +120,31 @@ const OVERLAY_BUTTON_MIN_PAD_Y: f32 = 6.0;
 const OVERLAY_BUTTON_ROW_GAP: f32 = 16.0;
 const OVERLAY_BUTTON_MIN_ROW_GAP: f32 = 8.0;
 const OVERLAY_BUTTON_STACK_GAP: f32 = 12.0;
+const SETTINGS_SECTION_LABEL_TO_CONTROL_GAP: f32 = 12.0;
+const SETTINGS_SECTION_CONTROL_TO_LABEL_GAP: f32 = 20.0;
+const BINARY_BACKGROUND_FONT_TOKEN: &str = "ambient";
+const BINARY_BACKGROUND_COL_DIV: f32 = 36.0;
+const BINARY_BACKGROUND_CELL_MIN: f32 = 22.0;
+const BINARY_BACKGROUND_CELL_MAX: f32 = 34.0;
+const BINARY_BACKGROUND_CELL_H_RATIO: f32 = 0.92;
+const BINARY_BACKGROUND_CELL_H_MIN: f32 = 20.0;
+const BINARY_BACKGROUND_CELL_H_MAX: f32 = 30.0;
+const BINARY_BACKGROUND_FONT_RATIO: f32 = 0.48;
+const BINARY_BACKGROUND_FONT_MIN: f32 = 10.0;
+const BINARY_BACKGROUND_FONT_MAX: f32 = 16.0;
+const BINARY_BACKGROUND_PARTICIPATION_RATE: f32 = 0.24;
+const BINARY_BACKGROUND_FADE_IN_MIN_MS: f32 = 480.0;
+const BINARY_BACKGROUND_FADE_IN_MAX_MS: f32 = 840.0;
+const BINARY_BACKGROUND_HOLD_MIN_MS: f32 = 160.0;
+const BINARY_BACKGROUND_HOLD_MAX_MS: f32 = 440.0;
+const BINARY_BACKGROUND_FADE_OUT_MIN_MS: f32 = 640.0;
+const BINARY_BACKGROUND_FADE_OUT_MAX_MS: f32 = 1120.0;
+const BINARY_BACKGROUND_OFF_MIN_MS: f32 = 2200.0;
+const BINARY_BACKGROUND_OFF_MAX_MS: f32 = 5200.0;
+const _: () = {
+    assert!(BINARY_BACKGROUND_FADE_IN_MIN_MS >= 1.0);
+    assert!(BINARY_BACKGROUND_FADE_OUT_MIN_MS >= 1.0);
+};
 const RESET_BUTTON_PAD_X: f32 = 10.0;
 const RESET_BUTTON_PAD_Y: f32 = 12.0;
 const RESULT_BUTTON_LABEL: &str = "Main Menu";
@@ -204,6 +237,9 @@ enum HitTarget {
     SettingsModal,
     SettingsLanguageEnglish,
     SettingsLanguageSpanish,
+    SettingsBackgroundBinary,
+    SettingsBackgroundBlack,
+    SettingsClose,
     InstallHelpModal,
     InstallHelpClose,
     DebugLevelDown,
@@ -612,10 +648,19 @@ struct SettingsLayout {
     modal_rect: Rect,
     english_button: FittedPrimaryButton,
     spanish_button: FittedPrimaryButton,
+    binary_button: FittedPrimaryButton,
+    black_button: FittedPrimaryButton,
+    close_button: FittedPrimaryButton,
     title_lines: Vec<String>,
-    subtitle_lines: Vec<String>,
     title_size: f32,
-    subtitle_size: f32,
+    name_label_size: f32,
+    name_label_y: f32,
+    name_input_rect: Rect,
+    name_input_font_size: f32,
+    language_label_size: f32,
+    language_label_y: f32,
+    background_label_size: f32,
+    background_label_y: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -641,6 +686,28 @@ impl InstallCapability {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackgroundMode {
+    Binary,
+    Black,
+}
+
+impl BackgroundMode {
+    pub(crate) fn from_code(code: u32) -> Self {
+        match code {
+            1 => Self::Black,
+            _ => Self::Binary,
+        }
+    }
+
+    fn code(self) -> u32 {
+        match self {
+            Self::Binary => 0,
+            Self::Black => 1,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct InstallHelpLayout {
     modal_rect: Rect,
@@ -653,6 +720,12 @@ struct InstallHelpLayout {
 
 #[derive(Clone, Copy, Debug)]
 struct FittedPrimaryButton {
+    rect: Rect,
+    font_size: f32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SettingsPlayerNameInputMetrics {
     rect: Rect,
     font_size: f32,
 }
@@ -807,7 +880,10 @@ struct EnemyPanelMetrics {
 struct EnemyIntentLines {
     first_line_label: String,
     first_line_summary: String,
+    summary_words: Vec<String>,
+    first_line_summary_indices: Vec<usize>,
     continuation_lines: Vec<String>,
+    continuation_line_indices: Vec<Vec<usize>>,
 }
 
 impl EnemyIntentLines {
@@ -939,6 +1015,12 @@ pub(crate) struct App {
     boot_time_ms: f32,
     language: Language,
     language_generation: u32,
+    background_mode: BackgroundMode,
+    background_mode_generation: u32,
+    player_name: Option<String>,
+    player_name_input_value: String,
+    player_name_generation: u32,
+    player_name_input_focused: bool,
     install_capability: InstallCapability,
     restart_count: u64,
     seed_entropy: u64,
@@ -952,11 +1034,22 @@ pub(crate) struct App {
     install_request_pending: bool,
     update_available: bool,
     update_request_pending: bool,
+    player_name_buffer: Vec<u8>,
     restore_buffer: Vec<u8>,
+    settings_layout_cache: SettingsLayout,
+    settings_player_name_input_metrics_cache: SettingsPlayerNameInputMetrics,
 }
 
 impl App {
     pub(crate) fn new() -> Self {
+        let settings_layout_cache =
+            build_settings_layout(LOGICAL_WIDTH, LOGICAL_HEIGHT, Language::English);
+        let settings_player_name_input_metrics_cache = build_settings_player_name_input_metrics(
+            &settings_layout_cache,
+            LOGICAL_WIDTH * 0.5,
+            LOGICAL_HEIGHT,
+            ease_out_cubic(0.0),
+        );
         let (combat, _) = CombatState::new(BASE_SEED);
         let enemy_count = combat.enemy_count();
         let displayed_stats = displayed_combat_stats(&combat);
@@ -997,6 +1090,12 @@ impl App {
             boot_time_ms: 0.0,
             language: Language::English,
             language_generation: 0,
+            background_mode: BackgroundMode::Binary,
+            background_mode_generation: 0,
+            player_name: None,
+            player_name_input_value: String::new(),
+            player_name_generation: 0,
+            player_name_input_focused: false,
             install_capability: InstallCapability::Unavailable,
             restart_count: 0,
             seed_entropy: BASE_SEED ^ 0x51A7_C0DE_1EAF_BAAD,
@@ -1010,7 +1109,10 @@ impl App {
             install_request_pending: false,
             update_available: false,
             update_request_pending: false,
+            player_name_buffer: Vec::new(),
             restore_buffer: Vec::new(),
+            settings_layout_cache,
+            settings_player_name_input_metrics_cache,
         }
     }
 
@@ -1078,11 +1180,27 @@ impl App {
         ease_out_cubic(self.ui.install_help_progress)
     }
 
+    fn refresh_settings_layout_cache(&mut self) {
+        self.settings_layout_cache =
+            build_settings_layout(self.logical_width(), self.logical_height(), self.language);
+        self.refresh_settings_player_name_input_metrics_cache();
+    }
+
+    fn refresh_settings_player_name_input_metrics_cache(&mut self) {
+        self.settings_player_name_input_metrics_cache = build_settings_player_name_input_metrics(
+            &self.settings_layout_cache,
+            self.logical_center_x(),
+            self.logical_height(),
+            self.settings_eased_progress(),
+        );
+    }
+
     pub(crate) fn set_language(&mut self, language: Language) {
         if self.language == language {
             return;
         }
         self.language = language;
+        self.refresh_settings_layout_cache();
         if matches!(self.screen, AppScreen::Combat) {
             self.relocalize_combat_feedback_intents();
         }
@@ -1100,6 +1218,99 @@ impl App {
 
     pub(crate) fn language_generation(&self) -> u32 {
         self.language_generation
+    }
+
+    pub(crate) fn set_background_mode(&mut self, background_mode: BackgroundMode) {
+        if self.background_mode == background_mode {
+            return;
+        }
+        self.background_mode = background_mode;
+        self.background_mode_generation = self.background_mode_generation.wrapping_add(1);
+        self.refresh_hover();
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    pub(crate) fn background_mode_code(&self) -> u32 {
+        self.background_mode.code()
+    }
+
+    pub(crate) fn background_mode_generation(&self) -> u32 {
+        self.background_mode_generation
+    }
+
+    fn default_player_name(&self) -> &str {
+        self.tr(PLAYER_NAME, "Jugador")
+    }
+
+    fn player_label(&self) -> &str {
+        if let Some(player_name) = self.player_name.as_deref() {
+            player_name
+        } else {
+            self.default_player_name()
+        }
+    }
+
+    fn set_player_name(&mut self, raw: &str) {
+        let input_value = if self.player_name_input_focused {
+            limit_player_name_input(raw)
+        } else {
+            sanitize_player_name(raw).unwrap_or_default()
+        };
+        let next = sanitize_player_name(&input_value);
+        let player_name_changed = self.player_name != next;
+        let input_value_changed = self.player_name_input_value != input_value;
+        if !player_name_changed && !input_value_changed {
+            return;
+        }
+
+        self.player_name_input_value = input_value;
+        if player_name_changed {
+            self.player_name = next;
+            self.player_name_generation = self.player_name_generation.wrapping_add(1);
+        }
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    pub(crate) fn player_name_generation(&self) -> u32 {
+        self.player_name_generation
+    }
+
+    pub(crate) fn player_name_ptr(&self) -> *const u8 {
+        self.player_name
+            .as_ref()
+            .map(|value| value.as_ptr())
+            .unwrap_or(std::ptr::null())
+    }
+
+    pub(crate) fn player_name_len(&self) -> usize {
+        self.player_name
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn set_player_name_input_focused(&mut self, focused: bool) {
+        let normalized_input_value = if focused {
+            None
+        } else {
+            Some(self.player_name.clone().unwrap_or_default())
+        };
+        let focus_changed = self.player_name_input_focused != focused;
+        let input_changed = normalized_input_value
+            .as_ref()
+            .is_some_and(|value| self.player_name_input_value != *value);
+        if !focus_changed && !input_changed {
+            return;
+        }
+
+        self.player_name_input_focused = focused;
+        if let Some(value) = normalized_input_value {
+            self.player_name_input_value = value;
+        }
+        self.dirty = true;
+        self.rebuild_frame();
     }
 
     pub(crate) fn set_install_capability(&mut self, capability: InstallCapability) {
@@ -1151,6 +1362,34 @@ impl App {
 
     fn tr<'a>(&self, english: &'a str, spanish: &'a str) -> &'a str {
         localized_text(self.language, english, spanish)
+    }
+
+    pub(crate) fn settings_player_name_input_visible(&self) -> bool {
+        matches!(self.screen, AppScreen::Boot) && self.settings_visible()
+    }
+
+    fn settings_player_name_input_rect(&self) -> Rect {
+        self.settings_player_name_input_metrics_cache.rect
+    }
+
+    pub(crate) fn settings_player_name_input_x(&self) -> f32 {
+        self.settings_player_name_input_rect().x
+    }
+
+    pub(crate) fn settings_player_name_input_y(&self) -> f32 {
+        self.settings_player_name_input_rect().y
+    }
+
+    pub(crate) fn settings_player_name_input_w(&self) -> f32 {
+        self.settings_player_name_input_rect().w
+    }
+
+    pub(crate) fn settings_player_name_input_h(&self) -> f32 {
+        self.settings_player_name_input_rect().h
+    }
+
+    pub(crate) fn settings_player_name_input_font_size(&self) -> f32 {
+        self.settings_player_name_input_metrics_cache.font_size
     }
 
     fn tick_opening_intro(&mut self, dt_ms: f32) -> bool {
@@ -2274,6 +2513,7 @@ impl App {
     pub(crate) fn resize(&mut self, width: f32, height: f32) {
         self.viewport.width = width.max(1.0);
         self.viewport.height = height.max(1.0);
+        self.refresh_settings_layout_cache();
         if matches!(self.screen, AppScreen::Rest) {
             self.sync_rest_page_state();
         }
@@ -2299,6 +2539,7 @@ impl App {
             self.screen,
             AppScreen::Boot | AppScreen::OpeningIntro | AppScreen::Map | AppScreen::LevelIntro
         );
+        changed |= self.background_mode == BackgroundMode::Binary;
         changed |= self.tick_opening_intro(dt_ms);
         let legend_target = if self.ui.legend_open { 1.0 } else { 0.0 };
         if (self.ui.legend_progress - legend_target).abs() > 0.001 {
@@ -2372,6 +2613,7 @@ impl App {
             self.ui.restart_confirm_progress = restart_target;
         }
         let settings_target = if self.ui.settings_open { 1.0 } else { 0.0 };
+        let previous_settings_progress = self.ui.settings_progress;
         if (self.ui.settings_progress - settings_target).abs() > 0.001 {
             let step = (dt_ms / BOOT_MODAL_TRANSITION_MS).clamp(0.0, 1.0);
             self.ui.settings_progress = if self.ui.settings_progress < settings_target {
@@ -2383,6 +2625,9 @@ impl App {
             changed = true;
         } else {
             self.ui.settings_progress = settings_target;
+        }
+        if self.ui.settings_progress.to_bits() != previous_settings_progress.to_bits() {
+            self.refresh_settings_player_name_input_metrics_cache();
         }
         let install_help_target = if self.ui.install_help_open { 1.0 } else { 0.0 };
         if (self.ui.install_help_progress - install_help_target).abs() > 0.001 {
@@ -2550,6 +2795,8 @@ impl App {
                         27 => self.close_settings(),
                         49 => self.set_language_from_boot(Language::English),
                         50 => self.set_language_from_boot(Language::Spanish),
+                        51 => self.set_background_mode_from_boot(BackgroundMode::Binary),
+                        52 => self.set_background_mode_from_boot(BackgroundMode::Black),
                         _ => {}
                     }
                 } else if self.ui.restart_confirm_open || self.restart_confirm_visible() {
@@ -2792,6 +3039,47 @@ impl App {
         }
     }
 
+    /// Returns a zero-filled buffer for the caller to write into before calling
+    /// `set_player_name_from_buffer`.
+    ///
+    /// The prepared buffer is capped at `PLAYER_NAME_MAX_BUFFER_BYTES`, and
+    /// `set_player_name_from_buffer` rejects any larger `len`.
+    pub(crate) fn prepare_player_name_buffer(&mut self, len: usize) -> *mut u8 {
+        let len = len.min(PLAYER_NAME_MAX_BUFFER_BYTES);
+        self.player_name_buffer.clear();
+        self.player_name_buffer.resize(len, 0);
+        self.player_name_buffer.as_mut_ptr()
+    }
+
+    /// Validates UTF-8 in the first `len` bytes of the prepared player-name buffer and returns
+    /// `false` when `len` exceeds the buffer length or the bytes are invalid UTF-8.
+    pub(crate) fn set_player_name_from_buffer(&mut self, len: usize) -> bool {
+        let buffer_len = self.player_name_buffer.len();
+        if len > buffer_len {
+            log::debug!(
+                "Ignoring player name buffer update: len {} exceeds buffer length {}.",
+                len,
+                buffer_len
+            );
+            return false;
+        }
+
+        let raw = match std::str::from_utf8(&self.player_name_buffer[..len]) {
+            Ok(raw) => raw.to_owned(),
+            Err(error) => {
+                log::debug!(
+                    "Ignoring player name buffer update: invalid UTF-8 for len {} in buffer length {}: {}",
+                    len,
+                    buffer_len,
+                    error
+                );
+                return false;
+            }
+        };
+        self.set_player_name(&raw);
+        true
+    }
+
     pub(crate) fn prepare_restore_buffer(&mut self, len: usize) -> *mut u8 {
         self.restore_buffer.clear();
         self.restore_buffer.resize(len, 0);
@@ -2954,9 +3242,10 @@ impl App {
 
     fn set_language_from_boot(&mut self, language: Language) {
         self.set_language(language);
-        self.ui.settings_open = false;
-        self.refresh_hover();
-        self.dirty = true;
+    }
+
+    fn set_background_mode_from_boot(&mut self, background_mode: BackgroundMode) {
+        self.set_background_mode(background_mode);
     }
 
     fn open_run_info(&mut self) {
@@ -3066,6 +3355,13 @@ impl App {
             HitTarget::Update => self.request_update(),
             HitTarget::SettingsLanguageEnglish => self.set_language_from_boot(Language::English),
             HitTarget::SettingsLanguageSpanish => self.set_language_from_boot(Language::Spanish),
+            HitTarget::SettingsBackgroundBinary => {
+                self.set_background_mode_from_boot(BackgroundMode::Binary)
+            }
+            HitTarget::SettingsBackgroundBlack => {
+                self.set_background_mode_from_boot(BackgroundMode::Black)
+            }
+            HitTarget::SettingsClose => self.close_settings(),
             HitTarget::InstallHelpClose => self.close_install_help(),
             HitTarget::Restart => self.open_restart_confirm(),
             HitTarget::RestartConfirm => self.confirm_restart_run(),
@@ -4238,6 +4534,9 @@ impl App {
             | HitTarget::SettingsModal
             | HitTarget::SettingsLanguageEnglish
             | HitTarget::SettingsLanguageSpanish
+            | HitTarget::SettingsBackgroundBinary
+            | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
             | HitTarget::InstallHelpModal
@@ -5135,6 +5434,9 @@ impl App {
             | HitTarget::SettingsModal
             | HitTarget::SettingsLanguageEnglish
             | HitTarget::SettingsLanguageSpanish
+            | HitTarget::SettingsBackgroundBinary
+            | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
             | HitTarget::InstallHelpModal
@@ -6817,74 +7119,8 @@ impl App {
         })
     }
 
-    fn settings_layout(&self) -> SettingsLayout {
-        let logical_width = self.logical_width();
-        let logical_height = self.logical_height();
-        let pad_x = 24.0;
-        let top_pad = 24.0;
-        let bottom_pad = 20.0;
-        let title = self.tr("Settings", "Ajustes");
-        let subtitle = self.tr("Choose the game language.", "Elige el idioma del juego.");
-        let title_size = 26.0;
-        let subtitle_size = 18.0;
-        let title_max_w = (logical_width - 96.0).clamp(180.0, 360.0);
-        let title_chars = ((title_max_w / (title_size * 0.62)).floor().max(10.0)) as usize;
-        let subtitle_chars = ((title_max_w / (subtitle_size * 0.62)).floor().max(12.0)) as usize;
-        let title_lines = wrap_text(title, title_chars);
-        let subtitle_lines = wrap_text(subtitle, subtitle_chars);
-        let title_block_w = title_lines
-            .iter()
-            .map(|line| text_width(line, title_size))
-            .fold(0.0, f32::max);
-        let subtitle_block_w = subtitle_lines
-            .iter()
-            .map(|line| text_width(line, subtitle_size))
-            .fold(0.0, f32::max);
-        let title_gap = 8.0;
-        let subtitle_gap = 6.0;
-        let title_block_h = if title_lines.is_empty() {
-            title_size
-        } else {
-            title_lines.len() as f32 * title_size
-                + title_gap * title_lines.len().saturating_sub(1) as f32
-        };
-        let subtitle_block_h = if subtitle_lines.is_empty() {
-            subtitle_size
-        } else {
-            subtitle_lines.len() as f32 * subtitle_size
-                + subtitle_gap * subtitle_lines.len().saturating_sub(1) as f32
-        };
-        let modal_w = fit_modal_width(
-            title_block_w.max(subtitle_block_w) + pad_x * 2.0,
-            logical_width,
-            340.0,
-        );
-        let button_metrics =
-            fit_overlay_button_metrics(&["English", "Español"], modal_w - pad_x * 2.0);
-        let modal_h = top_pad
-            + title_block_h
-            + 14.0
-            + subtitle_block_h
-            + 32.0
-            + button_metrics.block_h
-            + bottom_pad;
-        let modal_rect = Rect {
-            x: (logical_width - modal_w) * 0.5,
-            y: (logical_height - modal_h) * 0.5,
-            w: modal_w,
-            h: modal_h,
-        };
-        let buttons = place_overlay_buttons(&button_metrics, modal_rect, bottom_pad);
-
-        SettingsLayout {
-            modal_rect,
-            english_button: buttons[0],
-            spanish_button: buttons[1],
-            title_lines,
-            subtitle_lines,
-            title_size,
-            subtitle_size,
-        }
+    fn settings_layout(&self) -> &SettingsLayout {
+        &self.settings_layout_cache
     }
 
     fn install_help_layout(&self) -> InstallHelpLayout {
@@ -7724,6 +7960,15 @@ impl App {
                     if settings_layout.spanish_button.rect.contains(x, y) {
                         return Some(HitTarget::SettingsLanguageSpanish);
                     }
+                    if settings_layout.binary_button.rect.contains(x, y) {
+                        return Some(HitTarget::SettingsBackgroundBinary);
+                    }
+                    if settings_layout.black_button.rect.contains(x, y) {
+                        return Some(HitTarget::SettingsBackgroundBlack);
+                    }
+                    if settings_layout.close_button.rect.contains(x, y) {
+                        return Some(HitTarget::SettingsClose);
+                    }
                     if settings_layout.modal_rect.contains(x, y) {
                         return Some(HitTarget::SettingsModal);
                     }
@@ -8125,6 +8370,106 @@ impl App {
             "transparent",
             0.0,
         );
+        if self.background_mode == BackgroundMode::Binary {
+            self.render_binary_background(scene);
+        }
+    }
+
+    fn render_binary_background(&self, scene: &mut SceneBuilder) {
+        let width = self.logical_width();
+        let height = self.logical_height();
+        let cell_w = (width / BINARY_BACKGROUND_COL_DIV)
+            .clamp(BINARY_BACKGROUND_CELL_MIN, BINARY_BACKGROUND_CELL_MAX);
+        let cell_h = (cell_w * BINARY_BACKGROUND_CELL_H_RATIO)
+            .clamp(BINARY_BACKGROUND_CELL_H_MIN, BINARY_BACKGROUND_CELL_H_MAX);
+        let font_size = (cell_w * BINARY_BACKGROUND_FONT_RATIO)
+            .clamp(BINARY_BACKGROUND_FONT_MIN, BINARY_BACKGROUND_FONT_MAX);
+        let cols = ((width / cell_w).floor() as usize).saturating_add(1).max(1);
+        let rows = (((height - font_size).max(0.0) / cell_h).floor() as usize)
+            .saturating_add(1)
+            .max(1);
+
+        for row in 0..rows {
+            for col in 0..cols {
+                let seed = scramble_seed(
+                    ((row as u64 + 1) << 32) ^ (col as u64 + 1) ^ 0xB17A_2026_0110_0101,
+                );
+                let lo = seed as u32;
+                let hi = (seed >> 32) as u32;
+                if noise01(lo ^ 0x51A7_C0DE) > BINARY_BACKGROUND_PARTICIPATION_RATE {
+                    continue;
+                }
+
+                let fade_in_ms = lerp_f32(
+                    BINARY_BACKGROUND_FADE_IN_MIN_MS,
+                    BINARY_BACKGROUND_FADE_IN_MAX_MS,
+                    noise01(lo ^ 0x0246_8ACE),
+                );
+                let hold_ms = lerp_f32(
+                    BINARY_BACKGROUND_HOLD_MIN_MS,
+                    BINARY_BACKGROUND_HOLD_MAX_MS,
+                    noise01(hi ^ 0x1357_9BDF),
+                );
+                let fade_out_ms = lerp_f32(
+                    BINARY_BACKGROUND_FADE_OUT_MIN_MS,
+                    BINARY_BACKGROUND_FADE_OUT_MAX_MS,
+                    noise01(lo ^ 0x73A5_1F0C),
+                );
+                let off_ms = lerp_f32(
+                    BINARY_BACKGROUND_OFF_MIN_MS,
+                    BINARY_BACKGROUND_OFF_MAX_MS,
+                    noise01(hi ^ 0xFACE_FEED),
+                );
+                let visible_ms = fade_in_ms + hold_ms + fade_out_ms;
+                let cycle_ms = visible_ms + off_ms;
+                let phase_offset_ms = noise01(lo ^ 0x0BAD_5EED) * cycle_ms;
+                let cycle_time_ms = self.boot_time_ms + phase_offset_ms;
+                let local_time_ms = cycle_time_ms.rem_euclid(cycle_ms);
+                if local_time_ms >= visible_ms {
+                    continue;
+                }
+
+                let phase_alpha = if local_time_ms < fade_in_ms {
+                    local_time_ms / fade_in_ms
+                } else if local_time_ms < fade_in_ms + hold_ms {
+                    1.0
+                } else {
+                    1.0 - ((local_time_ms - fade_in_ms - hold_ms) / fade_out_ms)
+                };
+                let activation_index = (cycle_time_ms / cycle_ms).floor() as u32;
+                let glyph_seed = lo
+                    ^ activation_index.wrapping_mul(0x9E37_79B9)
+                    ^ hi.rotate_left(7)
+                    ^ 0xA531_0B1A;
+                let glyph = if noise01(glyph_seed) < 0.5 { "0" } else { "1" };
+
+                let (rgb, max_alpha) = match noise01(hi ^ 0x00C0_FFEE) {
+                    tone if tone < 0.65 => {
+                        (TERM_GREEN_DIM_RGB, 0.12 + noise01(lo ^ 0x00A5_A5A5) * 0.03)
+                    }
+                    tone if tone < 0.93 => {
+                        (TERM_GREEN_TEXT_RGB, 0.15 + noise01(hi ^ 0x005A_5A5A) * 0.04)
+                    }
+                    _ => (TERM_GREEN_SOFT_RGB, 0.19 + noise01(lo ^ 0xBADC_0FFE) * 0.05),
+                };
+                let alpha = max_alpha * phase_alpha.clamp(0.0, 1.0);
+                let x = (col as f32 + 0.5) * cell_w;
+                let y = font_size + row as f32 * cell_h;
+                if x > width || y > height {
+                    continue;
+                }
+
+                scene.text(
+                    x,
+                    y,
+                    font_size,
+                    "center",
+                    &rgba(rgb, alpha),
+                    BINARY_BACKGROUND_FONT_TOKEN,
+                    glyph,
+                );
+            }
+        }
     }
 
     fn render_screen_layer(
@@ -8386,7 +8731,6 @@ impl App {
             COLOR_GREEN_STROKE_PANEL,
         );
         let title_gap = 8.0;
-        let subtitle_gap = 6.0;
         let mut baseline_y = layout.modal_rect.y + 24.0 + layout.title_size;
         for line in &layout.title_lines {
             scene.text(
@@ -8400,24 +8744,97 @@ impl App {
             );
             baseline_y += layout.title_size + title_gap;
         }
-        baseline_y += 6.0;
-        for line in &layout.subtitle_lines {
+        scene.text(
+            layout.modal_rect.x + layout.modal_rect.w * 0.5,
+            layout.name_label_y,
+            layout.name_label_size,
+            "center",
+            TERM_GREEN_TEXT,
+            "body",
+            self.tr("Player Name", "Nombre del Jugador"),
+        );
+        scene.rect(
+            layout.name_input_rect,
+            BUTTON_RADIUS,
+            &rgba((0, 0, 0), 0.84),
+            COLOR_GREEN_STROKE_IDLE,
+            0.8,
+        );
+        let input_focused = self.player_name_input_focused;
+        let show_placeholder = self.player_name.is_none() && !input_focused;
+        let player_name_text = if input_focused {
+            self.player_name_input_value.as_str()
+        } else {
+            self.player_name
+                .as_deref()
+                .unwrap_or_else(|| self.default_player_name())
+        };
+        let caret_visible = input_focused;
+        let inner_width = (layout.name_input_rect.w - 24.0).max(1.0);
+        let reserved_width = if caret_visible {
+            text_width("|", layout.name_input_font_size.max(14.0))
+        } else {
+            0.0
+        };
+        let player_name_size = if player_name_text.is_empty() {
+            layout.name_input_font_size.max(14.0)
+        } else {
+            fit_text_size(
+                player_name_text,
+                layout.name_input_font_size,
+                (inner_width - reserved_width).max(1.0),
+            )
+            .max(14.0)
+        };
+        let player_name_width = text_width(player_name_text, player_name_size);
+        let total_width = player_name_width + reserved_width;
+        let text_x = layout.name_input_rect.x + (layout.name_input_rect.w - total_width) * 0.5;
+        let text_y =
+            layout.name_input_rect.y + layout.name_input_rect.h * 0.5 + player_name_size * 0.32;
+        let text_color = if show_placeholder {
+            rgba(TERM_GREEN_SOFT_RGB, 0.68)
+        } else {
+            String::from(TERM_GREEN_TEXT)
+        };
+        scene.text(
+            text_x,
+            text_y,
+            player_name_size,
+            "left",
+            &text_color,
+            "label",
+            player_name_text,
+        );
+        if caret_visible {
+            let pulse = (self.boot_time_ms * 0.008).sin() * 0.5 + 0.5;
+            let caret_color = rgba((255, 184, 82), 0.28 + pulse * 0.52);
             scene.text(
-                layout.modal_rect.x + layout.modal_rect.w * 0.5,
-                baseline_y,
-                layout.subtitle_size,
-                "center",
-                TERM_GREEN_TEXT,
-                "body",
-                line,
+                text_x + player_name_width,
+                text_y,
+                player_name_size,
+                "left",
+                &caret_color,
+                "label",
+                "|",
             );
-            baseline_y += layout.subtitle_size + subtitle_gap;
         }
-
+        scene.text(
+            layout.modal_rect.x + layout.modal_rect.w * 0.5,
+            layout.language_label_y,
+            layout.language_label_size,
+            "center",
+            TERM_GREEN_TEXT,
+            "body",
+            self.tr("Language", "Idioma"),
+        );
         let english_selected = self.language == Language::English;
         let spanish_selected = self.language == Language::Spanish;
+        let binary_selected = self.background_mode == BackgroundMode::Binary;
+        let black_selected = self.background_mode == BackgroundMode::Black;
         let english_hovered = self.ui.hover == Some(HitTarget::SettingsLanguageEnglish);
         let spanish_hovered = self.ui.hover == Some(HitTarget::SettingsLanguageSpanish);
+        let binary_hovered = self.ui.hover == Some(HitTarget::SettingsBackgroundBinary);
+        let black_hovered = self.ui.hover == Some(HitTarget::SettingsBackgroundBlack);
         render_primary_button_sized(
             scene,
             layout.english_button.rect,
@@ -8432,6 +8849,40 @@ impl App {
             layout.spanish_button.font_size,
             spanish_hovered || spanish_selected,
             "Español",
+            self.boot_time_ms,
+        );
+        scene.text(
+            layout.modal_rect.x + layout.modal_rect.w * 0.5,
+            layout.background_label_y,
+            layout.background_label_size,
+            "center",
+            TERM_GREEN_TEXT,
+            "body",
+            self.tr("Background", "Fondo"),
+        );
+        render_primary_button_sized(
+            scene,
+            layout.binary_button.rect,
+            layout.binary_button.font_size,
+            binary_hovered || binary_selected,
+            self.tr("Binary", "Binario"),
+            self.boot_time_ms,
+        );
+        render_primary_button_sized(
+            scene,
+            layout.black_button.rect,
+            layout.black_button.font_size,
+            black_hovered || black_selected,
+            self.tr("Black", "Negro"),
+            self.boot_time_ms,
+        );
+        let close_hovered = self.ui.hover == Some(HitTarget::SettingsClose);
+        render_primary_button_sized(
+            scene,
+            layout.close_button.rect,
+            layout.close_button.font_size,
+            close_hovered,
+            self.tr("Close", "Cerrar"),
             self.boot_time_ms,
         );
         scene.pop_layer();
@@ -10249,6 +10700,11 @@ impl App {
         let summary = self.enemy_signal_summary(enemy_index);
         let mut line_y = info_body_y;
         let intent_lines = enemy_intent_lines(next_label, summary, metrics.info_body_chars);
+        let summary_words: Vec<&str> = intent_lines
+            .summary_words
+            .iter()
+            .map(String::as_str)
+            .collect();
         scene.text(
             text_x,
             line_y,
@@ -10258,35 +10714,32 @@ impl App {
             "label",
             &intent_lines.first_line_label,
         );
-        if !intent_lines.first_line_summary.is_empty() {
-            scene.text(
+        let summary_default_color = if is_alive {
+            TERM_GREEN_TEXT
+        } else {
+            TERM_GREEN_DIM
+        };
+        if !intent_lines.first_line_summary_indices.is_empty() {
+            render_card_description_line(
+                scene,
                 text_x + text_width(&intent_lines.first_line_label, metrics.info_body_size),
                 line_y,
                 metrics.info_body_size,
-                "left",
-                if is_alive {
-                    TERM_CYAN_SOFT
-                } else {
-                    TERM_GREEN_DIM
-                },
-                "body",
-                &intent_lines.first_line_summary,
+                &summary_words,
+                &intent_lines.first_line_summary_indices,
+                summary_default_color,
             );
         }
-        for line in &intent_lines.continuation_lines {
+        for line_indices in &intent_lines.continuation_line_indices {
             line_y += metrics.info_body_size + metrics.info_body_line_gap;
-            scene.text(
+            render_card_description_line(
+                scene,
                 text_x,
                 line_y,
                 metrics.info_body_size,
-                "left",
-                if is_alive {
-                    TERM_CYAN_SOFT
-                } else {
-                    TERM_GREEN_DIM
-                },
-                "body",
-                line,
+                &summary_words,
+                line_indices,
+                summary_default_color,
             );
         }
     }
@@ -10322,7 +10775,7 @@ impl App {
             }
             + metrics.meta_size;
         let displayed = self.displayed_actor_stats(Actor::Player);
-        let player_label = self.tr(PLAYER_NAME, "Jugador");
+        let player_label = self.player_label();
         let stats_line_width = combat_actor_stats_line_width(
             displayed.hp,
             self.combat.player.fighter.max_hp,
@@ -10341,8 +10794,6 @@ impl App {
                 metrics.status_gap,
             )
         };
-        let meta_color = TERM_CYAN;
-
         render_ui_tile(scene, rect, CARD_RADIUS, stroke);
         scene.text(
             center_x,
@@ -10385,27 +10836,22 @@ impl App {
                 y: meta_y,
                 size: metrics.meta_size,
             },
-            meta_color,
         );
     }
 
-    fn render_player_panel_meta_line(
-        &self,
-        scene: &mut SceneBuilder,
-        layout: TextLineLayout,
-        color: &str,
-    ) {
+    fn render_player_panel_meta_line(&self, scene: &mut SceneBuilder, layout: TextLineLayout) {
         let displayed_meta = self.displayed_player_meta();
         let energy_text = format!(
             "{}/{}",
             displayed_meta.energy, self.combat.player.max_energy
         );
         let draw_text = displayed_meta.draw_pile.to_string();
-        let arrow_text = "→";
         let discard_text = displayed_meta.discard_pile.to_string();
-        let energy_color = animated_player_meta_color(self, CombatStat::Energy, color);
-        let draw_color = animated_player_meta_color(self, CombatStat::DrawPile, color);
-        let discard_color = animated_player_meta_color(self, CombatStat::DiscardPile, color);
+        let energy_base_color = combat_stat_base_color(CombatStat::Energy);
+        let deck_base_color = combat_stat_base_color(CombatStat::DrawPile);
+        let energy_color = animated_player_meta_color(self, CombatStat::Energy);
+        let draw_color = animated_player_meta_color(self, CombatStat::DrawPile);
+        let discard_color = animated_player_meta_color(self, CombatStat::DiscardPile);
         let mut cursor = layout.x;
 
         render_combat_inline_icon(
@@ -10414,7 +10860,7 @@ impl App {
             layout.y,
             layout.size,
             COMBAT_ENERGY_ICON_ASSET_PATH,
-            color,
+            energy_base_color,
         );
         scene.text(
             cursor,
@@ -10433,7 +10879,7 @@ impl App {
             layout.y,
             layout.size,
             COMBAT_DECK_ICON_ASSET_PATH,
-            color,
+            deck_base_color,
         );
         scene.text(
             cursor,
@@ -10445,16 +10891,15 @@ impl App {
             &draw_text,
         );
         cursor += text_width(&draw_text, layout.size);
-        scene.text(
-            cursor,
-            layout.y,
-            layout.size,
-            "left",
-            color,
-            "body",
-            arrow_text,
+        cursor += combat_meta_arrow_gap(layout.size);
+        let arrow_rect = combat_inline_icon_rect(cursor, layout.y, layout.size);
+        scene.tinted_image(
+            arrow_rect,
+            COMBAT_ARROW_ICON_ASSET_PATH,
+            deck_base_color,
+            1.0,
         );
-        cursor += text_width(arrow_text, layout.size);
+        cursor += arrow_rect.w + combat_meta_arrow_gap(layout.size);
         scene.text(
             cursor,
             layout.y,
@@ -10478,6 +10923,8 @@ impl App {
         let hp_text = hp.to_string();
         let max_hp_text = format!("/{max_hp}");
         let block_text = block.to_string();
+        let hp_base_color = combat_stat_base_color(CombatStat::Hp);
+        let block_base_color = combat_stat_base_color(CombatStat::Block);
         let hp_color = animated_stat_color(self, actor, CombatStat::Hp);
         let block_color = animated_stat_color(self, actor, CombatStat::Block);
         let mut cursor = layout.x;
@@ -10488,7 +10935,7 @@ impl App {
             layout.y,
             layout.size,
             COMBAT_HEART_ICON_ASSET_PATH,
-            TERM_GREEN_TEXT,
+            hp_base_color,
         );
         scene.text(
             cursor,
@@ -10505,7 +10952,7 @@ impl App {
             layout.y,
             layout.size,
             "left",
-            TERM_GREEN_TEXT,
+            hp_base_color,
             "body",
             &max_hp_text,
         );
@@ -10517,7 +10964,7 @@ impl App {
             layout.y,
             layout.size,
             COMBAT_SHIELD_ICON_ASSET_PATH,
-            TERM_GREEN_TEXT,
+            block_base_color,
         );
         scene.text(
             cursor,
@@ -11400,21 +11847,47 @@ fn first_active_actor_tint(app: &App, actor: Actor) -> Option<StatTint> {
         .map(|active| active.tint)
 }
 
-fn animated_stat_color(app: &App, actor: Actor, stat: CombatStat) -> &'static str {
-    match active_countdown_tint(app, actor, stat) {
-        Some(tint) => match tint {
-            StatTint::Damage => TERM_PINK_SOFT,
-            StatTint::BlockGain => TERM_GREEN_SOFT,
-            StatTint::NeutralLoss => TERM_GREEN_DIM,
-        },
-        _ => TERM_GREEN_TEXT,
+fn combat_stat_base_color(stat: CombatStat) -> &'static str {
+    match stat {
+        CombatStat::Hp => TERM_GREEN,
+        CombatStat::Block => TERM_BLUE_SOFT,
+        CombatStat::Energy => TERM_CYAN,
+        CombatStat::DrawPile | CombatStat::DiscardPile => TERM_GREEN_TEXT,
     }
 }
 
-fn animated_player_meta_color<'a>(app: &App, stat: CombatStat, default: &'a str) -> &'a str {
+fn combat_stat_soft_color(stat: CombatStat) -> &'static str {
+    match stat {
+        CombatStat::Hp => TERM_GREEN,
+        CombatStat::Block => TERM_BLUE_SOFT,
+        CombatStat::Energy => TERM_CYAN_SOFT,
+        CombatStat::DrawPile | CombatStat::DiscardPile => TERM_GREEN_TEXT,
+    }
+}
+
+fn combat_stat_dim_color(stat: CombatStat) -> &'static str {
+    match stat {
+        CombatStat::Hp => TERM_GREEN_DIM,
+        CombatStat::Block => TERM_BLUE_DIM,
+        CombatStat::Energy => TERM_CYAN_DIM,
+        CombatStat::DrawPile | CombatStat::DiscardPile => TERM_GREEN_DIM,
+    }
+}
+
+fn animated_stat_color(app: &App, actor: Actor, stat: CombatStat) -> &'static str {
+    match active_countdown_tint(app, actor, stat) {
+        Some(StatTint::Damage) if stat == CombatStat::Hp => TERM_PINK_SOFT,
+        Some(StatTint::BlockGain) => combat_stat_soft_color(stat),
+        Some(StatTint::Damage | StatTint::NeutralLoss) => combat_stat_dim_color(stat),
+        _ => combat_stat_base_color(stat),
+    }
+}
+
+fn animated_player_meta_color(app: &App, stat: CombatStat) -> &'static str {
     match active_countdown_tint(app, Actor::Player, stat) {
-        Some(_) => TERM_CYAN_SOFT,
-        _ => default,
+        Some(StatTint::BlockGain) => combat_stat_soft_color(stat),
+        Some(StatTint::Damage | StatTint::NeutralLoss) => combat_stat_dim_color(stat),
+        _ => combat_stat_base_color(stat),
     }
 }
 
@@ -11837,6 +12310,16 @@ fn scale_rect_from_center(rect: Rect, scale: f32) -> Rect {
     }
 }
 
+fn transform_rect(rect: Rect, pivot_x: f32, pivot_y: f32, dx: f32, dy: f32, scale: f32) -> Rect {
+    let scale = scale.max(0.0);
+    Rect {
+        x: pivot_x + (rect.x - pivot_x) * scale + dx,
+        y: pivot_y + (rect.y - pivot_y) * scale + dy,
+        w: rect.w * scale,
+        h: rect.h * scale,
+    }
+}
+
 fn map_available_node_wave(time_ms: f32) -> f32 {
     (time_ms * 0.007).sin().clamp(-1.0, 1.0)
 }
@@ -12083,6 +12566,181 @@ fn fit_text_size(text: &str, desired_size: f32, max_width: f32) -> f32 {
         desired_size
     } else {
         desired_size * (max_width / width)
+    }
+}
+
+fn is_allowed_player_name_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == ' ' || matches!(ch, '-' | '_' | '.' | '\'')
+}
+
+fn filtered_player_name_chars(raw: &str) -> impl Iterator<Item = char> + '_ {
+    raw.chars().filter(|c| is_allowed_player_name_char(*c))
+}
+
+fn limit_player_name_input(raw: &str) -> String {
+    filtered_player_name_chars(raw)
+        .take(PLAYER_NAME_MAX_CHARS)
+        .collect()
+}
+
+fn sanitize_player_name(raw: &str) -> Option<String> {
+    let filtered: String = filtered_player_name_chars(raw).collect();
+    let trimmed = filtered.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.chars().take(PLAYER_NAME_MAX_CHARS).collect())
+}
+
+fn build_settings_layout(
+    logical_width: f32,
+    logical_height: f32,
+    language: Language,
+) -> SettingsLayout {
+    let pad_x = 24.0;
+    let top_pad = 24.0;
+    let bottom_pad = 20.0;
+    let title = localized_text(language, "Settings", "Ajustes");
+    let name_label = localized_text(language, "Player Name", "Nombre del Jugador");
+    let language_label = localized_text(language, "Language", "Idioma");
+    let background_label = localized_text(language, "Background", "Fondo");
+    let binary_label = localized_text(language, "Binary", "Binario");
+    let black_label = localized_text(language, "Black", "Negro");
+    let close_label = localized_text(language, "Close", "Cerrar");
+    let title_size = 26.0;
+    let section_label_size = 16.0;
+    let name_label_size = section_label_size;
+    let name_input_font_size = 20.0;
+    let name_input_height = 40.0;
+    let language_label_size = section_label_size;
+    let background_label_size = section_label_size;
+    let title_max_w = (logical_width - 96.0).clamp(180.0, 360.0);
+    let title_chars = ((title_max_w / (title_size * 0.62)).floor().max(10.0)) as usize;
+    let title_lines = wrap_text(title, title_chars);
+    let title_block_w = title_lines
+        .iter()
+        .map(|line| text_width(line, title_size))
+        .fold(0.0, f32::max);
+    let name_label_w = text_width(name_label, name_label_size);
+    let language_label_w = text_width(language_label, language_label_size);
+    let background_label_w = text_width(background_label, background_label_size);
+    let title_gap = 8.0;
+    let title_to_name_gap = 40.0;
+    let button_gap = 40.0;
+    let title_block_h = if title_lines.is_empty() {
+        title_size
+    } else {
+        title_lines.len() as f32 * title_size
+            + title_gap * title_lines.len().saturating_sub(1) as f32
+    };
+    let modal_w = fit_modal_width(
+        title_block_w
+            .max(name_label_w)
+            .max(language_label_w)
+            .max(background_label_w)
+            .max(220.0)
+            + pad_x * 2.0,
+        logical_width,
+        340.0,
+    );
+    let language_button_metrics =
+        fit_overlay_button_metrics(&["English", "Español"], modal_w - pad_x * 2.0);
+    let background_button_metrics =
+        fit_overlay_button_metrics(&[binary_label, black_label], modal_w - pad_x * 2.0);
+    let close_button_metrics = fit_overlay_button_metrics(&[close_label], modal_w - pad_x * 2.0);
+    let modal_h = top_pad
+        + title_block_h
+        + title_to_name_gap
+        + name_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + name_input_height
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + language_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + language_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + background_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + background_button_metrics.block_h
+        + button_gap
+        + close_button_metrics.block_h
+        + bottom_pad;
+    let modal_rect = Rect {
+        x: (logical_width - modal_w) * 0.5,
+        y: (logical_height - modal_h) * 0.5,
+        w: modal_w,
+        h: modal_h,
+    };
+    let name_label_y = modal_rect.y + top_pad + title_block_h + title_to_name_gap + name_label_size;
+    let name_input_rect = Rect {
+        x: modal_rect.x + pad_x,
+        y: name_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP,
+        w: (modal_w - pad_x * 2.0).max(1.0),
+        h: name_input_height,
+    };
+    let language_label_y = name_input_rect.y
+        + name_input_rect.h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + language_label_size;
+    let language_buttons_top = language_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
+    let language_buttons_bottom_pad =
+        modal_rect.y + modal_rect.h - language_buttons_top - language_button_metrics.block_h;
+    let language_buttons = place_overlay_buttons(
+        &language_button_metrics,
+        modal_rect,
+        language_buttons_bottom_pad,
+    );
+    let background_label_y = language_buttons_top
+        + language_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + background_label_size;
+    let background_buttons_top = background_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
+    let background_buttons_bottom_pad =
+        modal_rect.y + modal_rect.h - background_buttons_top - background_button_metrics.block_h;
+    let background_buttons = place_overlay_buttons(
+        &background_button_metrics,
+        modal_rect,
+        background_buttons_bottom_pad,
+    );
+    let close_buttons = place_overlay_buttons(&close_button_metrics, modal_rect, bottom_pad);
+
+    SettingsLayout {
+        modal_rect,
+        english_button: language_buttons[0],
+        spanish_button: language_buttons[1],
+        binary_button: background_buttons[0],
+        black_button: background_buttons[1],
+        close_button: close_buttons[0],
+        title_lines,
+        title_size,
+        name_label_size,
+        name_label_y,
+        name_input_rect,
+        name_input_font_size,
+        language_label_size,
+        language_label_y,
+        background_label_size,
+        background_label_y,
+    }
+}
+
+fn build_settings_player_name_input_metrics(
+    layout: &SettingsLayout,
+    logical_center_x: f32,
+    logical_height: f32,
+    progress: f32,
+) -> SettingsPlayerNameInputMetrics {
+    SettingsPlayerNameInputMetrics {
+        rect: transform_rect(
+            layout.name_input_rect,
+            logical_center_x,
+            logical_height * 0.5,
+            0.0,
+            (1.0 - progress) * 12.0,
+            0.968 + progress * 0.032,
+        ),
+        font_size: layout.name_input_font_size * (0.968 + progress * 0.032),
     }
 }
 
@@ -12576,7 +13234,7 @@ fn enemy_intent_lines(label: &str, summary: &str, max_chars: usize) -> EnemyInte
     let mut used_chars = 0usize;
 
     if first_line_summary_chars > 0 {
-        for word in &summary_words {
+        for (index, word) in summary_words.iter().enumerate() {
             let next_len = if first_line_words.is_empty() {
                 word.len()
             } else {
@@ -12585,31 +13243,89 @@ fn enemy_intent_lines(label: &str, summary: &str, max_chars: usize) -> EnemyInte
             if next_len > first_line_summary_chars {
                 break;
             }
-            first_line_words.push(*word);
+            first_line_words.push(index);
             used_chars = next_len;
         }
     }
 
-    let first_line_summary = first_line_words.join(" ");
+    let first_line_summary = first_line_words
+        .iter()
+        .map(|index| summary_words[*index])
+        .collect::<Vec<_>>()
+        .join(" ");
     let first_line_label = if first_line_summary.is_empty() {
         String::from(label)
     } else {
         format!("{label} ")
     };
-    let continuation_lines = if first_line_words.len() == summary_words.len() {
-        Vec::new()
-    } else {
-        wrap_text(
-            &summary_words[first_line_words.len()..].join(" "),
-            max_chars,
-        )
-    };
+    let (continuation_lines, continuation_line_indices) =
+        if first_line_words.len() == summary_words.len() {
+            (Vec::new(), Vec::new())
+        } else {
+            let remaining_start = first_line_words.len();
+            let local_indices =
+                wrap_word_indices_by_chars(&summary_words[remaining_start..], max_chars);
+            let lines = local_indices
+                .iter()
+                .map(|line| {
+                    line.iter()
+                        .map(|index| summary_words[remaining_start + *index])
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .collect();
+            let global_indices = local_indices
+                .into_iter()
+                .map(|line| {
+                    line.into_iter()
+                        .map(|index| remaining_start + index)
+                        .collect()
+                })
+                .collect();
+            (lines, global_indices)
+        };
 
     EnemyIntentLines {
         first_line_label,
         first_line_summary,
+        summary_words: summary_words
+            .iter()
+            .map(|word| (*word).to_string())
+            .collect(),
+        first_line_summary_indices: first_line_words,
         continuation_lines,
+        continuation_line_indices,
     }
+}
+
+fn wrap_word_indices_by_chars(words: &[&str], max_chars: usize) -> Vec<Vec<usize>> {
+    let max_chars = max_chars.max(1);
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut used_chars = 0usize;
+
+    for (index, word) in words.iter().enumerate() {
+        let next_len = if current.is_empty() {
+            word.len()
+        } else {
+            used_chars + 1 + word.len()
+        };
+
+        if next_len > max_chars && !current.is_empty() {
+            lines.push(current);
+            current = vec![index];
+            used_chars = word.len();
+        } else {
+            current.push(index);
+            used_chars = next_len;
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    lines
 }
 
 fn enemy_panel_metrics(
@@ -12840,7 +13556,7 @@ fn player_panel_metrics(
     };
     let width = stats_line_width
         .max(meta_line_width)
-        .max(text_width(app.tr(PLAYER_NAME, "Jugador"), label_size))
+        .max(text_width(app.player_label(), label_size))
         .max(status_width)
         + content_pad_x * 2.0;
     let height = top_pad
@@ -12886,6 +13602,10 @@ fn combat_inline_group_gap(font_size: f32) -> f32 {
 
 fn combat_inline_icon_text_gap(font_size: f32) -> f32 {
     (font_size * COMBAT_INLINE_ICON_TEXT_GAP_RATIO).max(1.0)
+}
+
+fn combat_meta_arrow_gap(font_size: f32) -> f32 {
+    combat_inline_icon_text_gap(font_size) * 0.5
 }
 
 fn combat_inline_icon_rect(x: f32, baseline_y: f32, font_size: f32) -> Rect {
@@ -12943,7 +13663,9 @@ fn combat_meta_line_width(app: &App, font_size: f32) -> f32 {
         + combat_inline_icon_width(font_size)
         + combat_inline_icon_text_gap(font_size)
         + text_width(&draw_text, font_size)
-        + text_width("→", font_size)
+        + combat_meta_arrow_gap(font_size)
+        + combat_inline_icon_width(font_size)
+        + combat_meta_arrow_gap(font_size)
         + text_width(&discard_text, font_size)
 }
 
@@ -13709,13 +14431,47 @@ impl SceneBuilder {
             sanitize(align),
             sanitize(color),
             sanitize(font),
-            sanitize(text)
+            encode_scene_text(text)
         );
     }
 }
 
 fn sanitize(value: &str) -> String {
     value.replace('|', "/").replace('\n', " ")
+}
+
+fn encode_scene_text(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len() + 4);
+    for ch in value.chars() {
+        match ch {
+            '\n' => encoded.push(' '),
+            '%' => encoded.push_str("%25"),
+            '|' => encoded.push_str("%7C"),
+            _ => encoded.push(ch),
+        }
+    }
+    encoded
+}
+
+#[cfg(test)]
+fn decode_scene_text(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 3 <= bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    index += 3;
+                    continue;
+                }
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(test)]
@@ -14143,7 +14899,7 @@ mod tests {
         frame
             .lines()
             .filter_map(|line| {
-                let mut parts = line.split('|');
+                let mut parts = line.splitn(8, '|');
                 if parts.next()? != "TEXT" {
                     return None;
                 }
@@ -14154,7 +14910,7 @@ mod tests {
                     String::from(parts.next()?),
                     String::from(parts.next()?),
                     String::from(parts.next()?),
-                    String::from(parts.next()?),
+                    decode_scene_text(parts.next()?),
                 ))
             })
             .collect()
@@ -14190,6 +14946,78 @@ mod tests {
     fn button_label_fits(button: FittedPrimaryButton, label: &str) -> bool {
         text_width(label, button.font_size) <= button.rect.w + 0.01
             && button.font_size <= button.rect.h + 0.01
+    }
+
+    fn binary_background_entries(entries: &[FrameTextEntry]) -> Vec<&FrameTextEntry> {
+        entries
+            .iter()
+            .filter(|(_, _, _, _, _, font, text)| {
+                font == BINARY_BACKGROUND_FONT_TOKEN && matches!(text.as_str(), "0" | "1")
+            })
+            .collect()
+    }
+
+    fn is_binary_background_color(color: &str) -> bool {
+        parse_rgba(color)
+            .map(|(rgb, alpha)| {
+                matches!(
+                    rgb,
+                    TERM_GREEN_DIM_RGB | TERM_GREEN_TEXT_RGB | TERM_GREEN_SOFT_RGB
+                ) && alpha > 0.0
+                    && alpha <= 0.34
+            })
+            .unwrap_or(false)
+    }
+
+    fn binary_background_entry_alpha(entry: &FrameTextEntry) -> f32 {
+        parse_rgba(&entry.4)
+            .map(|(_, alpha)| alpha)
+            .expect("binary background entries should use rgba colors")
+    }
+
+    fn binary_background_position_key(entry: &FrameTextEntry) -> (i32, i32) {
+        (
+            (entry.0 * 100.0).round() as i32,
+            (entry.1 * 100.0).round() as i32,
+        )
+    }
+
+    #[test]
+    fn decode_scene_text_preserves_utf8_and_percent_escapes() {
+        assert_eq!(decode_scene_text("Se%C3%B1or"), "Señor");
+        assert_eq!(decode_scene_text(&encode_scene_text("Señor%|")), "Señor%|");
+        assert_eq!(decode_scene_text("100% ready"), "100% ready");
+        assert_eq!(decode_scene_text("%"), "%");
+        assert_eq!(decode_scene_text("%A"), "%A");
+        assert_eq!(decode_scene_text("%zz"), "%zz");
+    }
+
+    #[test]
+    fn combat_stat_dim_colors_use_distinct_palette() {
+        assert_eq!(combat_stat_dim_color(CombatStat::Hp), TERM_GREEN_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::Block), TERM_BLUE_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::Energy), TERM_CYAN_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::DrawPile), TERM_GREEN_DIM);
+        assert_eq!(
+            combat_stat_dim_color(CombatStat::DiscardPile),
+            TERM_GREEN_DIM
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Hp),
+            combat_stat_base_color(CombatStat::Hp)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Block),
+            combat_stat_base_color(CombatStat::Block)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Energy),
+            combat_stat_base_color(CombatStat::Energy)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::DrawPile),
+            combat_stat_base_color(CombatStat::DrawPile)
+        );
     }
 
     fn wrapped_lines_fit_width(lines: &[String], font_size: f32, max_width: f32) -> bool {
@@ -14784,7 +15612,7 @@ mod tests {
             .find(|(_, y, _, _, color, font, text)| {
                 (*y - next_label.1).abs() < 0.01
                     && font == "body"
-                    && color == TERM_CYAN_SOFT
+                    && color == TERM_GREEN_TEXT
                     && !text.is_empty()
             })
             .expect("enemy panel should render summary inline with Next");
@@ -14805,12 +15633,35 @@ mod tests {
             .find(|(_, y, _, _, color, font, text)| {
                 (*y - next_label.1).abs() < 0.01
                     && font == "body"
-                    && color == TERM_CYAN_SOFT
+                    && color == TERM_GREEN_TEXT
                     && !text.is_empty()
             })
             .expect("enemy panel should render summary inline with Siguiente");
         assert!(next_summary.0 > next_label.0);
         assert!(!next_summary.6.starts_with("Siguiente"));
+    }
+
+    #[test]
+    fn enemy_panel_colors_damage_terms_like_card_text() {
+        let mut app = active_combat_fixture();
+        set_primary_enemy_intent(&mut app, EnemyProfileId::ScoutDrone, 0);
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let panel = primary_enemy_rect(&app.layout());
+
+        assert!(panel_has_text_with_color(
+            &entries,
+            panel,
+            "Deal",
+            TERM_GREEN_TEXT
+        ));
+        assert!(panel_has_text_with_color(&entries, panel, "5", TERM_GREEN));
+        assert!(panel_has_text_with_color(
+            &entries, panel, "damage.", TERM_GREEN,
+        ));
     }
 
     #[test]
@@ -14863,15 +15714,19 @@ mod tests {
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         let panel = primary_enemy_rect(&app.layout());
+        let next_label_y = frame_text_entries(&frame)
+            .into_iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text.starts_with("Siguiente"))
+            .map(|(_, y, _, _, _, _, _)| y)
+            .expect("enemy panel should render Siguiente label");
         let summary_entries = frame_text_entries(&frame)
             .into_iter()
-            .filter(|(x, y, size, _, color, font, text)| {
+            .filter(|(x, y, size, _, _, font, text)| {
                 *x >= panel.x - 0.01
                     && *x <= panel.x + panel.w + 0.01
-                    && *y >= panel.y - 0.01
+                    && *y >= next_label_y - 0.01
                     && *y <= panel.y + panel.h + 0.01
                     && font == "body"
-                    && color == TERM_CYAN_SOFT
                     && !text.is_empty()
                     && *x + text_width(text, *size) <= panel.x + panel.w + 0.01
             })
@@ -14885,7 +15740,7 @@ mod tests {
             summary_entries
                 .iter()
                 .all(|(_, _, _, _, _, _, text)| !text.starts_with("Siguiente")),
-            "summary text should never repeat the green Siguiente label in blue"
+            "summary text should never repeat the green Siguiente label in body text"
         );
     }
 
@@ -15104,9 +15959,338 @@ mod tests {
                 layout.modal_rect,
                 layout.spanish_button.rect
             ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
+                layout.binary_button.rect
+            ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
+                layout.black_button.rect
+            ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
+                layout.close_button.rect
+            ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
+                layout.name_input_rect
+            ));
             assert!(button_label_fits(layout.english_button, "English"));
             assert!(button_label_fits(layout.spanish_button, "Español"));
+            assert!(button_label_fits(
+                layout.binary_button,
+                app.tr("Binary", "Binario")
+            ));
+            assert!(button_label_fits(
+                layout.black_button,
+                app.tr("Black", "Negro")
+            ));
+            assert!(button_label_fits(
+                layout.close_button,
+                app.tr("Close", "Cerrar")
+            ));
         }
+    }
+
+    #[test]
+    fn settings_sections_use_standard_vertical_spacing() {
+        let mut app = App::new();
+
+        for language in [Language::English, Language::Spanish] {
+            app.set_language(language);
+            app.resize(320.0, 568.0);
+            let layout = app.settings_layout();
+            let language_buttons_bottom = (layout.english_button.rect.y
+                + layout.english_button.rect.h)
+                .max(layout.spanish_button.rect.y + layout.spanish_button.rect.h);
+
+            assert!(
+                (layout.name_input_rect.y
+                    - layout.name_label_y
+                    - SETTINGS_SECTION_LABEL_TO_CONTROL_GAP)
+                    .abs()
+                    < 0.01
+            );
+            assert!(
+                (layout.english_button.rect.y
+                    - layout.language_label_y
+                    - SETTINGS_SECTION_LABEL_TO_CONTROL_GAP)
+                    .abs()
+                    < 0.01
+            );
+            assert!(
+                (layout.binary_button.rect.y
+                    - layout.background_label_y
+                    - SETTINGS_SECTION_LABEL_TO_CONTROL_GAP)
+                    .abs()
+                    < 0.01
+            );
+            assert!((layout.name_label_size - layout.language_label_size).abs() < 0.01);
+            assert!((layout.language_label_size - layout.background_label_size).abs() < 0.01);
+            assert!(
+                ((layout.language_label_y - layout.language_label_size)
+                    - (layout.name_input_rect.y + layout.name_input_rect.h)
+                    - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP)
+                    .abs()
+                    < 0.01
+            );
+            assert!(
+                ((layout.background_label_y - layout.background_label_size)
+                    - language_buttons_bottom
+                    - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP)
+                    .abs()
+                    < 0.01
+            );
+        }
+    }
+
+    #[test]
+    fn settings_player_name_input_accessors_match_transformed_layout_after_resize_and_language_change()
+     {
+        let mut app = App::new();
+
+        app.resize(320.0, 568.0);
+        app.set_language(Language::Spanish);
+        app.ui.settings_progress = 0.5;
+        app.refresh_settings_player_name_input_metrics_cache();
+
+        let progress = app.settings_eased_progress();
+        let scale = 0.968 + progress * 0.032;
+        let layout = app.settings_layout();
+        let expected_rect = transform_rect(
+            layout.name_input_rect,
+            app.logical_center_x(),
+            app.logical_height() * 0.5,
+            0.0,
+            (1.0 - progress) * 12.0,
+            scale,
+        );
+        let expected_font_size = layout.name_input_font_size * scale;
+
+        assert!((app.settings_player_name_input_x() - expected_rect.x).abs() < 0.01);
+        assert!((app.settings_player_name_input_y() - expected_rect.y).abs() < 0.01);
+        assert!((app.settings_player_name_input_w() - expected_rect.w).abs() < 0.01);
+        assert!((app.settings_player_name_input_h() - expected_rect.h).abs() < 0.01);
+        assert!((app.settings_player_name_input_font_size() - expected_font_size).abs() < 0.01);
+    }
+
+    #[test]
+    fn changing_language_from_boot_keeps_settings_modal_open() {
+        let mut app = App::new();
+
+        app.open_settings();
+        assert!(app.ui.settings_open);
+
+        app.set_language_from_boot(Language::Spanish);
+
+        assert!(app.ui.settings_open);
+        assert_eq!(app.language, Language::Spanish);
+    }
+
+    #[test]
+    fn changing_background_mode_from_boot_keeps_settings_modal_open() {
+        let mut app = App::new();
+
+        app.open_settings();
+        assert!(app.ui.settings_open);
+
+        app.set_background_mode_from_boot(BackgroundMode::Black);
+
+        assert!(app.ui.settings_open);
+        assert_eq!(app.background_mode, BackgroundMode::Black);
+    }
+
+    #[test]
+    fn black_background_keeps_the_plain_boot_fill() {
+        let mut app = App::new();
+        app.set_background_mode(BackgroundMode::Black);
+
+        let mut scene = SceneBuilder::new();
+        app.render_background(&mut scene);
+        let frame = scene.finish();
+        let lines = frame.lines().collect::<Vec<_>>();
+        let rect_entries = frame_rect_entries(&frame);
+
+        assert_eq!(lines.first().copied(), Some("CLEAR|#000000"));
+        assert_eq!(frame_text_entries(&frame).len(), 0);
+        assert_eq!(rect_entries.len(), 1);
+        assert_eq!(
+            rect_entries[0],
+            FrameRectEntry {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: app.logical_width(),
+                    h: app.logical_height(),
+                },
+                radius: 0.0,
+                fill: String::from(COLOR_TILE_FILL),
+                stroke: String::from("transparent"),
+                stroke_width: 0.0,
+            }
+        );
+    }
+
+    #[test]
+    fn binary_background_renders_only_zeroes_and_ones_with_green_palette() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+
+        let mut scene = SceneBuilder::new();
+        app.render_background(&mut scene);
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+        let binary_entries = binary_background_entries(&entries);
+
+        assert!(!binary_entries.is_empty());
+        assert!(
+            binary_entries
+                .iter()
+                .all(|(_, _, _, align, color, _, text)| {
+                    align == "center"
+                        && matches!(text.as_str(), "0" | "1")
+                        && is_binary_background_color(color)
+                })
+        );
+    }
+
+    #[test]
+    fn binary_background_changes_over_time() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+
+        app.boot_time_ms = 0.0;
+        let mut initial_scene = SceneBuilder::new();
+        app.render_background(&mut initial_scene);
+        let initial_frame = initial_scene.finish();
+
+        app.boot_time_ms = 1500.0;
+        let mut later_scene = SceneBuilder::new();
+        app.render_background(&mut later_scene);
+        let later_frame = later_scene.finish();
+
+        assert_ne!(initial_frame, later_frame);
+    }
+
+    #[test]
+    fn binary_background_keeps_a_medium_number_of_visible_cells() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+        app.boot_time_ms = 900.0;
+
+        let mut scene = SceneBuilder::new();
+        app.render_background(&mut scene);
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+        let binary_entries = binary_background_entries(&entries);
+
+        assert!(binary_entries.len() >= 35);
+        assert!(binary_entries.len() <= 120);
+    }
+
+    #[test]
+    fn binary_background_activates_different_grid_positions_over_time() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+
+        app.boot_time_ms = 0.0;
+        let mut first_scene = SceneBuilder::new();
+        app.render_background(&mut first_scene);
+        let first_frame = first_scene.finish();
+        let first_entries = frame_text_entries(&first_frame);
+        let first_positions = binary_background_entries(&first_entries)
+            .into_iter()
+            .map(binary_background_position_key)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        app.boot_time_ms = 1500.0;
+        let mut later_scene = SceneBuilder::new();
+        app.render_background(&mut later_scene);
+        let later_frame = later_scene.finish();
+        let later_entries = frame_text_entries(&later_frame);
+        let later_positions = binary_background_entries(&later_entries)
+            .into_iter()
+            .map(binary_background_position_key)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_ne!(first_positions, later_positions);
+        assert!(
+            later_positions
+                .iter()
+                .any(|position| !first_positions.contains(position))
+        );
+    }
+
+    #[test]
+    fn binary_background_cells_fade_with_asynchronous_alphas() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+        app.boot_time_ms = 900.0;
+
+        let mut scene = SceneBuilder::new();
+        app.render_background(&mut scene);
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+        let distinct_alphas = binary_background_entries(&entries)
+            .into_iter()
+            .map(binary_background_entry_alpha)
+            .map(|alpha| (alpha * 1000.0).round() as i32)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(distinct_alphas.len() >= 4);
+    }
+
+    #[test]
+    fn binary_background_renders_behind_combat_screens() {
+        let mut app = active_combat_fixture();
+        app.set_background_mode(BackgroundMode::Binary);
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+
+        assert!(!binary_background_entries(&entries).is_empty());
+        assert!(
+            entries
+                .iter()
+                .any(|(_, _, _, _, _, font, text)| font == "label" && text == "Player")
+        );
+    }
+
+    #[test]
+    fn binary_background_rebuilds_idle_combat_frames_over_time() {
+        let mut app = active_combat_fixture();
+        app.set_background_mode(BackgroundMode::Binary);
+        app.rebuild_frame();
+        let initial_frame = app.frame.clone();
+
+        app.tick(1000.0);
+
+        assert_ne!(app.frame, initial_frame);
+    }
+
+    #[test]
+    fn background_mode_generation_only_changes_when_the_mode_changes() {
+        let mut app = App::new();
+
+        assert_eq!(app.background_mode_generation(), 0);
+
+        app.set_background_mode(BackgroundMode::Binary);
+        assert_eq!(app.background_mode_generation(), 0);
+
+        app.set_background_mode(BackgroundMode::Black);
+        assert_eq!(app.background_mode_generation(), 1);
+
+        app.set_background_mode(BackgroundMode::Black);
+        assert_eq!(app.background_mode_generation(), 1);
+
+        app.set_background_mode(BackgroundMode::Binary);
+        assert_eq!(app.background_mode_generation(), 2);
     }
 
     #[test]
@@ -16717,9 +17901,11 @@ mod tests {
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains("|display|Choose your module"));
         assert!(
-            !frame.lines().any(|line| {
-                line.ends_with("|1") || line.ends_with("|2") || line.ends_with("|3")
-            })
+            !frame_text_entries(&frame)
+                .iter()
+                .any(|(_, _, _, _, _, font, text)| {
+                    font != BINARY_BACKGROUND_FONT_TOKEN && matches!(text.as_str(), "1" | "2" | "3")
+                })
         );
 
         let layout = app.module_select_layout().unwrap();
@@ -17737,13 +18923,13 @@ mod tests {
             &entries,
             player_panel,
             "0",
-            TERM_CYAN_SOFT,
+            TERM_GREEN_DIM,
         ));
         assert!(panel_has_text_with_color(
             &entries,
             player_panel,
             "10",
-            TERM_CYAN_SOFT,
+            TERM_GREEN_TEXT,
         ));
 
         advance_until(&mut app, |app| {
@@ -17776,13 +18962,13 @@ mod tests {
             &entries,
             player_panel,
             &final_meta.draw_pile.to_string(),
-            TERM_CYAN,
+            TERM_GREEN_TEXT,
         ));
         assert!(panel_has_text_with_color(
             &entries,
             player_panel,
             &final_meta.discard_pile.to_string(),
-            TERM_CYAN,
+            TERM_GREEN_TEXT,
         ));
     }
 
@@ -17880,7 +19066,7 @@ mod tests {
     }
 
     #[test]
-    fn player_block_card_playback_counts_shield_up_in_green() {
+    fn player_block_card_playback_counts_shield_up_in_defend_purple() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 3;
         app.combat.deck.hand = vec![CardId::GuardStep];
@@ -17906,7 +19092,7 @@ mod tests {
         assert!(app.combat_feedback.displayed.player.block < 5);
         assert_eq!(
             animated_stat_color(&app, Actor::Player, CombatStat::Block),
-            TERM_GREEN_SOFT
+            TERM_BLUE_SOFT
         );
 
         advance_until(&mut app, |app| {
@@ -18176,7 +19362,7 @@ mod tests {
     }
 
     #[test]
-    fn combat_panels_use_tinted_svg_icons_in_both_languages() {
+    fn combat_panels_use_tinted_combat_icons_in_both_languages() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 2;
         app.combat.deck.draw_pile = vec![CardId::FlareSlash, CardId::GuardStep];
@@ -18221,16 +19407,37 @@ mod tests {
         assert_eq!(
             icons
                 .iter()
+                .filter(|entry| entry.src == COMBAT_ARROW_ICON_ASSET_PATH)
+                .count(),
+            1
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_GREEN)
+                .count(),
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
                 .filter(|entry| entry.color == TERM_GREEN_TEXT)
                 .count(),
-            4
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_BLUE_SOFT)
+                .count(),
+            2
         );
         assert_eq!(
             icons
                 .iter()
                 .filter(|entry| entry.color == TERM_CYAN)
                 .count(),
-            2
+            1
         );
         assert_eq!(
             icons
@@ -18264,20 +19471,34 @@ mod tests {
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         let icons = frame_tinted_image_entries(&frame);
-        assert_eq!(icons.len(), 6);
+        assert_eq!(icons.len(), 7);
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_GREEN)
+                .count(),
+            2
+        );
         assert_eq!(
             icons
                 .iter()
                 .filter(|entry| entry.color == TERM_GREEN_TEXT)
                 .count(),
-            4
+            2
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.color == TERM_BLUE_SOFT)
+                .count(),
+            2
         );
         assert_eq!(
             icons
                 .iter()
                 .filter(|entry| entry.color == TERM_CYAN)
                 .count(),
-            2
+            1
         );
     }
 
@@ -18319,6 +19540,118 @@ mod tests {
             .expect("player panel should render the Jugador label");
         assert_eq!(player_label.3, "center");
         assert!((player_label.0 - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn custom_player_name_replaces_localized_player_label() {
+        let mut app = active_combat_fixture();
+        app.set_player_name("John");
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let layout = app.layout();
+        let player_center_x = layout.player_rect.x + layout.player_rect.w * 0.5;
+        let player_label = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "John")
+            .expect("player panel should render the custom player name");
+        assert_eq!(player_label.3, "center");
+        assert!((player_label.0 - player_center_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn player_name_trims_whitespace_and_limits_length() {
+        let mut app = App::new();
+
+        app.set_player_name(" \t1234\n5678\u{00a0}9012345 \r");
+        assert_eq!(app.player_name.as_deref(), Some("123456789012"));
+
+        app.set_player_name("\t\n\u{00a0}  \r");
+        assert_eq!(app.player_name, None);
+    }
+
+    #[test]
+    fn focused_player_name_input_keeps_trailing_space_and_places_caret_in_next_slot() {
+        let mut app = App::new();
+        app.resize(320.0, 568.0);
+        app.ui.settings_open = true;
+        app.ui.settings_progress = 1.0;
+        app.set_player_name_input_focused(true);
+        app.set_player_name("John ");
+
+        assert_eq!(app.player_name.as_deref(), Some("John"));
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let name_entry = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "John ")
+            .expect("settings input should render the trailing space while focused");
+        let caret_entry = entries
+            .iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "|")
+            .expect("settings input should render a caret while focused");
+        let expected_caret_x = name_entry.0 + text_width("John ", name_entry.2);
+
+        assert!((caret_entry.0 - expected_caret_x).abs() < 0.05);
+    }
+
+    #[test]
+    fn focused_player_name_input_rejects_invisible_formatting_and_keeps_allowed_punctuation() {
+        let mut app = App::new();
+
+        app.set_player_name_input_focused(true);
+        app.set_player_name("Jo\u{200B}\u{202E}\t hn\n\u{00a0}-_.'42");
+
+        assert_eq!(app.player_name_input_value, "Jo hn-_.'42");
+        assert_eq!(app.player_name.as_deref(), Some("Jo hn-_.'42"));
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_true_for_valid_utf8() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(4);
+        unsafe {
+            std::slice::from_raw_parts_mut(ptr, 4).copy_from_slice(b"John");
+        }
+
+        assert!(app.set_player_name_from_buffer(4));
+        assert_eq!(app.player_name.as_deref(), Some("John"));
+    }
+
+    #[test]
+    fn prepare_player_name_buffer_clamps_oversized_requests() {
+        let mut app = App::new();
+        let requested_len = PLAYER_NAME_MAX_BUFFER_BYTES + 1;
+
+        app.prepare_player_name_buffer(requested_len);
+
+        assert_eq!(app.player_name_buffer.len(), PLAYER_NAME_MAX_BUFFER_BYTES);
+        assert!(!app.set_player_name_from_buffer(requested_len));
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_false_when_len_exceeds_buffer() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(4);
+        unsafe {
+            std::slice::from_raw_parts_mut(ptr, 4).copy_from_slice(b"John");
+        }
+
+        assert!(!app.set_player_name_from_buffer(5));
+        assert_eq!(app.player_name, None);
+    }
+
+    #[test]
+    fn set_player_name_from_buffer_returns_false_for_invalid_utf8() {
+        let mut app = App::new();
+        let ptr = app.prepare_player_name_buffer(1);
+        unsafe {
+            *ptr = 0xff;
+        }
+
+        assert!(!app.set_player_name_from_buffer(1));
+        assert_eq!(app.player_name, None);
     }
 
     #[test]
@@ -18378,6 +19711,86 @@ mod tests {
     }
 
     #[test]
+    fn combat_panels_use_resource_palette_for_stats_meta_and_rhythm() {
+        let mut app = active_combat_fixture();
+        app.combat.player.energy = 2;
+        app.combat.player.fighter.block = 7;
+        app.combat.player.fighter.statuses.rhythm = -1;
+        app.combat.deck.draw_pile = vec![
+            CardId::FlareSlash,
+            CardId::GuardStep,
+            CardId::QuickStrike,
+            CardId::CapacitiveShell,
+        ];
+        app.combat.deck.discard_pile = vec![CardId::FlareSlash];
+        primary_enemy_mut(&mut app.combat).fighter.block = 6;
+        primary_enemy_mut(&mut app.combat).fighter.statuses.rhythm = -1;
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+
+        let enemy_hp_text = primary_enemy(&app.combat).fighter.hp.to_string();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let entries = frame_text_entries(&frame);
+        let player_panel = app.layout().player_rect;
+        let enemy_panel = primary_enemy_rect(&app.layout());
+
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "32",
+            TERM_GREEN
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "7",
+            TERM_BLUE_SOFT
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "2/3",
+            TERM_CYAN
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "4",
+            TERM_GREEN_TEXT
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "1",
+            TERM_GREEN_TEXT
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            player_panel,
+            "Rhythm-1",
+            TERM_BLUE_SOFT,
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            enemy_panel,
+            &enemy_hp_text,
+            TERM_GREEN
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            enemy_panel,
+            "6",
+            TERM_BLUE_SOFT
+        ));
+        assert!(panel_has_text_with_color(
+            &entries,
+            enemy_panel,
+            "Rhythm-1",
+            TERM_BLUE_SOFT,
+        ));
+    }
+
+    #[test]
     fn player_panel_status_row_is_centered_when_present() {
         let mut app = active_combat_fixture();
         app.combat.player.fighter.statuses.focus = 1;
@@ -18401,6 +19814,16 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(status_entries.len(), 2);
+        assert!(
+            status_entries
+                .iter()
+                .any(|(_, _, _, _, color, _, text)| { text == "Focus+1" && color == TERM_GREEN })
+        );
+        assert!(
+            status_entries.iter().any(|(_, _, _, _, color, _, text)| {
+                text == "Rhythm-1" && color == TERM_BLUE_SOFT
+            })
+        );
         let row_start = status_entries
             .iter()
             .map(|(x, _, _, _, _, _, _)| *x)
@@ -18517,6 +19940,10 @@ mod tests {
         }));
         assert!(panel_icons.iter().any(|entry| {
             entry.src == COMBAT_DECK_ICON_ASSET_PATH && rect_contains_rect(player_panel, entry.rect)
+        }));
+        assert!(panel_icons.iter().any(|entry| {
+            entry.src == COMBAT_ARROW_ICON_ASSET_PATH
+                && rect_contains_rect(player_panel, entry.rect)
         }));
     }
 
@@ -18643,7 +20070,7 @@ mod tests {
     }
 
     #[test]
-    fn shield_gain_renders_green_count_up_into_frame() {
+    fn shield_gain_renders_defend_purple_count_up_into_frame() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 3;
         app.combat.deck.hand = vec![CardId::GuardStep];
@@ -18667,7 +20094,7 @@ mod tests {
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains(&format!(
             "|left|{}|body|{}",
-            TERM_GREEN_SOFT, app.combat_feedback.displayed.player.block
+            TERM_BLUE_SOFT, app.combat_feedback.displayed.player.block
         )));
     }
 
