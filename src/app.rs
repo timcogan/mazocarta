@@ -3013,6 +3013,7 @@ impl App {
     /// Returns a zero-filled buffer for the caller to write exactly `len` bytes into before
     /// calling `set_player_name_from_buffer`; bytes beyond `len` are ignored.
     pub(crate) fn prepare_player_name_buffer(&mut self, len: usize) -> *mut u8 {
+        self.player_name_buffer.clear();
         self.player_name_buffer.resize(len, 0);
         self.player_name_buffer.as_mut_ptr()
     }
@@ -7176,25 +7177,25 @@ impl App {
             + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
             + language_label_size;
         let language_buttons_top = language_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
-        let language_buttons_bottom =
+        let language_buttons_bottom_pad =
             modal_rect.y + modal_rect.h - language_buttons_top - language_button_metrics.block_h;
         let language_buttons = place_overlay_buttons(
             &language_button_metrics,
             modal_rect,
-            language_buttons_bottom,
+            language_buttons_bottom_pad,
         );
         let background_label_y = language_buttons_top
             + language_button_metrics.block_h
             + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
             + background_label_size;
         let background_buttons_top = background_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
-        let background_buttons_bottom = modal_rect.y + modal_rect.h
+        let background_buttons_bottom_pad = modal_rect.y + modal_rect.h
             - background_buttons_top
             - background_button_metrics.block_h;
         let background_buttons = place_overlay_buttons(
             &background_button_metrics,
             modal_rect,
-            background_buttons_bottom,
+            background_buttons_bottom_pad,
         );
         let close_buttons = place_overlay_buttons(&close_button_metrics, modal_rect, bottom_pad);
 

@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_ARG="${1:-}"
+STABLE_ACCENT_COLOR="#3f6"
+STABLE_ACCENT_COLOR_ALT="#33ff66"
 PREVIEW_ACCENT_COLOR="#3df5ff"
 PREVIEW_SHELL_THEME_COLOR="#000000"
 PREVIEW_GAME_TITLE="Mazocarta Preview"
@@ -110,6 +112,10 @@ rewrite_manifest_branding() {
   ' "$manifest_path" "$channel" "$PREVIEW_GAME_TITLE" "$PREVIEW_SHORT_NAME" "$PREVIEW_SHELL_THEME_COLOR"
 }
 
+escape_grep_ere_literal() {
+  printf '%s\n' "$1" | sed -e 's/[][\\.^$*+?(){}|]/\\&/g'
+}
+
 apply_preview_branding() {
   local destination="$1"
   local index_path="$destination/index.html"
@@ -118,7 +124,7 @@ apply_preview_branding() {
   local icon_dir="$destination/icons"
   local apple_icon_path="$destination/apple-touch-icon.png"
 
-  perl -0pi -e "s/#3f6\\b/${PREVIEW_ACCENT_COLOR}/g; s/#33ff66\\b/${PREVIEW_ACCENT_COLOR}/g;" "$svg_path"
+  perl -0pi -e "s/${STABLE_ACCENT_COLOR}\\b/${PREVIEW_ACCENT_COLOR}/g; s/${STABLE_ACCENT_COLOR_ALT}\\b/${PREVIEW_ACCENT_COLOR}/g;" "$svg_path"
   perl -0pi -e 's/content="stable"/content="preview"/; s/content="Mazocarta"/content="Mazocarta Preview"/g; s#<title>Mazocarta</title>#<title>Mazocarta Preview</title>#;' "$index_path"
   rewrite_manifest_branding "$manifest_path" "preview"
   "$ROOT_DIR/scripts/render-pwa-icons.sh" "$svg_path" "$icon_dir" "$apple_icon_path"
@@ -127,15 +133,17 @@ apply_preview_branding() {
 verify_site_branding() {
   local destination="$1"
   local channel="$2"
+  local stable_accent_pattern
 
   if [[ "$channel" == "preview" ]]; then
+    stable_accent_pattern="$(escape_grep_ere_literal "$STABLE_ACCENT_COLOR")|$(escape_grep_ere_literal "$STABLE_ACCENT_COLOR_ALT")"
     grep -q '<title>Mazocarta Preview</title>' "$destination/index.html"
     grep -q "<meta name=\"theme-color\" content=\"$PREVIEW_SHELL_THEME_COLOR\"" "$destination/index.html"
     grep -q '"name": "Mazocarta Preview"' "$destination/manifest.webmanifest"
     grep -q '"short_name": "Mazo Preview"' "$destination/manifest.webmanifest"
     grep -q "\"theme_color\": \"$PREVIEW_SHELL_THEME_COLOR\"" "$destination/manifest.webmanifest"
-    grep -q "${PREVIEW_ACCENT_COLOR}" "$destination/mazocarta.svg"
-    if grep -Eq '#3f6\b|#33ff66\b' "$destination/mazocarta.svg"; then
+    grep -Fq -- "$PREVIEW_ACCENT_COLOR" "$destination/mazocarta.svg"
+    if grep -Eq "${stable_accent_pattern}\\b" "$destination/mazocarta.svg"; then
       echo "Preview SVG still contains the stable green accent." >&2
       return 1
     fi
