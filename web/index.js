@@ -65,6 +65,7 @@ const spriteStyleByColor = new Map([
   ["#9fe7ff", { tier: 3, variant: "detailE" }],
   ["#9a7657", { tier: 3, variant: "dim" }],
 ]);
+const PLAYER_NAME_MAX_CHARS = 12;
 
 let wasm = null;
 let rafId = 0;
@@ -1025,7 +1026,8 @@ function setAppPlayerName(raw) {
     return false;
   }
 
-  const bytes = encoder.encode(raw);
+  const normalized = limitPlayerNameInputValue(raw);
+  const bytes = encoder.encode(normalized);
   const ptr = wasm.prepare_player_name_buffer(bytes.length);
   new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
   return !!wasm.app_set_player_name_from_buffer(bytes.length);
@@ -1045,7 +1047,7 @@ function isAllowedPlayerNameCharacter(char) {
 function limitPlayerNameInputValue(raw) {
   return Array.from(String(raw))
     .filter((char) => isAllowedPlayerNameCharacter(char))
-    .slice(0, 12)
+    .slice(0, PLAYER_NAME_MAX_CHARS)
     .join("");
 }
 

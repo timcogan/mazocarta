@@ -44,6 +44,7 @@ const APP_BUILD_TIMESTAMP_UTC: Option<&str> = option_env!("MAZOCARTA_APP_BUILD_T
 const APP_GIT_SHA_SHORT: Option<&str> = option_env!("MAZOCARTA_APP_GIT_SHA_SHORT");
 const PLAYER_NAME: &str = "Player";
 const PLAYER_NAME_MAX_CHARS: usize = 12;
+const PLAYER_NAME_MAX_BUFFER_BYTES: usize = PLAYER_NAME_MAX_CHARS * 4;
 const GUARD_LABEL: &str = "Shield";
 const COMBAT_HEART_ICON_ASSET_PATH: &str = "./icons/combat/heart.png";
 const COMBAT_SHIELD_ICON_ASSET_PATH: &str = "./icons/combat/shield.png";
@@ -723,6 +724,12 @@ struct FittedPrimaryButton {
     font_size: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SettingsPlayerNameInputMetrics {
+    rect: Rect,
+    font_size: f32,
+}
+
 #[derive(Clone, Debug)]
 struct OpeningIntroProgress {
     line_alphas: Vec<f32>,
@@ -1029,10 +1036,20 @@ pub(crate) struct App {
     update_request_pending: bool,
     player_name_buffer: Vec<u8>,
     restore_buffer: Vec<u8>,
+    settings_layout_cache: SettingsLayout,
+    settings_player_name_input_metrics_cache: SettingsPlayerNameInputMetrics,
 }
 
 impl App {
     pub(crate) fn new() -> Self {
+        let settings_layout_cache =
+            build_settings_layout(LOGICAL_WIDTH, LOGICAL_HEIGHT, Language::English);
+        let settings_player_name_input_metrics_cache = build_settings_player_name_input_metrics(
+            &settings_layout_cache,
+            LOGICAL_WIDTH * 0.5,
+            LOGICAL_HEIGHT,
+            ease_out_cubic(0.0),
+        );
         let (combat, _) = CombatState::new(BASE_SEED);
         let enemy_count = combat.enemy_count();
         let displayed_stats = displayed_combat_stats(&combat);
@@ -1094,6 +1111,8 @@ impl App {
             update_request_pending: false,
             player_name_buffer: Vec::new(),
             restore_buffer: Vec::new(),
+            settings_layout_cache,
+            settings_player_name_input_metrics_cache,
         }
     }
 
@@ -1161,11 +1180,27 @@ impl App {
         ease_out_cubic(self.ui.install_help_progress)
     }
 
+    fn refresh_settings_layout_cache(&mut self) {
+        self.settings_layout_cache =
+            build_settings_layout(self.logical_width(), self.logical_height(), self.language);
+        self.refresh_settings_player_name_input_metrics_cache();
+    }
+
+    fn refresh_settings_player_name_input_metrics_cache(&mut self) {
+        self.settings_player_name_input_metrics_cache = build_settings_player_name_input_metrics(
+            &self.settings_layout_cache,
+            self.logical_center_x(),
+            self.logical_height(),
+            self.settings_eased_progress(),
+        );
+    }
+
     pub(crate) fn set_language(&mut self, language: Language) {
         if self.language == language {
             return;
         }
         self.language = language;
+        self.refresh_settings_layout_cache();
         if matches!(self.screen, AppScreen::Combat) {
             self.relocalize_combat_feedback_intents();
         }
@@ -1334,16 +1369,7 @@ impl App {
     }
 
     fn settings_player_name_input_rect(&self) -> Rect {
-        let progress = self.settings_eased_progress();
-        let layout = self.settings_layout();
-        transform_rect(
-            layout.name_input_rect,
-            self.logical_center_x(),
-            self.logical_height() * 0.5,
-            0.0,
-            (1.0 - progress) * 12.0,
-            0.968 + progress * 0.032,
-        )
+        self.settings_player_name_input_metrics_cache.rect
     }
 
     pub(crate) fn settings_player_name_input_x(&self) -> f32 {
@@ -1363,9 +1389,7 @@ impl App {
     }
 
     pub(crate) fn settings_player_name_input_font_size(&self) -> f32 {
-        let progress = self.settings_eased_progress();
-        let layout = self.settings_layout();
-        layout.name_input_font_size * (0.968 + progress * 0.032)
+        self.settings_player_name_input_metrics_cache.font_size
     }
 
     fn tick_opening_intro(&mut self, dt_ms: f32) -> bool {
@@ -2489,6 +2513,7 @@ impl App {
     pub(crate) fn resize(&mut self, width: f32, height: f32) {
         self.viewport.width = width.max(1.0);
         self.viewport.height = height.max(1.0);
+        self.refresh_settings_layout_cache();
         if matches!(self.screen, AppScreen::Rest) {
             self.sync_rest_page_state();
         }
@@ -2588,6 +2613,7 @@ impl App {
             self.ui.restart_confirm_progress = restart_target;
         }
         let settings_target = if self.ui.settings_open { 1.0 } else { 0.0 };
+        let previous_settings_progress = self.ui.settings_progress;
         if (self.ui.settings_progress - settings_target).abs() > 0.001 {
             let step = (dt_ms / BOOT_MODAL_TRANSITION_MS).clamp(0.0, 1.0);
             self.ui.settings_progress = if self.ui.settings_progress < settings_target {
@@ -2599,6 +2625,9 @@ impl App {
             changed = true;
         } else {
             self.ui.settings_progress = settings_target;
+        }
+        if self.ui.settings_progress.to_bits() != previous_settings_progress.to_bits() {
+            self.refresh_settings_player_name_input_metrics_cache();
         }
         let install_help_target = if self.ui.install_help_open { 1.0 } else { 0.0 };
         if (self.ui.install_help_progress - install_help_target).abs() > 0.001 {
@@ -3010,9 +3039,13 @@ impl App {
         }
     }
 
-    /// Returns a zero-filled buffer for the caller to write exactly `len` bytes into before
-    /// calling `set_player_name_from_buffer`; bytes beyond `len` are ignored.
+    /// Returns a zero-filled buffer for the caller to write into before calling
+    /// `set_player_name_from_buffer`.
+    ///
+    /// The prepared buffer is capped at `PLAYER_NAME_MAX_BUFFER_BYTES`, and
+    /// `set_player_name_from_buffer` rejects any larger `len`.
     pub(crate) fn prepare_player_name_buffer(&mut self, len: usize) -> *mut u8 {
+        let len = len.min(PLAYER_NAME_MAX_BUFFER_BYTES);
         self.player_name_buffer.clear();
         self.player_name_buffer.resize(len, 0);
         self.player_name_buffer.as_mut_ptr()
@@ -7086,137 +7119,8 @@ impl App {
         })
     }
 
-    fn settings_layout(&self) -> SettingsLayout {
-        let logical_width = self.logical_width();
-        let logical_height = self.logical_height();
-        let pad_x = 24.0;
-        let top_pad = 24.0;
-        let bottom_pad = 20.0;
-        let title = self.tr("Settings", "Ajustes");
-        let name_label = self.tr("Player Name", "Nombre del Jugador");
-        let language_label = self.tr("Language", "Idioma");
-        let background_label = self.tr("Background", "Fondo");
-        let binary_label = self.tr("Binary", "Binario");
-        let black_label = self.tr("Black", "Negro");
-        let close_label = self.tr("Close", "Cerrar");
-        let title_size = 26.0;
-        let section_label_size = 16.0;
-        let name_label_size = section_label_size;
-        let name_input_font_size = 20.0;
-        let name_input_height = 40.0;
-        let language_label_size = section_label_size;
-        let background_label_size = section_label_size;
-        let title_max_w = (logical_width - 96.0).clamp(180.0, 360.0);
-        let title_chars = ((title_max_w / (title_size * 0.62)).floor().max(10.0)) as usize;
-        let title_lines = wrap_text(title, title_chars);
-        let title_block_w = title_lines
-            .iter()
-            .map(|line| text_width(line, title_size))
-            .fold(0.0, f32::max);
-        let name_label_w = text_width(name_label, name_label_size);
-        let language_label_w = text_width(language_label, language_label_size);
-        let background_label_w = text_width(background_label, background_label_size);
-        let title_gap = 8.0;
-        let title_to_name_gap = 40.0;
-        let button_gap = 40.0;
-        let title_block_h = if title_lines.is_empty() {
-            title_size
-        } else {
-            title_lines.len() as f32 * title_size
-                + title_gap * title_lines.len().saturating_sub(1) as f32
-        };
-        let modal_w = fit_modal_width(
-            title_block_w
-                .max(name_label_w)
-                .max(language_label_w)
-                .max(background_label_w)
-                .max(220.0)
-                + pad_x * 2.0,
-            logical_width,
-            340.0,
-        );
-        let language_button_metrics =
-            fit_overlay_button_metrics(&["English", "Español"], modal_w - pad_x * 2.0);
-        let background_button_metrics =
-            fit_overlay_button_metrics(&[binary_label, black_label], modal_w - pad_x * 2.0);
-        let close_button_metrics =
-            fit_overlay_button_metrics(&[close_label], modal_w - pad_x * 2.0);
-        let modal_h = top_pad
-            + title_block_h
-            + title_to_name_gap
-            + name_label_size
-            + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
-            + name_input_height
-            + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
-            + language_label_size
-            + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
-            + language_button_metrics.block_h
-            + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
-            + background_label_size
-            + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
-            + background_button_metrics.block_h
-            + button_gap
-            + close_button_metrics.block_h
-            + bottom_pad;
-        let modal_rect = Rect {
-            x: (logical_width - modal_w) * 0.5,
-            y: (logical_height - modal_h) * 0.5,
-            w: modal_w,
-            h: modal_h,
-        };
-        let name_label_y =
-            modal_rect.y + top_pad + title_block_h + title_to_name_gap + name_label_size;
-        let name_input_rect = Rect {
-            x: modal_rect.x + pad_x,
-            y: name_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP,
-            w: (modal_w - pad_x * 2.0).max(1.0),
-            h: name_input_height,
-        };
-        let language_label_y = name_input_rect.y
-            + name_input_rect.h
-            + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
-            + language_label_size;
-        let language_buttons_top = language_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
-        let language_buttons_bottom_pad =
-            modal_rect.y + modal_rect.h - language_buttons_top - language_button_metrics.block_h;
-        let language_buttons = place_overlay_buttons(
-            &language_button_metrics,
-            modal_rect,
-            language_buttons_bottom_pad,
-        );
-        let background_label_y = language_buttons_top
-            + language_button_metrics.block_h
-            + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
-            + background_label_size;
-        let background_buttons_top = background_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
-        let background_buttons_bottom_pad = modal_rect.y + modal_rect.h
-            - background_buttons_top
-            - background_button_metrics.block_h;
-        let background_buttons = place_overlay_buttons(
-            &background_button_metrics,
-            modal_rect,
-            background_buttons_bottom_pad,
-        );
-        let close_buttons = place_overlay_buttons(&close_button_metrics, modal_rect, bottom_pad);
-
-        SettingsLayout {
-            modal_rect,
-            english_button: language_buttons[0],
-            spanish_button: language_buttons[1],
-            binary_button: background_buttons[0],
-            black_button: background_buttons[1],
-            close_button: close_buttons[0],
-            title_lines,
-            title_size,
-            name_label_size,
-            name_label_y,
-            name_input_rect,
-            name_input_font_size,
-            language_label_size,
-            language_label_y,
-            background_label_size,
-            background_label_y,
-        }
+    fn settings_layout(&self) -> &SettingsLayout {
+        &self.settings_layout_cache
     }
 
     fn install_help_layout(&self) -> InstallHelpLayout {
@@ -12689,6 +12593,157 @@ fn sanitize_player_name(raw: &str) -> Option<String> {
     Some(trimmed.chars().take(PLAYER_NAME_MAX_CHARS).collect())
 }
 
+fn build_settings_layout(
+    logical_width: f32,
+    logical_height: f32,
+    language: Language,
+) -> SettingsLayout {
+    let pad_x = 24.0;
+    let top_pad = 24.0;
+    let bottom_pad = 20.0;
+    let title = localized_text(language, "Settings", "Ajustes");
+    let name_label = localized_text(language, "Player Name", "Nombre del Jugador");
+    let language_label = localized_text(language, "Language", "Idioma");
+    let background_label = localized_text(language, "Background", "Fondo");
+    let binary_label = localized_text(language, "Binary", "Binario");
+    let black_label = localized_text(language, "Black", "Negro");
+    let close_label = localized_text(language, "Close", "Cerrar");
+    let title_size = 26.0;
+    let section_label_size = 16.0;
+    let name_label_size = section_label_size;
+    let name_input_font_size = 20.0;
+    let name_input_height = 40.0;
+    let language_label_size = section_label_size;
+    let background_label_size = section_label_size;
+    let title_max_w = (logical_width - 96.0).clamp(180.0, 360.0);
+    let title_chars = ((title_max_w / (title_size * 0.62)).floor().max(10.0)) as usize;
+    let title_lines = wrap_text(title, title_chars);
+    let title_block_w = title_lines
+        .iter()
+        .map(|line| text_width(line, title_size))
+        .fold(0.0, f32::max);
+    let name_label_w = text_width(name_label, name_label_size);
+    let language_label_w = text_width(language_label, language_label_size);
+    let background_label_w = text_width(background_label, background_label_size);
+    let title_gap = 8.0;
+    let title_to_name_gap = 40.0;
+    let button_gap = 40.0;
+    let title_block_h = if title_lines.is_empty() {
+        title_size
+    } else {
+        title_lines.len() as f32 * title_size
+            + title_gap * title_lines.len().saturating_sub(1) as f32
+    };
+    let modal_w = fit_modal_width(
+        title_block_w
+            .max(name_label_w)
+            .max(language_label_w)
+            .max(background_label_w)
+            .max(220.0)
+            + pad_x * 2.0,
+        logical_width,
+        340.0,
+    );
+    let language_button_metrics =
+        fit_overlay_button_metrics(&["English", "Español"], modal_w - pad_x * 2.0);
+    let background_button_metrics =
+        fit_overlay_button_metrics(&[binary_label, black_label], modal_w - pad_x * 2.0);
+    let close_button_metrics = fit_overlay_button_metrics(&[close_label], modal_w - pad_x * 2.0);
+    let modal_h = top_pad
+        + title_block_h
+        + title_to_name_gap
+        + name_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + name_input_height
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + language_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + language_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + background_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + background_button_metrics.block_h
+        + button_gap
+        + close_button_metrics.block_h
+        + bottom_pad;
+    let modal_rect = Rect {
+        x: (logical_width - modal_w) * 0.5,
+        y: (logical_height - modal_h) * 0.5,
+        w: modal_w,
+        h: modal_h,
+    };
+    let name_label_y = modal_rect.y + top_pad + title_block_h + title_to_name_gap + name_label_size;
+    let name_input_rect = Rect {
+        x: modal_rect.x + pad_x,
+        y: name_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP,
+        w: (modal_w - pad_x * 2.0).max(1.0),
+        h: name_input_height,
+    };
+    let language_label_y = name_input_rect.y
+        + name_input_rect.h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + language_label_size;
+    let language_buttons_top = language_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
+    let language_buttons_bottom_pad =
+        modal_rect.y + modal_rect.h - language_buttons_top - language_button_metrics.block_h;
+    let language_buttons = place_overlay_buttons(
+        &language_button_metrics,
+        modal_rect,
+        language_buttons_bottom_pad,
+    );
+    let background_label_y = language_buttons_top
+        + language_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + background_label_size;
+    let background_buttons_top = background_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
+    let background_buttons_bottom_pad =
+        modal_rect.y + modal_rect.h - background_buttons_top - background_button_metrics.block_h;
+    let background_buttons = place_overlay_buttons(
+        &background_button_metrics,
+        modal_rect,
+        background_buttons_bottom_pad,
+    );
+    let close_buttons = place_overlay_buttons(&close_button_metrics, modal_rect, bottom_pad);
+
+    SettingsLayout {
+        modal_rect,
+        english_button: language_buttons[0],
+        spanish_button: language_buttons[1],
+        binary_button: background_buttons[0],
+        black_button: background_buttons[1],
+        close_button: close_buttons[0],
+        title_lines,
+        title_size,
+        name_label_size,
+        name_label_y,
+        name_input_rect,
+        name_input_font_size,
+        language_label_size,
+        language_label_y,
+        background_label_size,
+        background_label_y,
+    }
+}
+
+fn build_settings_player_name_input_metrics(
+    layout: &SettingsLayout,
+    logical_center_x: f32,
+    logical_height: f32,
+    progress: f32,
+) -> SettingsPlayerNameInputMetrics {
+    SettingsPlayerNameInputMetrics {
+        rect: transform_rect(
+            layout.name_input_rect,
+            logical_center_x,
+            logical_height * 0.5,
+            0.0,
+            (1.0 - progress) * 12.0,
+            0.968 + progress * 0.032,
+        ),
+        font_size: layout.name_input_font_size * (0.968 + progress * 0.032),
+    }
+}
+
 fn button_size(label: &str, font_size: f32, pad_x: f32, pad_y: f32) -> (f32, f32) {
     (
         text_width(label, font_size) + pad_x * 2.0,
@@ -15987,6 +16042,36 @@ mod tests {
                     < 0.01
             );
         }
+    }
+
+    #[test]
+    fn settings_player_name_input_accessors_match_transformed_layout_after_resize_and_language_change()
+     {
+        let mut app = App::new();
+
+        app.resize(320.0, 568.0);
+        app.set_language(Language::Spanish);
+        app.ui.settings_progress = 0.5;
+        app.refresh_settings_player_name_input_metrics_cache();
+
+        let progress = app.settings_eased_progress();
+        let scale = 0.968 + progress * 0.032;
+        let layout = app.settings_layout();
+        let expected_rect = transform_rect(
+            layout.name_input_rect,
+            app.logical_center_x(),
+            app.logical_height() * 0.5,
+            0.0,
+            (1.0 - progress) * 12.0,
+            scale,
+        );
+        let expected_font_size = layout.name_input_font_size * scale;
+
+        assert!((app.settings_player_name_input_x() - expected_rect.x).abs() < 0.01);
+        assert!((app.settings_player_name_input_y() - expected_rect.y).abs() < 0.01);
+        assert!((app.settings_player_name_input_w() - expected_rect.w).abs() < 0.01);
+        assert!((app.settings_player_name_input_h() - expected_rect.h).abs() < 0.01);
+        assert!((app.settings_player_name_input_font_size() - expected_font_size).abs() < 0.01);
     }
 
     #[test]
@@ -19532,6 +19617,17 @@ mod tests {
 
         assert!(app.set_player_name_from_buffer(4));
         assert_eq!(app.player_name.as_deref(), Some("John"));
+    }
+
+    #[test]
+    fn prepare_player_name_buffer_clamps_oversized_requests() {
+        let mut app = App::new();
+        let requested_len = PLAYER_NAME_MAX_BUFFER_BYTES + 1;
+
+        app.prepare_player_name_buffer(requested_len);
+
+        assert_eq!(app.player_name_buffer.len(), PLAYER_NAME_MAX_BUFFER_BYTES);
+        assert!(!app.set_player_name_from_buffer(requested_len));
     }
 
     #[test]
