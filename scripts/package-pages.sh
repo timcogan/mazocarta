@@ -156,6 +156,11 @@ build_legacy_site_with_resvg() {
   local svg_icon="$worktree/web/mazocarta.svg"
   local apple_icon="$worktree/web/apple-touch-icon.png"
 
+  if ! command -v "$RESVG_BIN" >/dev/null 2>&1; then
+    echo "resvg is required to build legacy Pages icons." >&2
+    exit 1
+  fi
+
   # Legacy release tags hardcode Inkscape in scripts/build-web.sh. Rebuild their
   # icons directly with resvg so Pages packaging stays compatible without that dependency.
   (

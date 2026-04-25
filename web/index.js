@@ -230,9 +230,31 @@ function fontFor(token, size) {
 }
 
 function decodeSceneText(text) {
-  return text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) =>
-    String.fromCharCode(Number.parseInt(hex, 16)),
-  );
+  const bytes = [];
+  let literalStart = 0;
+  let index = 0;
+
+  while (index < text.length) {
+    if (text[index] === "%" && index + 2 < text.length) {
+      const hex = text.slice(index + 1, index + 3);
+      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
+        if (literalStart < index) {
+          bytes.push(...encoder.encode(text.slice(literalStart, index)));
+        }
+        bytes.push(Number.parseInt(hex, 16));
+        index += 3;
+        literalStart = index;
+        continue;
+      }
+    }
+    index += 1;
+  }
+
+  if (literalStart < text.length) {
+    bytes.push(...encoder.encode(text.slice(literalStart)));
+  }
+
+  return decoder.decode(Uint8Array.from(bytes));
 }
 
 function roundedRectPath(context, x, y, w, h, radius) {
@@ -1939,20 +1961,6 @@ function onPlayerNameInputKeyDown(event) {
   }
 }
 
-function stopPlayerNameInputPropagation(event) {
-  event.stopPropagation();
-}
-
-function focusPlayerNameInput(event) {
-  event.stopPropagation();
-  if (event.type === "touchend") {
-    focusHiddenPlayerNameInput();
-  } else {
-    setPlayerNameEditingActive(true);
-  }
-  drawFrame();
-}
-
 function syncPlayerNameSelection(event) {
   event.stopPropagation();
   syncPlayerNameOverlay();
@@ -2106,11 +2114,6 @@ playerNameInput.addEventListener("keyup", syncPlayerNameSelection);
 playerNameInput.addEventListener("focus", onPlayerNameInputFocus);
 playerNameInput.addEventListener("blur", onPlayerNameInputBlur);
 playerNameInput.addEventListener("select", syncPlayerNameOverlay);
-playerNameInput.addEventListener("pointerdown", stopPlayerNameInputPropagation);
-playerNameInput.addEventListener("pointerup", focusPlayerNameInput);
-playerNameInput.addEventListener("mousedown", focusPlayerNameInput);
-playerNameInput.addEventListener("touchend", focusPlayerNameInput);
-playerNameInput.addEventListener("click", focusPlayerNameInput);
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
   deferredInstallPrompt = event;

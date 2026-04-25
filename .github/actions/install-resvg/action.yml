@@ -1,0 +1,14 @@
+name: Install resvg
+description: Download and install a specific resvg release into the GitHub Actions PATH.
+
+inputs:
+  version:
+    description: GitHub release tag to install, such as v0.47.0.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install resvg binary
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/install-resvg.sh" "${{ inputs.version }}"

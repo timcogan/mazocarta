@@ -65,7 +65,9 @@ const TERM_GREEN_TEXT_RGB: (u8, u8, u8) = (201, 255, 215);
 const TERM_GREEN_DIM_RGB: (u8, u8, u8) = (111, 159, 123);
 const TERM_CYAN: &str = "#3df5ff";
 const TERM_CYAN_SOFT: &str = "#a8fcff";
+const TERM_CYAN_DIM: &str = "#5aa5ab";
 const TERM_BLUE_SOFT: &str = "#9bb7ff";
+const TERM_BLUE_DIM: &str = "#6f81b3";
 const TERM_PINK: &str = "#ff4fd8";
 const TERM_PINK_SOFT: &str = "#ff9cf0";
 const TERM_ORANGE: &str = "#ffb852";
@@ -1180,9 +1182,7 @@ impl App {
         self.background_mode_generation = self.background_mode_generation.wrapping_add(1);
         self.refresh_hover();
         self.dirty = true;
-        if self.dirty {
-            self.rebuild_frame();
-        }
+        self.rebuild_frame();
     }
 
     pub(crate) fn background_mode_code(&self) -> u32 {
@@ -1224,9 +1224,7 @@ impl App {
             self.player_name_generation = self.player_name_generation.wrapping_add(1);
         }
         self.dirty = true;
-        if self.dirty {
-            self.rebuild_frame();
-        }
+        self.rebuild_frame();
     }
 
     pub(crate) fn player_name_generation(&self) -> u32 {
@@ -1266,9 +1264,7 @@ impl App {
             self.player_name_input_value = value;
         }
         self.dirty = true;
-        if self.dirty {
-            self.rebuild_frame();
-        }
+        self.rebuild_frame();
     }
 
     pub(crate) fn set_install_capability(&mut self, capability: InstallCapability) {
@@ -3183,14 +3179,10 @@ impl App {
 
     fn set_language_from_boot(&mut self, language: Language) {
         self.set_language(language);
-        self.refresh_hover();
-        self.dirty = true;
     }
 
     fn set_background_mode_from_boot(&mut self, background_mode: BackgroundMode) {
         self.set_background_mode(background_mode);
-        self.refresh_hover();
-        self.dirty = true;
     }
 
     fn open_run_info(&mut self) {
@@ -8835,12 +8827,10 @@ impl App {
         let show_placeholder = self.player_name.is_none() && !input_focused;
         let player_name_text = if input_focused {
             self.player_name_input_value.as_str()
-        } else if let Some(player_name) = self.player_name.as_deref() {
-            player_name
-        } else if show_placeholder {
-            self.default_player_name()
         } else {
-            ""
+            self.player_name
+                .as_deref()
+                .unwrap_or_else(|| self.default_player_name())
         };
         let caret_visible = input_focused;
         let inner_width = (layout.name_input_rect.w - 24.0).max(1.0);
@@ -8865,7 +8855,7 @@ impl App {
         let text_y =
             layout.name_input_rect.y + layout.name_input_rect.h * 0.5 + player_name_size * 0.32;
         let text_color = if show_placeholder {
-            rgba((141, 255, 173), 0.68)
+            rgba(TERM_GREEN_SOFT_RGB, 0.68)
         } else {
             String::from(TERM_GREEN_TEXT)
         };
@@ -11940,10 +11930,10 @@ fn combat_stat_soft_color(stat: CombatStat) -> &'static str {
 
 fn combat_stat_dim_color(stat: CombatStat) -> &'static str {
     match stat {
-        CombatStat::Hp => TERM_GREEN,
-        CombatStat::Block => TERM_BLUE_SOFT,
-        CombatStat::Energy => TERM_CYAN,
-        CombatStat::DrawPile | CombatStat::DiscardPile => TERM_GREEN_TEXT,
+        CombatStat::Hp => TERM_GREEN_DIM,
+        CombatStat::Block => TERM_BLUE_DIM,
+        CombatStat::Energy => TERM_CYAN_DIM,
+        CombatStat::DrawPile | CombatStat::DiscardPile => TERM_GREEN_DIM,
     }
 }
 
@@ -14372,21 +14362,22 @@ fn encode_scene_text(value: &str) -> String {
 #[cfg(test)]
 fn decode_scene_text(value: &str) -> String {
     let bytes = value.as_bytes();
-    let mut decoded = String::with_capacity(value.len());
+    let mut decoded = Vec::with_capacity(value.len());
     let mut index = 0usize;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let hex = &value[index + 1..index + 3];
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                decoded.push(byte as char);
-                index += 3;
-                continue;
+            if let Ok(hex) = std::str::from_utf8(&bytes[index + 1..index + 3]) {
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    decoded.push(byte);
+                    index += 3;
+                    continue;
+                }
             }
         }
-        decoded.push(bytes[index] as char);
+        decoded.push(bytes[index]);
         index += 1;
     }
-    decoded
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 #[cfg(test)]
@@ -14895,6 +14886,42 @@ mod tests {
             (entry.0 * 100.0).round() as i32,
             (entry.1 * 100.0).round() as i32,
         )
+    }
+
+    #[test]
+    fn decode_scene_text_preserves_utf8_and_percent_escapes() {
+        assert_eq!(decode_scene_text("Se%C3%B1or"), "Señor");
+        assert_eq!(decode_scene_text(&encode_scene_text("Señor%|")), "Señor%|");
+        assert_eq!(decode_scene_text("100% ready"), "100% ready");
+        assert_eq!(decode_scene_text("%zz"), "%zz");
+    }
+
+    #[test]
+    fn combat_stat_dim_colors_use_distinct_palette() {
+        assert_eq!(combat_stat_dim_color(CombatStat::Hp), TERM_GREEN_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::Block), TERM_BLUE_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::Energy), TERM_CYAN_DIM);
+        assert_eq!(combat_stat_dim_color(CombatStat::DrawPile), TERM_GREEN_DIM);
+        assert_eq!(
+            combat_stat_dim_color(CombatStat::DiscardPile),
+            TERM_GREEN_DIM
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Hp),
+            combat_stat_base_color(CombatStat::Hp)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Block),
+            combat_stat_base_color(CombatStat::Block)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::Energy),
+            combat_stat_base_color(CombatStat::Energy)
+        );
+        assert_ne!(
+            combat_stat_dim_color(CombatStat::DrawPile),
+            combat_stat_base_color(CombatStat::DrawPile)
+        );
     }
 
     fn wrapped_lines_fit_width(lines: &[String], font_size: f32, max_width: f32) -> bool {
@@ -18770,7 +18797,7 @@ mod tests {
             &entries,
             player_panel,
             "0",
-            TERM_GREEN_TEXT,
+            TERM_GREEN_DIM,
         ));
         assert!(panel_has_text_with_color(
             &entries,
