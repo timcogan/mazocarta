@@ -140,6 +140,10 @@ const BINARY_BACKGROUND_FADE_OUT_MIN_MS: f32 = 640.0;
 const BINARY_BACKGROUND_FADE_OUT_MAX_MS: f32 = 1120.0;
 const BINARY_BACKGROUND_OFF_MIN_MS: f32 = 2200.0;
 const BINARY_BACKGROUND_OFF_MAX_MS: f32 = 5200.0;
+const _: () = {
+    assert!(BINARY_BACKGROUND_FADE_IN_MIN_MS >= 1.0);
+    assert!(BINARY_BACKGROUND_FADE_OUT_MIN_MS >= 1.0);
+};
 const RESET_BUTTON_PAD_X: f32 = 10.0;
 const RESET_BUTTON_PAD_Y: f32 = 12.0;
 const RESULT_BUTTON_LABEL: &str = "Main Menu";
@@ -8467,9 +8471,6 @@ impl App {
     }
 
     fn render_binary_background(&self, scene: &mut SceneBuilder) {
-        debug_assert!(BINARY_BACKGROUND_FADE_IN_MIN_MS >= 1.0);
-        debug_assert!(BINARY_BACKGROUND_FADE_OUT_MIN_MS >= 1.0);
-
         let width = self.logical_width();
         let height = self.logical_height();
         let cell_w = (width / BINARY_BACKGROUND_COL_DIV)
