@@ -6,9 +6,14 @@ rust-version = "1.85"
 license = "MIT"
 
 [dependencies]
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[features]
+default = []
+e2e = []
 
 [lib]
 crate-type = ["cdylib", "rlib"]

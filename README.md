@@ -41,7 +41,7 @@ cargo test
 make publish-check
 ```
 
-4. Build the `.wasm` bundle and refresh the web host:
+4. Build the `.wasm` bundle, refresh generated QR assets, and refresh the web host:
 
 ```bash
 make build
@@ -55,6 +55,60 @@ make serve
 
 6. Open `http://localhost:4173`.
 
+## Android CLI Wrapper
+
+Mazocarta now includes a CLI-only Android wrapper project in `android/`. It packages the built `web/` client into a native `WebView` app, so you do not need Android Studio GUI to run it on a phone.
+
+Prerequisites:
+
+- Java 17+ installed
+- `adb` available
+- Android SDK command-line tools
+
+CLI flow:
+
+```bash
+make android-setup-sdk   # optional, installs SDK into ./.android-sdk
+make android-install
+make android-run
+```
+
+What those do:
+
+- `make build` compiles the WASM bundle
+- `make android-sync` copies `web/` into Android app assets
+- `make android-build` assembles the debug APK
+- `make android-install` installs it to a connected device
+- `make android-run` launches it with `adb`
+
+The Android wrapper loads the app from packaged assets inside `WebView`, not from a real `localhost` server on the phone.
+
+## Multiplayer LAN Testing
+
+Automated local validation:
+
+```bash
+make test-e2e
+```
+
+This includes a two-browser host/guest LAN session test that pairs by code, starts a run, and verifies guest map spectating behavior.
+
+For repeated gameplay freeze/stall detection on a real host/guest session path, run the soak runner:
+
+```bash
+npm run soak:2p -- --runs 5 --seed-start 1
+```
+
+It pairs two browser pages by code, starts deterministic 2-player runs, autoplays both sides, and reports the first seed that stalls. A `progress_timeout` means the run budget elapsed while the session was still making progress; pass `--fail-on-timeout` when you want that to fail CI.
+
+Manual two-device validation:
+
+1. Run `make build` and `make serve`.
+2. Open the app on two devices on the same local network.
+3. On the host device, open `Multiplayer -> Host`.
+4. On the guest device, open `Multiplayer -> Join` and use `Paste code` if camera scanning is unavailable.
+5. Complete host-offer -> guest-confirm pairing, start the run, then verify both devices see the same map while only the host can choose the next node.
+
 ## Balance Simulation
 
 Run the native actor to simulate many runs and print aggregate difficulty stats:
@@ -64,6 +118,12 @@ cargo run --bin actor -- --runs 1000 --seed-start 1
 ```
 
 Use `--verbose` to print one line per simulated run before the final summary.
+
+For 2-player balance and survival stats, use:
+
+```bash
+cargo run --bin actor -- --players 2 --runs 1000 --seed-start 1
+```
 
 ## Controls
 

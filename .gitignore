@@ -1,5 +1,7 @@
 /target
 /web/mazocarta.wasm
+/web/jsqr.js
+/web/qrcode.bundle.mjs
 /web/.debug-mode.json
 /web/apple-touch-icon.png
 /web/icons/*
@@ -13,3 +15,18 @@
 /tmp
 __pycache__/
 *.pyc
+node_modules/
+playwright-report/
+test-results/
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/app/src/main/assets/site/
+/android/app/src/main/res/drawable/ic_launcher.png
+/android/app/src/main/res/drawable/ic_launcher_foreground.xml
+/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+/.android-sdk/
+/.gradle-bootstrap/

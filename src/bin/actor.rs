@@ -37,6 +37,13 @@ fn parse_args(args: Vec<String>) -> SimulationConfig {
                 };
                 config.seed_start = parse_u64(value, "--seed-start");
             }
+            "--players" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    usage_and_exit("Missing value for --players.");
+                };
+                config.players = parse_usize(value, "--players").clamp(1, 2);
+            }
             "--verbose" => {
                 config.verbose = true;
             }
@@ -75,5 +82,7 @@ fn usage_and_exit(message: &str) -> ! {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn print_usage() {
-    eprintln!("Usage: cargo run --bin actor -- [--runs N] [--seed-start N] [--verbose]");
+    eprintln!(
+        "Usage: cargo run --bin actor -- [--runs N] [--seed-start N] [--players 1|2] [--verbose]"
+    );
 }

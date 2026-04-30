@@ -208,10 +208,6 @@ pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
     }
 }
 
-pub(crate) fn default_starter_module() -> ModuleId {
-    ModuleId::AegisDrive
-}
-
 pub(crate) fn starter_module_choices() -> Vec<ModuleId> {
     vec![
         ModuleId::Nanoforge,

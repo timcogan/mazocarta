@@ -1,3 +1,5 @@
+import { createMultiplayerController } from "./multiplayer.js";
+
 const canvas = document.getElementById("game");
 if (!(canvas instanceof HTMLCanvasElement)) {
   throw new Error("Canvas element `#game` not found");
@@ -32,6 +34,8 @@ if (!ctx) {
 }
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+const SEARCH_PARAMS = new URLSearchParams(window.location.search);
+const E2E_MODE = SEARCH_PARAMS.get("e2e") === "1";
 const blurCanvas = document.createElement("canvas");
 const blurCtx = blurCanvas.getContext("2d");
 const imageCache = new Map();
@@ -73,6 +77,10 @@ let lastFrameTime = 0;
 let logicalWidth = 1280;
 let logicalHeight = 720;
 let lastRunSaveGeneration = 0;
+let lastRunSaveRaw = null;
+let lastPartySnapshotGeneration = 0;
+let lastPartySnapshot = null;
+let lastRunSummary = null;
 let lastLanguageGeneration = 0;
 let lastBackgroundModeGeneration = 0;
 let lastPlayerNameGeneration = 0;
@@ -81,12 +89,29 @@ let serviceWorkerRegistration = null;
 let waitingServiceWorker = null;
 let reloadOnNextControllerChange = false;
 let lastBootScreenVisible = null;
+let e2eSupport = null;
+let e2eSupportPromise = Promise.resolve(null);
 let playerNameInputVisible = false;
 let playerNameEditingActive = false;
 let lastMouseClientPoint = null;
 let lastPointerDownStartedOnPlayerNameInput = false;
 const MONO_STACK =
   '"IBM Plex Mono", "JetBrains Mono", "Cascadia Mono", "Fira Code", "Liberation Mono", monospace';
+const TERM_GREEN = "#33ff66";
+const TERM_GREEN_SOFT = "#8dffad";
+const TERM_INK = "#f4e8cf";
+const GAME_UI_STROKE_START = "rgba(51, 255, 102, 0.85)";
+const GAME_UI_STROKE_PANEL = "rgba(51, 255, 102, 0.38)";
+const GAME_UI_FILL_ALPHA = 0.04;
+const GAME_UI_STROKE_ALPHA_BOOST = 0.18;
+const GAME_UI_STROKE_WIDTH = 0.5;
+const GAME_BUTTON_RADIUS = 8;
+const GAME_BUTTON_FONT_SIZE = 28;
+const GAME_BUTTON_MIN_FONT_SIZE = 18;
+const GAME_BUTTON_PAD_X = 12;
+const GAME_BUTTON_PAD_Y = 8;
+const GAME_BUTTON_MIN_PAD_X = 8;
+const GAME_BUTTON_MIN_PAD_Y = 6;
 const DEFAULT_GAME_TITLE = "Mazocarta";
 const PREVIEW_GAME_TITLE = "Mazocarta Preview";
 const LOGO_ASSET_PATH = "./mazocarta.svg";
@@ -150,7 +175,17 @@ function isLocalDevHost() {
   );
 }
 
+function isAndroidAppHost() {
+  return (
+    window.location.protocol === "https:" &&
+    window.location.hostname === "appassets.androidplatform.net"
+  );
+}
+
 function resolveInstallCapabilityCode() {
+  if (isAndroidAppHost()) {
+    return 0;
+  }
   if (isStandaloneMode()) {
     return 3;
   }
@@ -164,7 +199,7 @@ function resolveInstallCapabilityCode() {
 }
 
 async function resolveDebugEnabled() {
-  const value = new URLSearchParams(window.location.search).get("debug");
+  const value = SEARCH_PARAMS.get("debug");
   if (value === "1" || value === "true") {
     return true;
   }
@@ -646,20 +681,14 @@ function applyBackdropBlur(x, y, w, h, radius, blurAmount, transform) {
   ctx.restore();
 }
 
-function drawFrame() {
-  if (!wasm) {
-    hidePlayerNameInput();
-    return;
-  }
-
-  syncBootScreenState();
+function renderScene(scene, sceneWidth, sceneHeight) {
   const animationTimeMs = performance.now();
-
-  const ptr = wasm.frame_ptr();
-  const len = wasm.frame_len();
-  const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
-  const scene = decoder.decode(bytes);
-  const transform = viewportTransform();
+  const transform = {
+    scaleX: canvas.width / Math.max(1, sceneWidth),
+    scaleY: canvas.height / Math.max(1, sceneHeight),
+    offsetX: 0,
+    offsetY: 0,
+  };
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -679,7 +708,7 @@ function drawFrame() {
 
     if (opcode === "CLEAR") {
       ctx.fillStyle = parts[1];
-      ctx.fillRect(0, 0, logicalWidth, logicalHeight);
+      ctx.fillRect(0, 0, sceneWidth, sceneHeight);
       continue;
     }
 
@@ -696,8 +725,8 @@ function drawFrame() {
         Number.isFinite(parsedOffsetY) ? parsedOffsetY : 0,
       );
       if (Number.isFinite(parsedScale) && parsedScale !== 1) {
-        const centerX = logicalWidth * 0.5;
-        const centerY = logicalHeight * 0.5;
+        const centerX = sceneWidth * 0.5;
+        const centerY = sceneHeight * 0.5;
         ctx.translate(centerX, centerY);
         ctx.scale(parsedScale, parsedScale);
         ctx.translate(-centerX, -centerY);
@@ -876,7 +905,325 @@ function drawFrame() {
   }
 
   ctx.restore();
-  syncPlayerNameInput();
+}
+
+function drawFrame() {
+  const remoteFrame = multiplayer.currentRemoteFrame();
+  if (!wasm && !remoteFrame) {
+    hidePlayerNameInput();
+    return;
+  }
+
+  if (remoteFrame && !multiplayer.guestRendersLocalState()) {
+    hidePlayerNameInput();
+    renderScene(remoteFrame.scene, remoteFrame.width, remoteFrame.height);
+    const blocking = multiplayer.currentBlockingScreen();
+    if (blocking) {
+      renderMultiplayerBlockingScreen(blocking);
+    }
+    return;
+  }
+
+  syncBootScreenState();
+  const ptr = wasm.frame_ptr();
+  const len = wasm.frame_len();
+  const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
+  const scene = decoder.decode(bytes);
+  renderScene(scene, logicalWidth, logicalHeight);
+  syncRunSaveSnapshot();
+  syncPartySnapshot();
+  const blocking = multiplayer.currentBlockingScreen();
+  if (blocking || multiplayer.isRoomOpen()) {
+    hidePlayerNameInput();
+  } else {
+    syncPlayerNameInput();
+  }
+  if (blocking) {
+    renderMultiplayerBlockingScreen(blocking);
+  }
+  multiplayer.afterLocalRender(scene, {
+    width: logicalWidth,
+    height: logicalHeight,
+  });
+}
+
+function wrapCanvasText(context, text, maxWidth) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return [];
+  }
+  const lines = [];
+  let line = "";
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && context.measureText(candidate).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) {
+    lines.push(line);
+  }
+  return lines;
+}
+
+function lerpNumber(start, end, t) {
+  return start + (end - start) * t;
+}
+
+function parseRgbaColor(color) {
+  const rgbaMatch = String(color || "").match(
+    /^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([0-9.]+)\s*\)$/i,
+  );
+  if (rgbaMatch) {
+    return {
+      r: Number.parseInt(rgbaMatch[1], 10),
+      g: Number.parseInt(rgbaMatch[2], 10),
+      b: Number.parseInt(rgbaMatch[3], 10),
+      a: Number.parseFloat(rgbaMatch[4]),
+    };
+  }
+  const hexMatch = String(color || "").match(/^#([0-9a-f]{6})$/i);
+  if (hexMatch) {
+    return {
+      r: Number.parseInt(hexMatch[1].slice(0, 2), 16),
+      g: Number.parseInt(hexMatch[1].slice(2, 4), 16),
+      b: Number.parseInt(hexMatch[1].slice(4, 6), 16),
+      a: 1,
+    };
+  }
+  return { r: 51, g: 255, b: 102, a: 0.85 };
+}
+
+function rgbaColor({ r, g, b }, alpha) {
+  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha)).toFixed(3)})`;
+}
+
+function drawGameUiTile(rect, { radius = GAME_BUTTON_RADIUS, stroke = GAME_UI_STROKE_PANEL } = {}) {
+  const color = parseRgbaColor(stroke);
+  const strokeColor = rgbaColor(color, color.a + GAME_UI_STROKE_ALPHA_BOOST);
+  const fillColor = rgbaColor(color, GAME_UI_FILL_ALPHA);
+  ctx.save();
+  ctx.fillStyle = fillColor;
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = GAME_UI_STROKE_WIDTH;
+  roundedRectPath(ctx, rect.x, rect.y, rect.width, rect.height, radius);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function primaryButtonPulse() {
+  return 0.55 + 0.45 * Math.abs(Math.sin(performance.now() * 0.0025));
+}
+
+function gameButtonTextBaseline(rect, fontSize) {
+  return rect.y + rect.height * 0.5 + fontSize * 0.32;
+}
+
+function fitGameButtonMetrics(label, maxWidth) {
+  const text = String(label || "");
+  const availableWidth = Math.max(1, maxWidth);
+  for (let step = 0; step <= 24; step += 1) {
+    const t = step / 24;
+    const fontSize = lerpNumber(GAME_BUTTON_FONT_SIZE, GAME_BUTTON_MIN_FONT_SIZE, t);
+    const padX = lerpNumber(GAME_BUTTON_PAD_X, GAME_BUTTON_MIN_PAD_X, t);
+    const padY = lerpNumber(GAME_BUTTON_PAD_Y, GAME_BUTTON_MIN_PAD_Y, t);
+    ctx.save();
+    ctx.font = fontFor("label", fontSize);
+    const width = ctx.measureText(text).width + padX * 2;
+    ctx.restore();
+    const height = fontSize + padY * 2;
+    if (width <= availableWidth || step === 24) {
+      return {
+        width: Math.min(width, availableWidth),
+        height,
+        fontSize,
+        padX,
+        padY,
+      };
+    }
+  }
+  return {
+    width: availableWidth,
+    height: GAME_BUTTON_MIN_FONT_SIZE + GAME_BUTTON_MIN_PAD_Y * 2,
+    fontSize: GAME_BUTTON_MIN_FONT_SIZE,
+    padX: GAME_BUTTON_MIN_PAD_X,
+    padY: GAME_BUTTON_MIN_PAD_Y,
+  };
+}
+
+function drawGamePrimaryButton(label, rect, { hovered = false } = {}) {
+  drawGameUiTile(rect, { radius: GAME_BUTTON_RADIUS, stroke: GAME_UI_STROKE_START });
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.fillStyle = rgbaColor(parseRgbaColor(TERM_GREEN), hovered ? 1 : primaryButtonPulse());
+  ctx.font = fontFor("label", rect.fontSize || GAME_BUTTON_FONT_SIZE);
+  ctx.fillText(
+    String(label || ""),
+    rect.x + rect.width * 0.5,
+    gameButtonTextBaseline(rect, rect.fontSize || GAME_BUTTON_FONT_SIZE),
+  );
+  ctx.restore();
+}
+
+function blockingScreenBannerLayout(screen) {
+  if (screen?.presentation !== "banner") {
+    return null;
+  }
+  const title = screen.title || "Waiting";
+  const subtitle = screen.subtitle || "";
+  const titleFontSize = 24;
+  const subtitleFontSize = 16;
+  const horizontalPad = 24;
+  const topPad = 16;
+  const subtitleGap = subtitle ? 10 : 0;
+  const bottomPad = subtitle ? 16 : 14;
+  const maxWidth = Math.max(220, logicalWidth - 48);
+  ctx.font = fontFor("display", titleFontSize);
+  const titleWidth = ctx.measureText(title).width;
+  ctx.font = fontFor("body", subtitleFontSize);
+  const subtitleLines = wrapCanvasText(ctx, subtitle, maxWidth - horizontalPad * 2);
+  const subtitleWidth = subtitleLines
+    .map((line) => ctx.measureText(line).width)
+    .reduce((max, width) => Math.max(max, width), 0);
+  const width = Math.min(
+    Math.max(titleWidth, subtitleWidth) + horizontalPad * 2,
+    maxWidth,
+  );
+  const subtitleLineHeight = subtitleFontSize + 5;
+  const height =
+    topPad +
+    titleFontSize +
+    (subtitleLines.length ? subtitleGap + subtitleLines.length * subtitleLineHeight : 0) +
+    bottomPad;
+  return {
+    title,
+    subtitleLines,
+    titleFontSize,
+    subtitleFontSize,
+    subtitleGap,
+    subtitleLineHeight,
+    topPad,
+    x: logicalWidth * 0.5 - width * 0.5,
+    y: Math.max(0, logicalHeight * 0.5 - height * 0.5),
+    width,
+    height,
+  };
+}
+
+function blockingScreenBannerRect(screen) {
+  const layout = blockingScreenBannerLayout(screen);
+  return layout
+    ? {
+        x: layout.x,
+        y: layout.y,
+        width: layout.width,
+        height: layout.height,
+      }
+    : null;
+}
+
+function renderMultiplayerBlockingScreen(screen) {
+  if (!screen) {
+    return;
+  }
+  const transform = viewportTransform();
+  const presentation = screen.presentation === "banner" ? "banner" : "fullscreen";
+  ctx.save();
+  ctx.setTransform(
+    transform.scaleX,
+    0,
+    0,
+    transform.scaleY,
+    transform.offsetX,
+    transform.offsetY,
+  );
+  if (presentation === "banner") {
+    const layout = blockingScreenBannerLayout(screen);
+    if (!layout) {
+      ctx.restore();
+      return;
+    }
+    drawGameUiTile(layout, { stroke: GAME_UI_STROKE_PANEL });
+    ctx.textAlign = "center";
+    ctx.fillStyle = TERM_GREEN_SOFT;
+    ctx.font = fontFor("display", layout.titleFontSize);
+    ctx.fillText(
+      layout.title,
+      logicalWidth * 0.5,
+      layout.y + layout.topPad + layout.titleFontSize,
+    );
+    if (layout.subtitleLines.length) {
+      ctx.fillStyle = TERM_INK;
+      ctx.font = fontFor("body", layout.subtitleFontSize);
+      layout.subtitleLines.forEach((line, index) => {
+        ctx.fillText(
+          line,
+          logicalWidth * 0.5,
+          layout.y +
+            layout.topPad +
+            layout.titleFontSize +
+            layout.subtitleGap +
+            layout.subtitleFontSize +
+            index * layout.subtitleLineHeight,
+        );
+      });
+    }
+    ctx.restore();
+    return;
+  }
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, logicalWidth, logicalHeight);
+  ctx.textAlign = "center";
+  const maxTextWidth = Math.max(220, logicalWidth - 56);
+  const titleFontSize = Math.min(34, Math.max(26, logicalWidth * 0.075));
+  const subtitleFontSize = Math.min(18, Math.max(15, logicalWidth * 0.044));
+  const titleY = logicalHeight * 0.4;
+  ctx.fillStyle = TERM_GREEN_SOFT;
+  ctx.font = fontFor("display", titleFontSize);
+  ctx.fillText(screen.title || "Waiting", logicalWidth * 0.5, titleY);
+  ctx.fillStyle = TERM_INK;
+  ctx.font = fontFor("body", subtitleFontSize);
+  const subtitleLines = wrapCanvasText(ctx, screen.subtitle || "", maxTextWidth);
+  const subtitleLineHeight = subtitleFontSize + 6;
+  subtitleLines.forEach((line, index) => {
+    ctx.fillText(line, logicalWidth * 0.5, logicalHeight * 0.49 + index * subtitleLineHeight);
+  });
+  const actionRect = blockingScreenActionRect(screen);
+  if (actionRect) {
+    drawGamePrimaryButton(screen.actionLabel, actionRect);
+  }
+  ctx.restore();
+}
+
+function blockingScreenActionRect(screen) {
+  if (!screen?.actionLabel) {
+    return null;
+  }
+  const horizontalMargin = logicalWidth >= 240 ? 48 : 16;
+  const maxWidth = Math.max(1, logicalWidth - horizontalMargin * 2);
+  const metrics = fitGameButtonMetrics(screen.actionLabel, maxWidth);
+  return {
+    x: logicalWidth * 0.5 - metrics.width * 0.5,
+    y: logicalHeight * 0.62,
+    width: metrics.width,
+    height: metrics.height,
+    fontSize: metrics.fontSize,
+  };
+}
+
+function pointInRect(point, rect) {
+  return (
+    !!point &&
+    !!rect &&
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.height
+  );
 }
 
 function toCanvasPoint(event) {
@@ -884,6 +1231,14 @@ function toCanvasPoint(event) {
   return {
     x: (event.clientX - rect.left) * (logicalWidth / rect.width),
     y: (event.clientY - rect.top) * (logicalHeight / rect.height),
+  };
+}
+
+function normalizedCanvasPoint(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    xNorm: rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0,
+    yNorm: rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0,
   };
 }
 
@@ -935,6 +1290,11 @@ function clearStoredRun() {
   try {
     window.localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
   } catch {}
+  lastRunSaveRaw = null;
+  lastPartySnapshot = null;
+  lastRunSummary = null;
+  multiplayer.setLocalPartySnapshot(null);
+  multiplayer.setLocalSummary(null);
 }
 
 function readStoredLanguage() {
@@ -1141,6 +1501,565 @@ function handlePlayerNameEditingKey(event) {
   return false;
 }
 
+function parsePartySnapshot(raw) {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(error);
+  }
+
+  return null;
+}
+
+function summarizePartySnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+  const slots = Array.isArray(snapshot.slots) ? snapshot.slots : null;
+  if (!slots?.length) {
+    return null;
+  }
+  const localSlotIndex = Number.isInteger(snapshot.local_slot) ? snapshot.local_slot : 0;
+  const localSlot =
+    slots.find((slot) => Number.isInteger(slot?.slot) && slot.slot === localSlotIndex) ||
+    slots[localSlotIndex];
+  if (!localSlot || !localSlot.in_combat) {
+    return null;
+  }
+  return {
+    inCombat: true,
+    hp: Number.isFinite(localSlot.hp) ? localSlot.hp : 0,
+    maxHp: Number.isFinite(localSlot.max_hp) ? localSlot.max_hp : 0,
+    block: Number.isFinite(localSlot.block) ? localSlot.block : 0,
+  };
+}
+
+function syncRemotePartySlotToHost(slot, update) {
+  if (
+    !wasm ||
+    typeof wasm.prepare_party_slot_name_buffer !== "function" ||
+    typeof wasm.app_sync_remote_party_slot_from_buffer !== "function"
+  ) {
+    return false;
+  }
+
+  const name = typeof update?.name === "string" ? update.name : "";
+  const bytes = encoder.encode(name);
+  const ptr = wasm.prepare_party_slot_name_buffer(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  const updated = wasm.app_sync_remote_party_slot_from_buffer(
+    slot,
+    update?.connected ? 1 : 0,
+    update?.ready ? 1 : 0,
+    update?.inRun ? 1 : 0,
+    update?.inCombat ? 1 : 0,
+    update?.alive !== false ? 1 : 0,
+    Number.isFinite(update?.hp) ? Math.round(update.hp) : 0,
+    Number.isFinite(update?.maxHp) ? Math.round(update.maxHp) : 0,
+    Number.isFinite(update?.block) ? Math.round(update.block) : 0,
+    bytes.length,
+  );
+  syncPartySnapshot();
+  syncRunSaveSnapshot();
+  return !!updated;
+}
+
+function disconnectRemotePartySlotOnHost(slot) {
+  if (!wasm || typeof wasm.app_disconnect_remote_party_slot !== "function") {
+    return false;
+  }
+  const updated = wasm.app_disconnect_remote_party_slot(slot);
+  syncPartySnapshot();
+  syncRunSaveSnapshot();
+  return !!updated;
+}
+
+function clearRemotePartySlotOnHost(slot) {
+  if (!wasm || typeof wasm.app_clear_remote_party_slot !== "function") {
+    return false;
+  }
+  const updated = wasm.app_clear_remote_party_slot(slot);
+  syncPartySnapshot();
+  syncRunSaveSnapshot();
+  return !!updated;
+}
+
+function syncPartySnapshot() {
+  if (
+    !wasm ||
+    typeof wasm.party_snapshot_generation !== "function" ||
+    typeof wasm.party_snapshot_len !== "function" ||
+    typeof wasm.party_snapshot_ptr !== "function"
+  ) {
+    return false;
+  }
+
+  const generation = wasm.party_snapshot_generation();
+  if (generation === lastPartySnapshotGeneration) {
+    return false;
+  }
+  lastPartySnapshotGeneration = generation;
+
+  const len = wasm.party_snapshot_len();
+  if (!len) {
+    lastPartySnapshot = null;
+    lastRunSummary = null;
+    multiplayer.setLocalPartySnapshot(null);
+    multiplayer.setLocalSummary(null);
+    return true;
+  }
+
+  const ptr = wasm.party_snapshot_ptr();
+  const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
+  const raw = decoder.decode(bytes.slice());
+  lastPartySnapshot = parsePartySnapshot(raw);
+  lastRunSummary = summarizePartySnapshot(lastPartySnapshot);
+  multiplayer.setLocalSummary(lastRunSummary);
+  multiplayer.setLocalPartySnapshot(lastPartySnapshot);
+
+  try {
+    const payload = lastPartySnapshot;
+    if (Number.isFinite(payload?.configured_party_size)) {
+      multiplayer.setConfiguredPartySize(payload.configured_party_size);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+
+  return true;
+}
+
+const multiplayer = createMultiplayerController({
+  getLocalName: () => readAppPlayerName() || readStoredPlayerName() || "Player",
+  getLocalRunSnapshot: () => lastRunSaveRaw || readStoredRun(),
+  getLocalRunSnapshotVersion: () => lastRunSaveGeneration,
+  applyGuestRunSnapshot: (raw, slot) => restoreGuestRunSnapshot(raw, slot),
+  encodePairPayload: (payload) => encodePairPayloadRust(payload),
+  buildPairTransportFrames: (raw, chunkChars) =>
+    buildPairTransportFramesRust(raw, chunkChars),
+  resetPairTransportAssembly: () => resetPairTransportAssemblyRust(),
+  consumePairTransportText: (raw) => consumePairTransportTextRust(raw),
+  requestScannerStream: () => e2eSupport?.createFakeScannerStream?.() ?? null,
+  rejectGuestCombatAction: (raw, slot) => {
+    if (
+      wasm &&
+      typeof wasm.app_clear_local_multiplayer_pending_combat_action === "function"
+    ) {
+      wasm.app_clear_local_multiplayer_pending_combat_action();
+    }
+    return restoreGuestRunSnapshot(raw, slot);
+  },
+  startHostRun: () => {
+    if (!wasm || typeof wasm.app_start_multiplayer_run !== "function") {
+      return false;
+    }
+    const started = !!wasm.app_start_multiplayer_run();
+    syncRunSaveSnapshot();
+    syncPartySnapshot();
+    return started;
+  },
+  resumeHostRun: () => {
+    if (!wasm || typeof wasm.app_resume_multiplayer_run !== "function") {
+      return false;
+    }
+    const resumed = !!wasm.app_resume_multiplayer_run();
+    syncRunSaveSnapshot();
+    syncPartySnapshot();
+    return resumed;
+  },
+  hasSavedRun: () => !!(lastRunSaveRaw || readStoredRun()),
+  restoreSavedRun: () => {
+    const raw = lastRunSaveRaw || readStoredRun();
+    if (typeof raw !== "string" || !raw.length) {
+      return false;
+    }
+    const restored = restoreRunSnapshotRaw(raw);
+    if (restored) {
+      drawFrame();
+    }
+    return restored;
+  },
+  returnToMenu: () => {
+    if (!wasm || typeof wasm.app_return_to_menu !== "function") {
+      return false;
+    }
+    const returned = !!wasm.app_return_to_menu();
+    syncRunSaveSnapshot();
+    syncPartySnapshot();
+    drawFrame();
+    return returned;
+  },
+  getConfiguredPartySize: () =>
+    !!(wasm && typeof wasm.app_party_size === "function") ? wasm.app_party_size() : 2,
+  setConfiguredPartySize: (size) => {
+    if (wasm && typeof wasm.app_set_party_size === "function") {
+      wasm.app_set_party_size(size);
+    }
+  },
+  syncHostPartySlot: (slot, update) => syncRemotePartySlotToHost(slot, update),
+  disconnectHostPartySlot: (slot) => disconnectRemotePartySlotOnHost(slot),
+  clearHostPartySlot: (slot) => clearRemotePartySlotOnHost(slot),
+  isBootScreen: () =>
+    !!(wasm && typeof wasm.app_is_boot_screen === "function" && wasm.app_is_boot_screen()),
+  requestRender: () => drawFrame(),
+  mapGuestPointerInput: (kind, normalizedPoint) => {
+    if (!wasm || !lastPartySnapshot) {
+      return null;
+    }
+    const x =
+      Number.isFinite(normalizedPoint?.xNorm) && Number.isFinite(logicalWidth)
+        ? normalizedPoint.xNorm * logicalWidth
+        : 0;
+    const y =
+      Number.isFinite(normalizedPoint?.yNorm) && Number.isFinite(logicalHeight)
+        ? normalizedPoint.yNorm * logicalHeight
+        : 0;
+    if (kind !== "pointer_down") {
+      return null;
+    }
+    if (
+      (lastPartySnapshot.screen === "map" || lastPartySnapshot.screen === "combat") &&
+      typeof wasm.app_menu_button_hit_at_point === "function" &&
+      wasm.app_menu_button_hit_at_point(x, y)
+    ) {
+      return { kind: "local_pointer" };
+    }
+    if (
+      (lastPartySnapshot.screen === "opening_intro" || lastPartySnapshot.screen === "level_intro") &&
+      typeof wasm.app_continue_button_hit_at_point === "function" &&
+      wasm.app_continue_button_hit_at_point(x, y)
+    ) {
+      return {
+        kind:
+          lastPartySnapshot.screen === "opening_intro"
+            ? "opening_intro_action"
+            : "level_intro_action",
+      };
+    }
+    if (
+      lastPartySnapshot.screen === "module_select" &&
+      typeof wasm.app_module_select_card_index_at_point === "function"
+    ) {
+      const index = wasm.app_module_select_card_index_at_point(x, y);
+      if (Number.isInteger(index) && index >= 0) {
+        return {
+          kind: "module_select",
+          index,
+        };
+      }
+    }
+    if (lastPartySnapshot.screen === "reward") {
+      if (
+        typeof wasm.app_reward_skip_hit_at_point === "function" &&
+        wasm.app_reward_skip_hit_at_point(x, y)
+      ) {
+        return {
+          kind: "reward_skip",
+        };
+      }
+      if (typeof wasm.app_reward_card_index_at_point === "function") {
+        const index = wasm.app_reward_card_index_at_point(x, y);
+        if (Number.isInteger(index) && index >= 0) {
+          return {
+            kind: "reward_select",
+            index,
+          };
+        }
+      }
+    }
+    if (
+      lastPartySnapshot.screen === "event" &&
+      typeof wasm.app_event_choice_index_at_point === "function"
+    ) {
+      const index = wasm.app_event_choice_index_at_point(x, y);
+      if (Number.isInteger(index) && index >= 0) {
+        return {
+          kind: "event_choice",
+          index,
+        };
+      }
+    }
+    if (
+      lastPartySnapshot.screen === "combat" &&
+      typeof wasm.app_handle_local_multiplayer_combat_pointer_down === "function"
+    ) {
+      const actionCode = wasm.app_handle_local_multiplayer_combat_pointer_down(x, y);
+      drawFrame();
+      if (Number.isInteger(actionCode) && actionCode > 0) {
+        return {
+          kind: "combat_action",
+          actionCode,
+        };
+      }
+    }
+    return null;
+  },
+  mapGuestKeyInput: (keyCode) => {
+    if (!wasm || !lastPartySnapshot) {
+      return null;
+    }
+    if (lastPartySnapshot.screen === "reward") {
+      if (keyCode === 48) {
+        return { kind: "reward_skip" };
+      }
+      if (keyCode >= 49 && keyCode <= 57) {
+        const index = keyCode - 49;
+        return { kind: "reward_select", index };
+      }
+      return null;
+    }
+    if (lastPartySnapshot.screen === "event") {
+      if (keyCode >= 49 && keyCode <= 57) {
+        const index = keyCode - 49;
+        return { kind: "event_choice", index };
+      }
+      return null;
+    }
+    if (
+      lastPartySnapshot.screen !== "combat" ||
+      typeof wasm.app_handle_local_multiplayer_combat_key !== "function"
+    ) {
+      return null;
+    }
+    const actionCode = wasm.app_handle_local_multiplayer_combat_key(keyCode);
+    drawFrame();
+    if (Number.isInteger(actionCode) && actionCode > 0) {
+      return {
+        kind: "combat_action",
+        actionCode,
+      };
+    }
+    return null;
+  },
+  applyHostInput: (payload) => {
+    if (!wasm) {
+      return false;
+    }
+
+    mixEntropy();
+    const slot = Number.isInteger(payload?.slot) ? payload.slot : null;
+    if (
+      payload.kind === "combat_action" &&
+      slot !== null &&
+      Number.isInteger(payload.actionCode) &&
+      typeof wasm.app_apply_multiplayer_combat_action_code === "function"
+    ) {
+      const applied =
+        wasm.app_apply_multiplayer_combat_action_code(slot, payload.actionCode >>> 0) !== 0;
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return applied;
+    }
+    const beginScopedInput =
+      slot !== null &&
+      typeof wasm.app_begin_remote_input_slot === "function" &&
+      typeof wasm.app_end_remote_input_slot === "function";
+    if (beginScopedInput) {
+      wasm.app_begin_remote_input_slot(slot);
+    }
+    const x =
+      Number.isFinite(payload.xNorm) && Number.isFinite(logicalWidth)
+        ? payload.xNorm * logicalWidth
+        : 0;
+    const y =
+      Number.isFinite(payload.yNorm) && Number.isFinite(logicalHeight)
+        ? payload.yNorm * logicalHeight
+        : 0;
+
+    if (payload.kind === "pointer_move") {
+      wasm.pointer_move(x, y);
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      return true;
+    }
+    if (payload.kind === "pointer_down") {
+      wasm.pointer_down(x, y);
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "pointer_up") {
+      wasm.pointer_up(x, y);
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "opening_intro_action") {
+      if (typeof wasm.app_finish_opening_intro === "function") {
+        wasm.app_finish_opening_intro();
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "level_intro_action") {
+      if (typeof wasm.app_continue_level_intro === "function") {
+        wasm.app_continue_level_intro();
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "module_select" && Number.isFinite(payload.index)) {
+      if (typeof wasm.app_claim_module_select === "function") {
+        wasm.app_claim_module_select(Math.max(0, Math.round(payload.index)));
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "reward_select" && Number.isFinite(payload.index)) {
+      if (typeof wasm.app_claim_reward === "function") {
+        wasm.app_claim_reward(Math.max(0, Math.round(payload.index)));
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "reward_skip") {
+      if (typeof wasm.app_skip_reward === "function") {
+        wasm.app_skip_reward();
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "event_choice" && Number.isFinite(payload.index)) {
+      if (typeof wasm.app_claim_event_choice === "function") {
+        wasm.app_claim_event_choice(Math.max(0, Math.round(payload.index)));
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return;
+    }
+    if (payload.kind === "rest_heal") {
+      if (typeof wasm.app_claim_rest_heal === "function") {
+        wasm.app_claim_rest_heal();
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "rest_upgrade" && Number.isFinite(payload.index)) {
+      if (typeof wasm.app_claim_rest_upgrade === "function") {
+        wasm.app_claim_rest_upgrade(Math.max(0, Math.round(payload.index)));
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "shop_buy" && Number.isFinite(payload.index)) {
+      if (typeof wasm.app_claim_shop_offer === "function") {
+        wasm.app_claim_shop_offer(Math.max(0, Math.round(payload.index)));
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "shop_leave") {
+      if (typeof wasm.app_leave_shop === "function") {
+        wasm.app_leave_shop();
+      }
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (payload.kind === "key_down" && Number.isFinite(payload.keyCode)) {
+      wasm.key_down(payload.keyCode);
+      if (beginScopedInput) {
+        wasm.app_end_remote_input_slot();
+      }
+      drawFrame();
+      void flushHostEffects({ allowPrivilegedAction: false });
+      return true;
+    }
+    if (beginScopedInput) {
+      wasm.app_end_remote_input_slot();
+    }
+    return false;
+  },
+});
+
+if (E2E_MODE) {
+  window.__MAZOCARTA_E2E__ = {
+    async waitReady() {
+      const support = await e2eSupportPromise;
+      return support?.waitReady?.();
+    },
+    isReady() {
+      return false;
+    },
+  };
+  e2eSupportPromise = import("./e2e-harness.js").then(({ installE2EHarness }) => {
+    e2eSupport = installE2EHarness({
+      fixtureName: SEARCH_PARAMS.get("fixture") || "",
+      multiplayer,
+      getWasm: () => wasm,
+      getLogicalSize: () => ({ width: logicalWidth, height: logicalHeight }),
+      getRunSnapshotRaw: () => lastRunSaveRaw,
+      getPartySnapshot: () => lastPartySnapshot,
+      getRunSaveGeneration: () => lastRunSaveGeneration,
+      resetSnapshotGenerations: () => {
+        lastRunSaveGeneration = -1;
+        lastPartySnapshotGeneration = -1;
+      },
+      getBlockingScreenActionRect: () =>
+        blockingScreenActionRect(multiplayer.currentBlockingScreen()),
+      getBlockingScreenBannerRect: () =>
+        blockingScreenBannerRect(multiplayer.currentBlockingScreen()),
+      syncRunSaveSnapshot,
+      syncPartySnapshot,
+      drawFrame,
+      flushHostEffects,
+      restoreRunSnapshotRaw,
+      writeStoredRun,
+    });
+    return e2eSupport;
+  });
+}
+
 function syncStoredRunAvailability() {
   if (!wasm || typeof wasm.app_set_saved_run_available !== "function") {
     return;
@@ -1232,6 +2151,7 @@ function syncRunSaveSnapshot() {
 
   const len = wasm.run_save_len();
   if (!len) {
+    lastRunSaveRaw = null;
     clearStoredRun();
     syncStoredRunAvailability();
     return true;
@@ -1240,7 +2160,9 @@ function syncRunSaveSnapshot() {
   const ptr = wasm.run_save_ptr();
   const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
   const raw = decoder.decode(bytes.slice());
+  lastRunSaveRaw = raw;
   if (!writeStoredRun(raw)) {
+    lastRunSaveRaw = null;
     clearStoredRun();
     if (typeof wasm.app_set_saved_run_available === "function") {
       wasm.app_set_saved_run_available(0);
@@ -1249,7 +2171,203 @@ function syncRunSaveSnapshot() {
   }
 
   syncStoredRunAvailability();
+  if (
+    multiplayer &&
+    typeof multiplayer.notifyLocalRunSnapshotChanged === "function"
+  ) {
+    multiplayer.notifyLocalRunSnapshotChanged();
+  }
   return true;
+}
+
+function rewriteSnapshotForGuest(raw, slot) {
+  try {
+    const payload = JSON.parse(raw);
+    if (payload?.party && Number.isInteger(slot)) {
+      payload.party.local_slot = slot;
+      if (Array.isArray(payload.party.slots)) {
+        payload.party.slots.forEach((slotState, index) => {
+          if (!slotState || typeof slotState !== "object") {
+            return;
+          }
+          if (index === slot) {
+            slotState.claim = "local";
+            slotState.connected = true;
+          } else if (slotState.claim === "local") {
+            slotState.claim = "remote";
+          }
+        });
+      }
+    }
+    return JSON.stringify(payload);
+  } catch (error) {
+    console.error(error);
+    return raw;
+  }
+}
+
+function restoreRunSnapshotRaw(raw, { useMultiplayerRestore = false } = {}) {
+  if (
+    !wasm ||
+    typeof wasm.prepare_restore_buffer !== "function" ||
+    typeof wasm.app_restore_from_buffer !== "function"
+  ) {
+    return false;
+  }
+
+  const bytes = encoder.encode(raw);
+  const ptr = wasm.prepare_restore_buffer(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  const restored =
+    useMultiplayerRestore && typeof wasm.app_apply_multiplayer_snapshot_from_buffer === "function"
+      ? wasm.app_apply_multiplayer_snapshot_from_buffer(bytes.length)
+      : wasm.app_restore_from_buffer(bytes.length);
+  if (restored) {
+    syncRunSaveSnapshot();
+    syncPartySnapshot();
+  }
+  return !!restored;
+}
+
+function restoreGuestRunSnapshot(raw, slot) {
+  if (typeof raw !== "string" || !raw.length) {
+    return false;
+  }
+  return restoreRunSnapshotRaw(rewriteSnapshotForGuest(raw, slot), {
+    useMultiplayerRestore: true,
+  });
+}
+
+function writePairingBuffer(raw) {
+  if (!wasm || typeof wasm.prepare_pairing_buffer !== "function") {
+    return -1;
+  }
+  const bytes = encoder.encode(String(raw ?? ""));
+  const ptr = wasm.prepare_pairing_buffer(bytes.length);
+  new Uint8Array(wasm.memory.buffer, ptr, bytes.length).set(bytes);
+  return bytes.length;
+}
+
+function readWasmUtf8Buffer(ptr, len) {
+  if (!wasm || !Number.isInteger(len) || len < 0 || !Number.isInteger(ptr) || ptr < 0) {
+    return "";
+  }
+  return decoder.decode(new Uint8Array(wasm.memory.buffer, ptr, len).slice());
+}
+
+function readPairingOutput() {
+  if (
+    !wasm ||
+    typeof wasm.pairing_output_ptr !== "function" ||
+    typeof wasm.pairing_output_len !== "function"
+  ) {
+    return "";
+  }
+  return readWasmUtf8Buffer(wasm.pairing_output_ptr(), wasm.pairing_output_len());
+}
+
+function readPairingDecodedPayload() {
+  if (
+    !wasm ||
+    typeof wasm.pairing_decoded_payload_ptr !== "function" ||
+    typeof wasm.pairing_decoded_payload_len !== "function"
+  ) {
+    return "";
+  }
+  return readWasmUtf8Buffer(
+    wasm.pairing_decoded_payload_ptr(),
+    wasm.pairing_decoded_payload_len(),
+  );
+}
+
+function encodePairPayloadRust(payload) {
+  if (
+    !wasm ||
+    typeof wasm.pairing_encode_payload_from_buffer !== "function"
+  ) {
+    return null;
+  }
+  const len = writePairingBuffer(JSON.stringify(payload));
+  if (len < 0 || !wasm.pairing_encode_payload_from_buffer(len)) {
+    return null;
+  }
+  return readPairingOutput();
+}
+
+function buildPairTransportFramesRust(raw, chunkChars = 96) {
+  if (
+    !wasm ||
+    typeof wasm.pairing_build_transport_frames_from_buffer !== "function" ||
+    typeof wasm.pairing_transport_frame_count !== "function" ||
+    typeof wasm.pairing_export_transport_frame !== "function"
+  ) {
+    return null;
+  }
+  const len = writePairingBuffer(raw);
+  if (len < 0) {
+    return null;
+  }
+  const count = wasm.pairing_build_transport_frames_from_buffer(
+    len,
+    Math.max(1, Math.round(chunkChars)),
+  );
+  if (!Number.isInteger(count) || count <= 0) {
+    return [];
+  }
+  const frames = [];
+  for (let index = 0; index < count; index += 1) {
+    if (!wasm.pairing_export_transport_frame(index)) {
+      return null;
+    }
+    frames.push(readPairingOutput());
+  }
+  return frames;
+}
+
+function resetPairTransportAssemblyRust() {
+  if (
+    wasm &&
+    typeof wasm.pairing_reset_transport_assembly === "function"
+  ) {
+    wasm.pairing_reset_transport_assembly();
+  }
+}
+
+function consumePairTransportTextRust(raw) {
+  if (
+    !wasm ||
+    typeof wasm.pairing_submit_transport_text_from_buffer !== "function"
+  ) {
+    return null;
+  }
+  const len = writePairingBuffer(raw);
+  if (len < 0) {
+    return null;
+  }
+  const status = wasm.pairing_submit_transport_text_from_buffer(len);
+  if (status === 0) {
+    throw new Error("Invalid pairing code.");
+  }
+  if (status === 2) {
+    return {
+      status: "partial",
+      received:
+        typeof wasm.pairing_transport_received_parts === "function"
+          ? wasm.pairing_transport_received_parts()
+          : 0,
+      total:
+        typeof wasm.pairing_transport_total_parts === "function"
+          ? wasm.pairing_transport_total_parts()
+          : 0,
+    };
+  }
+  const fullCode = readPairingOutput();
+  const decodedPayloadRaw = readPairingDecodedPayload();
+  return {
+    status: "complete",
+    fullCode,
+    payload: decodedPayloadRaw ? JSON.parse(decodedPayloadRaw) : null,
+  };
 }
 
 function syncStoredLanguage() {
@@ -1551,6 +2669,24 @@ function flushResumeRequest() {
   return true;
 }
 
+async function flushMultiplayerRequest() {
+  if (
+    !wasm ||
+    typeof wasm.multiplayer_request_pending !== "function" ||
+    typeof wasm.clear_multiplayer_request !== "function"
+  ) {
+    return false;
+  }
+
+  if (!wasm.multiplayer_request_pending()) {
+    return false;
+  }
+
+  wasm.clear_multiplayer_request();
+  await multiplayer.openEntryFlow();
+  return true;
+}
+
 async function flushHostEffects(options = { allowPrivilegedAction: false }) {
   const installHandled = await flushInstallRequest(options);
   const updateHandled = await flushUpdateRequest(options);
@@ -1559,7 +2695,8 @@ async function flushHostEffects(options = { allowPrivilegedAction: false }) {
   syncStoredPlayerName();
   syncRunSaveSnapshot();
   const resumed = flushResumeRequest();
-  if (installHandled || updateHandled || resumed) {
+  const multiplayerOpened = await flushMultiplayerRequest();
+  if (installHandled || updateHandled || resumed || multiplayerOpened) {
     drawFrame();
   }
   await flushShareRequest();
@@ -1818,6 +2955,14 @@ function onPointerMove(event) {
   if (!wasm) {
     return;
   }
+  if (multiplayer.shouldBlockGameplayInput()) {
+    hidePlayerNameInput();
+    return;
+  }
+  if (multiplayer.handleGuestPointerMove(normalizedCanvasPoint(event))) {
+    hidePlayerNameInput();
+    return;
+  }
   if (event.pointerType === "touch") {
     clearHover();
     hideTypingPointerOverlay();
@@ -1840,6 +2985,35 @@ function onPointerDown(event) {
     return;
   }
   event.preventDefault();
+  if (multiplayer.isRoomOpen()) {
+    hidePlayerNameInput();
+    return;
+  }
+  const normalizedPoint = normalizedCanvasPoint(event);
+  const blocking = multiplayer.currentBlockingScreen();
+  if (blocking) {
+    const point = toCanvasPoint(event);
+    if (pointInRect(point, blockingScreenActionRect(blocking)) && blocking.action) {
+      multiplayer.activateBlockingAction?.(blocking.action);
+    }
+    if (blocking.presentation !== "banner") {
+      hidePlayerNameInput();
+      return;
+    }
+    if (multiplayer.handleGuestPointerDown(normalizedPoint)) {
+      if (playerNameEditingActive) {
+        setPlayerNameEditingActive(false);
+      }
+      hidePlayerNameInput();
+      return;
+    }
+  } else if (multiplayer.handleGuestPointerDown(normalizedPoint)) {
+    if (playerNameEditingActive) {
+      setPlayerNameEditingActive(false);
+    }
+    hidePlayerNameInput();
+    return;
+  }
   mixEntropy();
   const point = toCanvasPoint(event);
   if (event.pointerType === "touch") {
@@ -1874,6 +3048,14 @@ function onPointerDown(event) {
 
 function onPointerUp(event) {
   if (!wasm) {
+    return;
+  }
+  if (multiplayer.shouldBlockGameplayInput()) {
+    hidePlayerNameInput();
+    return;
+  }
+  if (multiplayer.handleGuestPointerUp(normalizedCanvasPoint(event))) {
+    hidePlayerNameInput();
     return;
   }
   if (event.pointerType === "mouse") {
@@ -1943,14 +3125,32 @@ function keyCodeFor(event) {
   return null;
 }
 
+function activeElementAcceptsTextInput() {
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLInputElement ||
+    active instanceof HTMLTextAreaElement ||
+    active instanceof HTMLSelectElement
+  ) {
+    return true;
+  }
+  return !!active?.isContentEditable;
+}
+
 function onKeyDown(event) {
   if (!wasm) {
+    return;
+  }
+  if (multiplayer.shouldBlockGameplayInput() && !activeElementAcceptsTextInput()) {
+    return;
+  }
+  if (event.ctrlKey || event.metaKey || event.altKey) {
     return;
   }
   if (handlePlayerNameEditingKey(event)) {
     return;
   }
-  if (document.activeElement === playerNameInput) {
+  if (document.activeElement === playerNameInput || activeElementAcceptsTextInput()) {
     return;
   }
   const code = keyCodeFor(event);
@@ -1958,6 +3158,10 @@ function onKeyDown(event) {
     return;
   }
   event.preventDefault();
+  if (multiplayer.handleGuestKeyDown(code)) {
+    hidePlayerNameInput();
+    return;
+  }
   mixEntropy();
   wasm.key_down(code);
   drawFrame();
@@ -2016,6 +3220,26 @@ function onPlayerNameInputBlur(event) {
 
 async function registerServiceWorker() {
   if (!("serviceWorker" in window.navigator)) {
+    return;
+  }
+
+  if (isAndroidAppHost()) {
+    try {
+      const registrations = await window.navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    } catch (error) {
+      console.error(error);
+    }
+    return;
+  }
+
+  if (E2E_MODE) {
+    try {
+      const registrations = await window.navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    } catch (error) {
+      console.error(error);
+    }
     return;
   }
 
@@ -2110,10 +3334,15 @@ async function loadWasm() {
         : 0;
     lastPlayerNameGeneration =
       typeof wasm.app_player_name_generation === "function" ? wasm.app_player_name_generation() : 0;
-    lastRunSaveGeneration =
-      typeof wasm.run_save_generation === "function" ? wasm.run_save_generation() : 0;
+    lastRunSaveGeneration = Number.NaN;
+    lastPartySnapshotGeneration = Number.NaN;
+    syncRunSaveSnapshot();
+    syncPartySnapshot();
+    const support = await e2eSupportPromise;
+    await support?.maybeLoadFixture?.();
     document.title = GAME_TITLE;
     drawFrame();
+    support?.markReady?.();
 
     const loop = (timestamp) => {
       if (!lastFrameTime) {
@@ -2121,15 +3350,22 @@ async function loadWasm() {
       }
       const dt = timestamp - lastFrameTime;
       lastFrameTime = timestamp;
-      wasm.app_tick(dt);
-      drawFrame();
-      rafId = window.requestAnimationFrame(loop);
+      try {
+        wasm.app_tick(dt);
+        drawFrame();
+        e2eSupport?.incrementFrameCounter?.();
+      } catch (error) {
+        console.error(error);
+      } finally {
+        rafId = window.requestAnimationFrame(loop);
+      }
     };
 
     rafId = window.requestAnimationFrame(loop);
   } catch (error) {
     document.title = GAME_TITLE;
     console.error(error);
+    e2eSupport?.failReady?.(error);
   }
 }
 
@@ -2178,6 +3414,7 @@ window.addEventListener("pageshow", () => {
   drawFrame();
 });
 window.addEventListener("beforeunload", () => {
+  void multiplayer.destroy();
   syncStoredLanguage();
   syncStoredBackgroundMode();
   syncStoredPlayerName();

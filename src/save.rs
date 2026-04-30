@@ -6,11 +6,11 @@ use crate::content::{
     CardId, EnemyProfileId, EventId, ModuleId, RewardTier, card_slug, resolve_card_slug,
 };
 use crate::dungeon::RoomKind;
+use crate::session::PartySessionSnapshot;
 
-// Save v3 replaces the serialized combat status fields with
-// Focus/Rhythm/Momentum, so older snapshots are intentionally rejected by the
-// exact-version restore policy.
-pub(crate) const SAVE_FORMAT_VERSION: u32 = 3;
+// Save v4 adds multiplayer party metadata and party-state snapshots. Older
+// snapshots are intentionally rejected by the exact-version restore policy.
+pub(crate) const SAVE_FORMAT_VERSION: u32 = 4;
 const CURRENT_GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 
@@ -18,6 +18,7 @@ const DEFAULT_REPLACEMENT_CARD: CardId = CardId::FlareSlash;
 pub(crate) struct RunSaveEnvelope {
     pub(crate) save_format_version: u32,
     pub(crate) game_version: String,
+    pub(crate) party: PartySessionSnapshot,
     pub(crate) active_state: SavedRunState,
     pub(crate) fallback_checkpoint: SavedCheckpoint,
     pub(crate) log: Vec<String>,
@@ -25,6 +26,7 @@ pub(crate) struct RunSaveEnvelope {
 
 impl RunSaveEnvelope {
     pub(crate) fn new(
+        party: PartySessionSnapshot,
         active_state: SavedRunState,
         fallback_checkpoint: SavedCheckpoint,
         log: Vec<String>,
@@ -32,6 +34,7 @@ impl RunSaveEnvelope {
         Self {
             save_format_version: SAVE_FORMAT_VERSION,
             game_version: CURRENT_GAME_VERSION.to_string(),
+            party,
             active_state,
             fallback_checkpoint,
             log,
@@ -44,6 +47,9 @@ impl RunSaveEnvelope {
 pub(crate) enum SavedRunState {
     Map {
         dungeon: SavedDungeonRun,
+    },
+    Party {
+        party_state: SavedPartyState,
     },
     ModuleSelect {
         dungeon: SavedDungeonRun,
@@ -78,6 +84,9 @@ pub(crate) enum SavedRunState {
 pub(crate) enum SavedCheckpoint {
     Map {
         dungeon: SavedDungeonRun,
+    },
+    Party {
+        party_state: SavedPartyState,
     },
     ModuleSelect {
         dungeon: SavedDungeonRun,
@@ -117,17 +126,9 @@ pub(crate) struct SavedDungeonRun {
     pub(crate) available_nodes: Vec<usize>,
     pub(crate) visited_nodes: Vec<usize>,
     pub(crate) deck: Vec<String>,
-    // MIGRATION(save v3): Supports early v3 map saves and checkpoints produced
-    // before dungeon modules were serialized. Missing `modules` restores as
-    // the default starter module. Remove when minimum supported save format > 3.
-    #[serde(default)]
-    pub(crate) modules: Option<Vec<String>>,
+    pub(crate) modules: Vec<String>,
     pub(crate) player_hp: i32,
     pub(crate) player_max_hp: i32,
-    // MIGRATION(save v3): Supports early v3 map saves and checkpoints produced
-    // before credits were serialized. Missing `credits` restores as 0.
-    // Remove when minimum supported save format > 3.
-    #[serde(default)]
     pub(crate) credits: u32,
     pub(crate) combats_cleared: usize,
     pub(crate) elites_cleared: usize,
@@ -156,18 +157,7 @@ pub(crate) struct SavedRewardState {
 pub(crate) struct SavedModuleSelectState {
     pub(crate) options: Vec<String>,
     pub(crate) seed: u64,
-    // MIGRATION(save v3): Supports early v3 module-select saves produced
-    // before module-select context was serialized. Missing `kind` restores as
-    // the starter module-select context. Remove when minimum supported
-    // save format > 3.
-    #[serde(default)]
-    pub(crate) kind: Option<String>,
-    // MIGRATION(save v3): Supports early v3 boss module-select saves produced
-    // before boss reward level was serialized. Missing `boss_level`
-    // deserializes as `None`; fallback restore uses boss level 1, while exact
-    // restore still errors if a boss reward requires it. Remove when minimum
-    // supported save format > 3.
-    #[serde(default)]
+    pub(crate) kind: String,
     pub(crate) boss_level: Option<usize>,
 }
 
@@ -247,6 +237,25 @@ pub(crate) struct SavedEncounterEnemyState {
     pub(crate) profile: String,
     pub(crate) intent_index: usize,
     pub(crate) on_hit_bleed: u8,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SavedRestState {
+    pub(crate) heal_amount: i32,
+    pub(crate) upgrade_options: Vec<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SavedPartyState {
+    pub(crate) screen: String,
+    pub(crate) dungeons: Vec<SavedDungeonRun>,
+    pub(crate) combats: Option<Vec<SavedCombatState>>,
+    pub(crate) rest_slots: Option<Vec<Option<SavedRestState>>>,
+    pub(crate) shop_slots: Option<Vec<Option<SavedShopState>>>,
+    pub(crate) event: Option<SavedEventState>,
+    pub(crate) module_select_slots: Option<Vec<Option<SavedModuleSelectState>>>,
+    pub(crate) reward_slots: Option<Vec<Option<SavedRewardState>>>,
+    pub(crate) ready: Vec<bool>,
 }
 
 pub(crate) fn serialize_envelope(envelope: &RunSaveEnvelope) -> Result<String, String> {
