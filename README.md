@@ -6,7 +6,19 @@
 
 <p align="center">
   <a href="https://www.mazocarta.com">
-    <img src="https://img.shields.io/badge/website-www.mazocarta.com-335c3f?style=for-the-badge" alt="Mazocarta website">
+    <img src="https://img.shields.io/website?url=https%3A%2F%2Fwww.mazocarta.com&label=stable&style=for-the-badge&labelColor=0b0f0c" alt="Stable website status">
+  </a>
+  <a href="https://www.mazocarta.com/preview/">
+    <img src="https://img.shields.io/website?url=https%3A%2F%2Fwww.mazocarta.com%2Fpreview%2F&label=preview&style=for-the-badge&labelColor=0b0f0c" alt="Preview website status">
+  </a>
+  <a href="https://github.com/timcogan/mazocarta/actions/workflows/pages.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/timcogan/mazocarta/pages.yml?branch=master&label=pages&style=for-the-badge&labelColor=0b0f0c" alt="GitHub Pages workflow status">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge&labelColor=0b0f0c" alt="MIT license">
+  </a>
+  <a href="https://github.com/timcogan/mazocarta/releases">
+    <img src="https://img.shields.io/github/v/tag/timcogan/mazocarta?label=release&style=for-the-badge&labelColor=0b0f0c" alt="Latest GitHub release">
   </a>
 </p>
 

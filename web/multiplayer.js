@@ -28,6 +28,9 @@ const MIN_MULTIPLAYER_PARTY_SIZE = 2;
 const MAX_PARTY_SIZE = 7;
 const PLAYER_BARRIER_SCREENS = new Set(["reward", "shop", "rest", "module_select", "event"]);
 const PAIR_TOKEN_BYTES = 4;
+const CONNECTION_FAILURE_HINT =
+  "Connection failed. Make sure both devices are on the same Wi-Fi or LAN, then try again.";
+const CONNECTION_FAILURE_STATES = new Set(["failed", "disconnected"]);
 
 function randomHex(count) {
   const bytes = new Uint8Array(count);
@@ -651,6 +654,15 @@ export function createMultiplayerController(options) {
       return;
     }
     if (close && pending.closeOnCancel && pending.pc) {
+      if (pending.peer) {
+        pending.peer.disconnectHandled = true;
+      }
+      if (pending.connection) {
+        pending.connection.disconnectHandled = true;
+        if (state.guestConnection === pending.connection) {
+          state.guestConnection = null;
+        }
+      }
       try {
         pending.pc.close();
       } catch {}
@@ -1933,6 +1945,7 @@ export function createMultiplayerController(options) {
     if (!peer) {
       return;
     }
+    peer.disconnectHandled = true;
     applyPeerDisconnect(peer, { clearSlot });
     if (clearSlot) {
       peer.slot = null;
@@ -1951,14 +1964,16 @@ export function createMultiplayerController(options) {
     await stopScanner();
     clearPendingConnection({ close: true });
     resetPairingState();
-    if (state.guestConnection) {
+    const guestConnection = state.guestConnection;
+    state.guestConnection = null;
+    if (guestConnection) {
+      guestConnection.disconnectHandled = true;
       try {
-        state.guestConnection.dc?.close();
+        guestConnection.dc?.close();
       } catch {}
       try {
-        state.guestConnection.pc?.close();
+        guestConnection.pc?.close();
       } catch {}
-      state.guestConnection = null;
     }
     for (const peerKey of Array.from(state.peers.keys())) {
       removePeer(peerKey, { clearSlot: true });
@@ -2051,10 +2066,11 @@ export function createMultiplayerController(options) {
     await renderRoom();
   }
 
-  async function prepareHostInvite() {
+  async function prepareHostInvite({ error = "" } = {}) {
     if (state.role !== "host" || state.sessionStarted || !canKeepInviting()) {
       state.room.localCode = "";
       resetPairingState();
+      state.room.error = error;
       await renderRoom();
       return;
     }
@@ -2076,6 +2092,7 @@ export function createMultiplayerController(options) {
       requestedSlot: null,
       lastRunSnapshotSent: null,
       lastRunSnapshotVersionSent: null,
+      disconnectHandled: false,
     };
     state.peers.set(fallbackPeerId, peer);
     attachPeerHandlers(peer);
@@ -2100,7 +2117,7 @@ export function createMultiplayerController(options) {
       peer,
       closeOnCancel: true,
     };
-    state.room.error = "";
+    state.room.error = error;
     state.room.awaitingPeerOpen = false;
     await renderRoom();
     if (state.room.inputMode === "camera") {
@@ -2150,6 +2167,55 @@ export function createMultiplayerController(options) {
     await prepareHostInvite();
   }
 
+  async function handleGuestPreStartConnectionFailure(connection) {
+    if (
+      !connection ||
+      connection.disconnectHandled ||
+      state.role !== "guest" ||
+      state.sessionStarted ||
+      (state.guestConnection !== connection && state.room.pendingConnection?.pc !== connection.pc)
+    ) {
+      return;
+    }
+
+    connection.disconnectHandled = true;
+    state.guestConnection = null;
+    if (state.room.pendingConnection?.pc === connection.pc) {
+      state.room.pendingConnection = null;
+      state.room.invitationId = null;
+    }
+    await stopScanner({ render: false });
+    resetPairingState();
+    try {
+      connection.dc?.close();
+    } catch {}
+    try {
+      connection.pc?.close();
+    } catch {}
+    state.role = "guest";
+    state.sessionFailure = null;
+    state.sessionStarted = false;
+    state.lastGuestRunSnapshot = "";
+    state.room.open = true;
+    state.room.mode = "guest-scan";
+    state.room.localCode = "";
+    state.room.localQrFrames = [];
+    state.room.manualInput = "";
+    state.room.status = "Scan the host QR.";
+    state.room.note = "";
+    state.room.error = CONNECTION_FAILURE_HINT;
+    state.room.awaitingPeerOpen = false;
+    await renderRoom();
+    if (state.room.inputMode === "camera") {
+      await startScanner();
+      if (!state.room.error) {
+        state.room.error = CONNECTION_FAILURE_HINT;
+        patchRoomLiveSurface();
+      }
+    }
+    options.requestRender?.();
+  }
+
   function attachGuestHandlers(connection) {
     connection.dc.addEventListener("open", async () => {
       safeSend(connection.dc, {
@@ -2182,17 +2248,28 @@ export function createMultiplayerController(options) {
       }
     });
     connection.dc.addEventListener("close", () => {
+      if (connection.disconnectHandled) {
+        return;
+      }
       if (state.sessionStarted) {
         void handleHostDisconnect();
         return;
       }
-      void leaveSession();
+      void handleGuestPreStartConnectionFailure(connection);
     });
     connection.dc.addEventListener("error", (error) => console.error(error));
     connection.pc.addEventListener("connectionstatechange", () => {
-      if (["closed", "failed", "disconnected"].includes(connection.pc.connectionState)) {
+      const connectionState = connection.pc.connectionState;
+      if (connectionState === "closed" || CONNECTION_FAILURE_STATES.has(connectionState)) {
+        if (connection.disconnectHandled) {
+          return;
+        }
         if (state.sessionStarted) {
           void handleHostDisconnect();
+          return;
+        }
+        if (CONNECTION_FAILURE_STATES.has(connectionState)) {
+          void handleGuestPreStartConnectionFailure(connection);
           return;
         }
         void leaveSession();
@@ -2273,6 +2350,7 @@ export function createMultiplayerController(options) {
       slotOptions: [],
       snapshotMode: false,
       roomParticipants: [],
+      disconnectHandled: false,
     };
     pc.addEventListener("datachannel", (event) => {
       connection.dc = event.channel;
@@ -2299,6 +2377,7 @@ export function createMultiplayerController(options) {
     state.room.error = "";
     state.room.pendingConnection = {
       pc,
+      connection,
       closeOnCancel: true,
     };
     await stopScanner();
@@ -2694,6 +2773,35 @@ export function createMultiplayerController(options) {
     }
   }
 
+  async function handleHostPeerDisconnect(peer, { failed = false } = {}) {
+    if (!peer || peer.disconnectHandled) {
+      return;
+    }
+
+    peer.disconnectHandled = true;
+    state.room.awaitingPeerOpen = false;
+    const peerKey = peer.peerId || peer.fallbackPeerId;
+    applyPeerDisconnect(peer);
+    state.peers.delete(peerKey);
+    if (state.room.pendingConnection?.peer === peer) {
+      state.room.pendingConnection = null;
+      state.room.invitationId = null;
+    }
+    try {
+      peer.dc?.close();
+    } catch {}
+    try {
+      peer.pc?.close();
+    } catch {}
+    if (!state.sessionStarted) {
+      broadcastRoomState();
+      await prepareHostInvite({ error: failed ? CONNECTION_FAILURE_HINT : "" });
+    } else {
+      await renderRoom();
+    }
+    options.requestRender?.();
+  }
+
   function attachPeerHandlers(peer) {
     peer.dc.addEventListener("open", async () => {
       if (state.room.pendingConnection?.peer === peer) {
@@ -2719,30 +2827,15 @@ export function createMultiplayerController(options) {
       }
     });
     peer.dc.addEventListener("close", () => {
-      state.room.awaitingPeerOpen = false;
-      const peerKey = peer.peerId || peer.fallbackPeerId;
-      applyPeerDisconnect(peer);
-      state.peers.delete(peerKey);
-      if (!state.sessionStarted) {
-        broadcastRoomState();
-        void prepareHostInvite();
-      }
-      void renderRoom();
-      options.requestRender?.();
+      void handleHostPeerDisconnect(peer);
     });
     peer.dc.addEventListener("error", (error) => console.error(error));
     peer.pc.addEventListener("connectionstatechange", () => {
-      if (["closed", "failed", "disconnected"].includes(peer.pc.connectionState)) {
-        state.room.awaitingPeerOpen = false;
-        const peerKey = peer.peerId || peer.fallbackPeerId;
-        applyPeerDisconnect(peer);
-        state.peers.delete(peerKey);
-        if (!state.sessionStarted) {
-          broadcastRoomState();
-          void prepareHostInvite();
-        }
-        void renderRoom();
-        options.requestRender?.();
+      const connectionState = peer.pc.connectionState;
+      if (connectionState === "closed" || CONNECTION_FAILURE_STATES.has(connectionState)) {
+        void handleHostPeerDisconnect(peer, {
+          failed: CONNECTION_FAILURE_STATES.has(connectionState),
+        });
       }
     });
   }
@@ -3061,6 +3154,21 @@ export function createMultiplayerController(options) {
     async debugApplyRemoteCode(raw) {
       await applyRemoteCode(String(raw ?? ""));
       return !state.room.error;
+    },
+    async debugFailPendingConnection() {
+      if (state.role === "host" && state.room.pendingConnection?.peer) {
+        await handleHostPeerDisconnect(state.room.pendingConnection.peer, { failed: true });
+        return true;
+      }
+      if (
+        state.role === "guest" &&
+        state.guestConnection &&
+        state.room.pendingConnection?.pc === state.guestConnection.pc
+      ) {
+        await handleGuestPreStartConnectionFailure(state.guestConnection);
+        return true;
+      }
+      return false;
     },
     async debugStartHostRun() {
       await startHostRun();

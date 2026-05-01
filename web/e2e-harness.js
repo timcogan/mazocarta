@@ -516,6 +516,9 @@ export function installE2EHarness(env) {
     async applyPairCode(raw) {
       return env.multiplayer.debugApplyRemoteCode?.(raw);
     },
+    async failPendingConnection() {
+      return env.multiplayer.debugFailPendingConnection?.() || false;
+    },
     async startHostRun() {
       return env.multiplayer.debugStartHostRun?.();
     },

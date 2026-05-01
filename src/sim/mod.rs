@@ -1188,9 +1188,9 @@ mod tests {
         assert_eq!(bleed_threat(&neutral), 3);
         assert_eq!(bleed_threat(&boosted), 3);
         assert_eq!(bleed_threat(&broken), 3);
-        assert_eq!(expected_enemy_threat(&neutral), 7);
-        assert_eq!(expected_enemy_threat(&boosted), 9);
-        assert_eq!(expected_enemy_threat(&broken), 5);
+        assert_eq!(expected_enemy_threat(&neutral), 10);
+        assert_eq!(expected_enemy_threat(&boosted), 14);
+        assert_eq!(expected_enemy_threat(&broken), 6);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::dungeon::{DungeonNode, DungeonRun, RoomKind};
 use crate::party::PartyRunState;
 
 const SHOP_PURCHASE_THRESHOLD: i32 = 30;
-const REST_HEAL_CAP: i32 = 6;
+const REST_HEAL_CAP: i32 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RestChoice {
@@ -1170,29 +1170,29 @@ fn card_burst_value(card: CardId) -> i32 {
 
 fn card_block_value(card: CardId) -> i32 {
     match card {
-        CardId::GuardStep => 5,
-        CardId::GuardStepPlus => 8,
-        CardId::Slipstream => 2,
-        CardId::SlipstreamPlus => 4,
-        CardId::Reinforce => 8,
-        CardId::ReinforcePlus => 11,
-        CardId::CoverPulse => 6,
-        CardId::CoverPulsePlus => 8,
-        CardId::BarrierField => 10,
-        CardId::BarrierFieldPlus => 13,
-        CardId::AnchorLoop => 14,
-        CardId::AnchorLoopPlus => 17,
-        CardId::OverwatchGrid => 18,
-        CardId::OverwatchGridPlus => 22,
-        CardId::CapacitiveShell => 5,
-        CardId::CapacitiveShellPlus => 8,
-        CardId::ReservoirGuard => 10,
-        CardId::ReservoirGuardPlus => 13,
-        CardId::PatchBay => 6,
-        CardId::PatchBayPlus => 8,
-        CardId::EmergencyPlating => 12,
-        CardId::EmergencyPlatingPlus => 16,
-        CardId::Patch => 5,
+        CardId::GuardStep => 8,
+        CardId::GuardStepPlus => 12,
+        CardId::Slipstream => 3,
+        CardId::SlipstreamPlus => 6,
+        CardId::Reinforce => 13,
+        CardId::ReinforcePlus => 18,
+        CardId::CoverPulse => 10,
+        CardId::CoverPulsePlus => 13,
+        CardId::BarrierField => 16,
+        CardId::BarrierFieldPlus => 21,
+        CardId::AnchorLoop => 22,
+        CardId::AnchorLoopPlus => 27,
+        CardId::OverwatchGrid => 29,
+        CardId::OverwatchGridPlus => 35,
+        CardId::CapacitiveShell => 8,
+        CardId::CapacitiveShellPlus => 13,
+        CardId::ReservoirGuard => 16,
+        CardId::ReservoirGuardPlus => 21,
+        CardId::PatchBay => 10,
+        CardId::PatchBayPlus => 13,
+        CardId::EmergencyPlating => 19,
+        CardId::EmergencyPlatingPlus => 26,
+        CardId::Patch => 8,
         _ => 0,
     }
 }

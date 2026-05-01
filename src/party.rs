@@ -887,7 +887,7 @@ mod tests {
     fn party_run_initializes_requested_party_size() {
         let party = PartyRunState::new(TEST_SEED, 3);
         assert_eq!(party.party_size(), 3);
-        assert_eq!(party.hero(2).unwrap().player_hp, 32);
+        assert_eq!(party.hero(2).unwrap().player_hp, 64);
     }
 
     #[test]
@@ -972,8 +972,8 @@ mod tests {
             node.kind = RoomKind::Rest;
         }
 
-        assert_eq!(party.apply_rest_heal(0), Some(6));
-        assert_eq!(party.hero(0).unwrap().player_hp, 26);
+        assert_eq!(party.apply_rest_heal(0), Some(12));
+        assert_eq!(party.hero(0).unwrap().player_hp, 32);
     }
 
     #[test]
@@ -991,8 +991,8 @@ mod tests {
         if let Some(node) = party.shared.nodes.get_mut(5) {
             node.kind = RoomKind::Rest;
         }
-        assert_eq!(party.apply_rest_heal(0), Some(6));
-        assert_eq!(party.hero(0).unwrap().player_hp, 26);
+        assert_eq!(party.apply_rest_heal(0), Some(12));
+        assert_eq!(party.hero(0).unwrap().player_hp, 32);
         assert_eq!(party.hero(1).unwrap().player_hp, 18);
 
         if let Some(node) = party.shared.nodes.get_mut(5) {
@@ -1062,8 +1062,8 @@ mod tests {
             .ready_hero_with_events(1)
             .expect("second ready resolves the enemy round");
 
-        assert_eq!(combat.heroes[0].player.fighter.hp, starting_hp - 5);
-        assert_eq!(combat.heroes[1].player.fighter.hp, starting_hp - 5);
+        assert_eq!(combat.heroes[0].player.fighter.hp, starting_hp - 9);
+        assert_eq!(combat.heroes[1].player.fighter.hp, starting_hp - 9);
         assert_eq!(
             combat.heroes[0].player.fighter.hp,
             combat.heroes[1].player.fighter.hp
@@ -1100,7 +1100,7 @@ mod tests {
         assert!(combat.set_hero_inactive(1, true));
         assert!(combat.ready_hero(0));
 
-        assert_eq!(combat.heroes[0].player.fighter.hp, active_starting_hp - 5);
+        assert_eq!(combat.heroes[0].player.fighter.hp, active_starting_hp - 9);
         assert_eq!(combat.heroes[1].player.fighter.hp, inactive_starting_hp);
         assert!(!combat.heroes[0].ready);
         assert!(combat.heroes[1].ready);

@@ -6,7 +6,7 @@ use crate::content::{
 };
 use crate::rng::XorShift64;
 
-pub(crate) const DEFAULT_PLAYER_HP: i32 = 32;
+pub(crate) const DEFAULT_PLAYER_HP: i32 = 64;
 pub(crate) const MAX_ENEMIES_PER_ENCOUNTER: usize = 2;
 pub(crate) const MAX_HAND_CARDS: usize = 9;
 const MAX_AXIS_ABS_VALUE: i8 = 9;
@@ -911,49 +911,49 @@ impl CombatState {
 
         match def.id {
             CardId::FlareSlash => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
             }
             CardId::FlareSlashPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
             }
             CardId::GuardStep => {
-                self.gain_block(Actor::Player, 5, events);
+                self.gain_block(Actor::Player, 8, events);
             }
             CardId::GuardStepPlus => {
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 12, events);
             }
             CardId::Slipstream => {
                 self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
-                self.gain_block(Actor::Player, 2, events);
+                self.gain_block(Actor::Player, 3, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::SlipstreamPlus => {
                 self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
-                self.gain_block(Actor::Player, 4, events);
+                self.gain_block(Actor::Player, 6, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::SunderingArc => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
-            }
-            CardId::SunderingArcPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 16, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
             }
+            CardId::SunderingArcPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 21, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
+            }
             CardId::QuickStrike => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::QuickStrikePlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::PinpointJab => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 1, events);
             }
             CardId::PinpointJabPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 1, events);
             }
             CardId::SignalTap => {
@@ -962,69 +962,69 @@ impl CombatState {
             }
             CardId::SignalTapPlus => {
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -1, events);
-                self.gain_block(Actor::Player, 3, events);
+                self.gain_block(Actor::Player, 5, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::Reinforce => {
                 self.apply_status(Actor::Player, StatusKind::Rhythm, 1, events);
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
             }
             CardId::ReinforcePlus => {
                 self.apply_status(Actor::Player, StatusKind::Rhythm, 2, events);
-                self.gain_block(Actor::Player, 11, events);
+                self.gain_block(Actor::Player, 18, events);
             }
             CardId::PressurePoint => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
             }
             CardId::PressurePointPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
             }
             CardId::BurstArray => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
                 }
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
                 }
             }
             CardId::BurstArrayPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 }
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 }
             }
             CardId::CoverPulse => {
-                self.gain_block(Actor::Player, 6, events);
+                self.gain_block(Actor::Player, 10, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::CoverPulsePlus => {
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::TwinStrike => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
-                if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
-                }
-            }
-            CardId::TwinStrikePlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
                     self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 }
             }
+            CardId::TwinStrikePlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                if self.enemy_is_alive(target_enemy.unwrap()) {
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                }
+            }
             CardId::BarrierField => {
-                self.gain_block(Actor::Player, 10, events);
+                self.gain_block(Actor::Player, 16, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
             }
             CardId::BarrierFieldPlus => {
-                self.gain_block(Actor::Player, 13, events);
+                self.gain_block(Actor::Player, 21, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
             }
             CardId::TacticalBurst => {
@@ -1036,95 +1036,95 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::RazorNet => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
-                if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
-                }
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 2, events);
-            }
-            CardId::RazorNetPlus => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
                     self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 }
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 2, events);
             }
-            CardId::FracturePulse => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 3, events);
+            CardId::RazorNetPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                if self.enemy_is_alive(target_enemy.unwrap()) {
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                }
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 2, events);
             }
-            CardId::FracturePulsePlus => {
+            CardId::FracturePulse => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 3, events);
             }
-            CardId::VectorLock => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
-                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
-                self.gain_block(Actor::Player, 5, events);
+            CardId::FracturePulsePlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 16, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 3, events);
             }
-            CardId::VectorLockPlus => {
+            CardId::VectorLock => {
                 self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
-                self.gain_block(Actor::Player, 6, events);
+                self.gain_block(Actor::Player, 8, events);
+            }
+            CardId::VectorLockPlus => {
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 11, events);
+                self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
+                self.gain_block(Actor::Player, 10, events);
             }
             CardId::BreachSignal => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::BreachSignalPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::AnchorLoop => {
-                self.gain_block(Actor::Player, 14, events);
+                self.gain_block(Actor::Player, 22, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::AnchorLoopPlus => {
-                self.gain_block(Actor::Player, 17, events);
+                self.gain_block(Actor::Player, 27, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::ExecutionBeam => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 20, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 27, events);
             }
             CardId::ExecutionBeamPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 26, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 35, events);
             }
             CardId::ChainBarrage => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 11, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 11, events);
                 }
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 2, events);
             }
             CardId::ChainBarragePlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 13, events);
                 if self.enemy_is_alive(target_enemy.unwrap()) {
-                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
+                    self.damage_enemy(Actor::Player, target_enemy.unwrap(), 13, events);
                 }
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 2, events);
             }
             CardId::FortressMatrix => {
-                self.gain_block(Actor::Player, 16, events);
+                self.gain_block(Actor::Player, 26, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::FortressMatrixPlus => {
-                self.gain_block(Actor::Player, 20, events);
+                self.gain_block(Actor::Player, 32, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::OverwatchGrid => {
-                self.gain_block(Actor::Player, 18, events);
+                self.gain_block(Actor::Player, 29, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::OverwatchGridPlus => {
-                self.gain_block(Actor::Player, 22, events);
+                self.gain_block(Actor::Player, 35, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::RiftDart => {
                 let enemy = target_enemy.unwrap();
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
-                self.damage_enemy(Actor::Player, enemy, 4, events);
+                self.damage_enemy(Actor::Player, enemy, 5, events);
                 self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
                 if disrupted {
                     queue.push_front(CombatCommand::DrawCards(1));
@@ -1133,7 +1133,7 @@ impl CombatState {
             CardId::RiftDartPlus => {
                 let enemy = target_enemy.unwrap();
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
-                self.damage_enemy(Actor::Player, enemy, 6, events);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
                 self.apply_enemy_status(enemy, StatusKind::Bleed, 1, events);
                 if disrupted {
                     queue.push_front(CombatCommand::DrawCards(1));
@@ -1144,7 +1144,7 @@ impl CombatState {
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
                 self.apply_enemy_status(enemy, StatusKind::Momentum, -1, events);
                 if bleeding {
-                    self.gain_block(Actor::Player, 4, events);
+                    self.gain_block(Actor::Player, 6, events);
                 }
             }
             CardId::MarkPulsePlus => {
@@ -1152,19 +1152,19 @@ impl CombatState {
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
                 self.apply_enemy_status(enemy, StatusKind::Momentum, -1, events);
                 if bleeding {
-                    self.gain_block(Actor::Player, 6, events);
+                    self.gain_block(Actor::Player, 10, events);
                 }
             }
             CardId::BraceCircuit => {
                 let had_block = self.player.fighter.block > 0;
-                self.gain_block(Actor::Player, 6, events);
+                self.gain_block(Actor::Player, 10, events);
                 if had_block {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
             }
             CardId::BraceCircuitPlus => {
                 let had_block = self.player.fighter.block > 0;
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
                 if had_block {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
@@ -1172,7 +1172,7 @@ impl CombatState {
             CardId::FaultShot => {
                 let enemy = target_enemy.unwrap();
                 let primed = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 5, events);
+                self.damage_enemy(Actor::Player, enemy, 7, events);
                 if primed {
                     self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 }
@@ -1180,7 +1180,7 @@ impl CombatState {
             CardId::FaultShotPlus => {
                 let enemy = target_enemy.unwrap();
                 let primed = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 7, events);
+                self.damage_enemy(Actor::Player, enemy, 9, events);
                 if primed {
                     self.apply_status(Actor::Player, StatusKind::Focus, 1, events);
                 }
@@ -1188,41 +1188,41 @@ impl CombatState {
             CardId::SeverArc => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                self.damage_enemy(Actor::Player, enemy, 8, events);
+                self.damage_enemy(Actor::Player, enemy, 11, events);
                 if bleeding && self.enemy_is_alive(enemy) {
-                    self.damage_enemy(Actor::Player, enemy, 8, events);
+                    self.damage_enemy(Actor::Player, enemy, 11, events);
                 }
             }
             CardId::SeverArcPlus => {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
-                self.damage_enemy(Actor::Player, enemy, 10, events);
+                self.damage_enemy(Actor::Player, enemy, 13, events);
                 if bleeding && self.enemy_is_alive(enemy) {
-                    self.damage_enemy(Actor::Player, enemy, 10, events);
+                    self.damage_enemy(Actor::Player, enemy, 13, events);
                 }
             }
             CardId::Lockbreaker => {
                 let enemy = target_enemy.unwrap();
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 6, events);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
                 if disrupted {
                     self.apply_enemy_status(enemy, StatusKind::Focus, -1, events);
-                    self.gain_block(Actor::Player, 6, events);
+                    self.gain_block(Actor::Player, 10, events);
                 }
             }
             CardId::LockbreakerPlus => {
                 let enemy = target_enemy.unwrap();
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 8, events);
+                self.damage_enemy(Actor::Player, enemy, 11, events);
                 if disrupted {
                     self.apply_enemy_status(enemy, StatusKind::Focus, -1, events);
-                    self.gain_block(Actor::Player, 8, events);
+                    self.gain_block(Actor::Player, 13, events);
                 }
             }
             CardId::CounterLattice => {
                 let enemy = target_enemy.unwrap();
                 let weakened = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 6, events);
+                self.damage_enemy(Actor::Player, enemy, 8, events);
                 if weakened {
                     self.gain_energy(1);
                 }
@@ -1230,7 +1230,7 @@ impl CombatState {
             CardId::CounterLatticePlus => {
                 let enemy = target_enemy.unwrap();
                 let weakened = self.axis_value(Actor::Enemy(enemy), AxisKind::Focus) < 0;
-                self.damage_enemy(Actor::Player, enemy, 8, events);
+                self.damage_enemy(Actor::Player, enemy, 11, events);
                 if weakened {
                     self.gain_energy(1);
                 }
@@ -1239,7 +1239,7 @@ impl CombatState {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
-                self.damage_enemy(Actor::Player, enemy, 12, events);
+                self.damage_enemy(Actor::Player, enemy, 16, events);
                 if bleeding {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
@@ -1251,7 +1251,7 @@ impl CombatState {
                 let enemy = target_enemy.unwrap();
                 let bleeding = self.has_status(Actor::Enemy(enemy), StatusKind::Bleed);
                 let disrupted = self.axis_value(Actor::Enemy(enemy), AxisKind::Momentum) < 0;
-                self.damage_enemy(Actor::Player, enemy, 15, events);
+                self.damage_enemy(Actor::Player, enemy, 20, events);
                 if bleeding {
                     queue.push_front(CombatCommand::DrawCards(1));
                 }
@@ -1260,29 +1260,29 @@ impl CombatState {
                 }
             }
             CardId::ZeroPoint => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 13, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::ZeroPointPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 14, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 19, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Momentum, -2, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::ArcSpark => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 self.apply_status(Actor::Player, StatusKind::Momentum, 2, events);
             }
             CardId::ArcSparkPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
                 self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
             }
             CardId::CapacitiveShell => {
-                self.gain_block(Actor::Player, 5, events);
+                self.gain_block(Actor::Player, 8, events);
                 self.apply_status(Actor::Player, StatusKind::Momentum, 2, events);
             }
             CardId::CapacitiveShellPlus => {
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
                 self.apply_status(Actor::Player, StatusKind::Momentum, 3, events);
             }
             CardId::PrimeRoutine => {
@@ -1317,25 +1317,25 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::ReservoirGuard => {
-                self.gain_block(Actor::Player, 10, events);
+                self.gain_block(Actor::Player, 16, events);
                 if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
                     self.gain_energy(1);
                 }
             }
             CardId::ReservoirGuardPlus => {
-                self.gain_block(Actor::Player, 13, events);
+                self.gain_block(Actor::Player, 21, events);
                 if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
                     self.gain_energy(1);
                 }
             }
             CardId::VoltaicDrive => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 11, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 15, events);
                 if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
                     queue.push_front(CombatCommand::DrawCards(2));
                 }
             }
             CardId::VoltaicDrivePlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 14, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 19, events);
                 if self.axis_value(Actor::Player, AxisKind::Momentum) > 1 {
                     queue.push_front(CombatCommand::DrawCards(2));
                 }
@@ -1356,27 +1356,27 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::PatchBay => {
-                self.gain_block(Actor::Player, 6, events);
+                self.gain_block(Actor::Player, 10, events);
                 self.create_card_in_hand(CardId::Patch, events);
             }
             CardId::PatchBayPlus => {
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
                 self.create_card_in_hand(CardId::Patch, events);
             }
             CardId::TracerWeave => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
                 self.create_card_in_hand(CardId::Tracer, events);
             }
             CardId::TracerWeavePlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 6, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 8, events);
                 self.create_card_in_hand(CardId::Tracer, events);
             }
             CardId::NeedleNest => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
                 self.create_card_in_hand(CardId::Needler, events);
             }
             CardId::NeedleNestPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
                 self.create_card_in_hand(CardId::Needler, events);
             }
             CardId::AssemblyLine => {
@@ -1428,10 +1428,10 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::SweepPulse => {
-                self.damage_all_enemies(Actor::Player, 4, events, false);
+                self.damage_all_enemies(Actor::Player, 5, events, false);
             }
             CardId::SweepPulsePlus => {
-                self.damage_all_enemies(Actor::Player, 6, events, false);
+                self.damage_all_enemies(Actor::Player, 8, events, false);
             }
             CardId::DimmingWave => {
                 self.apply_status_to_all_enemies(StatusKind::Focus, -1, events);
@@ -1440,19 +1440,19 @@ impl CombatState {
                 self.apply_status_to_all_enemies(StatusKind::Focus, -2, events);
             }
             CardId::ShrapnelVeil => {
-                self.damage_all_enemies(Actor::Player, 2, events, false);
-                self.gain_block(Actor::Player, 4, events);
-            }
-            CardId::ShrapnelVeilPlus => {
                 self.damage_all_enemies(Actor::Player, 3, events, false);
                 self.gain_block(Actor::Player, 6, events);
             }
+            CardId::ShrapnelVeilPlus => {
+                self.damage_all_enemies(Actor::Player, 4, events, false);
+                self.gain_block(Actor::Player, 10, events);
+            }
             CardId::ScouringWind => {
-                self.damage_all_enemies(Actor::Player, 6, events, false);
+                self.damage_all_enemies(Actor::Player, 8, events, false);
                 self.apply_status_to_all_enemies(StatusKind::Bleed, 1, events);
             }
             CardId::ScouringWindPlus => {
-                self.damage_all_enemies(Actor::Player, 8, events, false);
+                self.damage_all_enemies(Actor::Player, 11, events, false);
                 self.apply_status_to_all_enemies(StatusKind::Bleed, 2, events);
             }
             CardId::CollapsePattern => {
@@ -1464,32 +1464,32 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::Linebreaker => {
-                self.damage_all_enemies(Actor::Player, 5, events, true);
-            }
-            CardId::LinebreakerPlus => {
                 self.damage_all_enemies(Actor::Player, 7, events, true);
             }
-            CardId::NovaCollapse => {
+            CardId::LinebreakerPlus => {
                 self.damage_all_enemies(Actor::Player, 9, events, true);
             }
-            CardId::NovaCollapsePlus => {
+            CardId::NovaCollapse => {
                 self.damage_all_enemies(Actor::Player, 12, events, true);
             }
+            CardId::NovaCollapsePlus => {
+                self.damage_all_enemies(Actor::Player, 16, events, true);
+            }
             CardId::SuppressionNet => {
-                self.gain_block(Actor::Player, 8, events);
+                self.gain_block(Actor::Player, 13, events);
                 self.apply_status_to_all_enemies(StatusKind::Focus, -1, events);
                 self.apply_status_to_all_enemies(StatusKind::Momentum, -1, events);
             }
             CardId::SuppressionNetPlus => {
-                self.gain_block(Actor::Player, 11, events);
+                self.gain_block(Actor::Player, 18, events);
                 self.apply_status_to_all_enemies(StatusKind::Focus, -2, events);
                 self.apply_status_to_all_enemies(StatusKind::Momentum, -1, events);
             }
             CardId::RazorRush => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
             }
             CardId::RazorRushPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 10, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 13, events);
             }
             CardId::HardReset => {
                 queue.push_front(CombatCommand::DrawCards(2));
@@ -1498,18 +1498,18 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(3));
             }
             CardId::EmergencyPlating => {
-                self.gain_block(Actor::Player, 12, events);
+                self.gain_block(Actor::Player, 19, events);
             }
             CardId::EmergencyPlatingPlus => {
-                self.gain_block(Actor::Player, 16, events);
+                self.gain_block(Actor::Player, 26, events);
             }
             CardId::Cauterize => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -1, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
             }
             CardId::CauterizePlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 7, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 9, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Focus, -2, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
             }
@@ -1522,42 +1522,42 @@ impl CombatState {
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::AshenVector => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 12, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 16, events);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::AshenVectorPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 15, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 20, events);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::PurgeArray => {
-                self.damage_all_enemies(Actor::Player, 7, events, false);
-                self.damage_all_enemies(Actor::Player, 7, events, false);
+                self.damage_all_enemies(Actor::Player, 9, events, false);
+                self.damage_all_enemies(Actor::Player, 9, events, false);
             }
             CardId::PurgeArrayPlus => {
-                self.damage_all_enemies(Actor::Player, 9, events, false);
-                self.damage_all_enemies(Actor::Player, 9, events, false);
+                self.damage_all_enemies(Actor::Player, 12, events, false);
+                self.damage_all_enemies(Actor::Player, 12, events, false);
             }
             CardId::LastProtocol => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 18, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 24, events);
                 self.gain_energy(1);
                 queue.push_front(CombatCommand::DrawCards(1));
             }
             CardId::LastProtocolPlus => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 22, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 30, events);
                 self.gain_energy(1);
                 queue.push_front(CombatCommand::DrawCards(2));
             }
             CardId::Spark => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 4, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 5, events);
             }
             CardId::Patch => {
-                self.gain_block(Actor::Player, 5, events);
+                self.gain_block(Actor::Player, 8, events);
             }
             CardId::Tracer => {
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Rhythm, -1, events);
             }
             CardId::Needler => {
-                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 2, events);
+                self.damage_enemy(Actor::Player, target_enemy.unwrap(), 3, events);
                 self.apply_enemy_status(target_enemy.unwrap(), StatusKind::Bleed, 1, events);
             }
         }
@@ -2315,7 +2315,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 28);
+        assert_eq!(primary_enemy(&state).fighter.hp, 25);
 
         state.process_commands([CombatCommand::ApplyEndOfTurn(Actor::Player)]);
         assert_eq!(state.player.fighter.statuses.focus, 1);
@@ -2363,7 +2363,7 @@ mod tests {
             target: Some(Actor::Player),
         });
 
-        assert_eq!(state.player.fighter.block, 5);
+        assert_eq!(state.player.fighter.block, 9);
 
         let mut events = Vec::new();
         state.gain_block(PRIMARY_ENEMY, 8, &mut events);
@@ -2446,7 +2446,7 @@ mod tests {
         });
 
         assert_eq!(state.player.fighter.statuses.rhythm, 0);
-        assert_eq!(state.player.fighter.block, 5);
+        assert_eq!(state.player.fighter.block, 8);
     }
 
     #[test]
@@ -2471,7 +2471,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 36);
+        assert_eq!(primary_enemy(&state).fighter.hp, 35);
         assert_eq!(state.player.fighter.statuses.momentum, 2);
     }
 
@@ -2551,7 +2551,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 35);
+        assert_eq!(primary_enemy(&state).fighter.hp, 33);
         assert_eq!(primary_enemy(&state).fighter.statuses.bleed, 1);
     }
 
@@ -2567,7 +2567,7 @@ mod tests {
         });
 
         assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -1);
-        assert_eq!(state.player.fighter.block, 3);
+        assert_eq!(state.player.fighter.block, 5);
         assert_eq!(state.deck.hand, vec![CardId::FlareSlash]);
     }
 
@@ -2581,7 +2581,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 36);
+        assert_eq!(primary_enemy(&state).fighter.hp, 35);
         assert_eq!(primary_enemy(&state).fighter.statuses.focus, -1);
     }
 
@@ -2595,7 +2595,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 31);
+        assert_eq!(primary_enemy(&state).fighter.hp, 28);
     }
 
     #[test]
@@ -2609,7 +2609,7 @@ mod tests {
             target: None,
         });
 
-        assert_eq!(state.player.fighter.block, 6);
+        assert_eq!(state.player.fighter.block, 10);
         assert_eq!(state.deck.hand, vec![CardId::GuardStep]);
     }
 
@@ -2623,7 +2623,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(state.player.fighter.block, 10);
+        assert_eq!(state.player.fighter.block, 16);
         assert_eq!(primary_enemy(&state).fighter.statuses.focus, -1);
     }
 
@@ -2654,7 +2654,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 32);
+        assert_eq!(primary_enemy(&state).fighter.hp, 30);
         assert_eq!(primary_enemy(&state).fighter.statuses.bleed, 2);
     }
 
@@ -2668,7 +2668,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 31);
+        assert_eq!(primary_enemy(&state).fighter.hp, 28);
         assert_eq!(primary_enemy(&state).fighter.statuses.bleed, 3);
     }
 
@@ -2682,9 +2682,9 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 34);
+        assert_eq!(primary_enemy(&state).fighter.hp, 32);
         assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -2);
-        assert_eq!(state.player.fighter.block, 5);
+        assert_eq!(state.player.fighter.block, 8);
     }
 
     #[test]
@@ -2698,7 +2698,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 33);
+        assert_eq!(primary_enemy(&state).fighter.hp, 31);
         assert_eq!(primary_enemy(&state).fighter.statuses.momentum, -2);
         assert_eq!(state.deck.hand, vec![CardId::FlareSlash]);
     }
@@ -2713,7 +2713,7 @@ mod tests {
             target: Some(PRIMARY_ENEMY),
         });
 
-        assert_eq!(primary_enemy(&state).fighter.hp, 24);
+        assert_eq!(primary_enemy(&state).fighter.hp, 18);
         assert_eq!(primary_enemy(&state).fighter.statuses.bleed, 2);
     }
 
@@ -2728,7 +2728,7 @@ mod tests {
             target: None,
         });
 
-        assert_eq!(state.player.fighter.block, 18);
+        assert_eq!(state.player.fighter.block, 29);
         assert_eq!(state.deck.hand.len(), 2);
         assert!(state.deck.hand.contains(&CardId::GuardStep));
         assert!(state.deck.hand.contains(&CardId::FlareSlash));
@@ -2737,10 +2737,10 @@ mod tests {
     #[test]
     fn rift_dart_variants_respect_the_momentum_draw_condition() {
         for (card, primed, expected_hp, expect_draw) in [
-            (CardId::RiftDart, false, 36, false),
-            (CardId::RiftDart, true, 36, true),
-            (CardId::RiftDartPlus, false, 34, false),
-            (CardId::RiftDartPlus, true, 34, true),
+            (CardId::RiftDart, false, 35, false),
+            (CardId::RiftDart, true, 35, true),
+            (CardId::RiftDartPlus, false, 32, false),
+            (CardId::RiftDartPlus, true, 32, true),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2780,9 +2780,9 @@ mod tests {
     fn mark_pulse_variants_grant_block_only_against_bleeding_targets() {
         for (card, primed, expected_block) in [
             (CardId::MarkPulse, false, 0),
-            (CardId::MarkPulse, true, 4),
+            (CardId::MarkPulse, true, 6),
             (CardId::MarkPulsePlus, false, 0),
-            (CardId::MarkPulsePlus, true, 6),
+            (CardId::MarkPulsePlus, true, 10),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2810,10 +2810,10 @@ mod tests {
     #[test]
     fn brace_circuit_variants_draw_only_when_block_already_exists() {
         for (card, primed, initial_block, expected_block, expect_draw) in [
-            (CardId::BraceCircuit, false, 0, 6, false),
-            (CardId::BraceCircuit, true, 2, 8, true),
-            (CardId::BraceCircuitPlus, false, 0, 8, false),
-            (CardId::BraceCircuitPlus, true, 2, 10, true),
+            (CardId::BraceCircuit, false, 0, 10, false),
+            (CardId::BraceCircuit, true, 2, 12, true),
+            (CardId::BraceCircuitPlus, false, 0, 13, false),
+            (CardId::BraceCircuitPlus, true, 2, 15, true),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2844,10 +2844,10 @@ mod tests {
     #[test]
     fn fault_shot_variants_gain_focus_only_against_disrupted_targets() {
         for (card, primed, expected_hp, expected_focus) in [
-            (CardId::FaultShot, false, 35, 0),
-            (CardId::FaultShot, true, 35, 1),
-            (CardId::FaultShotPlus, false, 33, 0),
-            (CardId::FaultShotPlus, true, 33, 1),
+            (CardId::FaultShot, false, 33, 0),
+            (CardId::FaultShot, true, 33, 1),
+            (CardId::FaultShotPlus, false, 31, 0),
+            (CardId::FaultShotPlus, true, 31, 1),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2875,10 +2875,10 @@ mod tests {
     #[test]
     fn sever_arc_variants_hit_twice_only_against_bleeding_targets() {
         for (card, primed, expected_hp) in [
-            (CardId::SeverArc, false, 32),
-            (CardId::SeverArc, true, 24),
-            (CardId::SeverArcPlus, false, 30),
-            (CardId::SeverArcPlus, true, 20),
+            (CardId::SeverArc, false, 29),
+            (CardId::SeverArc, true, 18),
+            (CardId::SeverArcPlus, false, 27),
+            (CardId::SeverArcPlus, true, 14),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2902,10 +2902,10 @@ mod tests {
     #[test]
     fn lockbreaker_variants_convert_focus_disruption_into_more_focus_loss_and_block() {
         for (card, primed, expected_hp, expected_block, expected_focus) in [
-            (CardId::Lockbreaker, false, 34, 0, 0),
-            (CardId::Lockbreaker, true, 34, 6, -2),
-            (CardId::LockbreakerPlus, false, 32, 0, 0),
-            (CardId::LockbreakerPlus, true, 32, 8, -2),
+            (CardId::Lockbreaker, false, 32, 0, 0),
+            (CardId::Lockbreaker, true, 32, 10, -2),
+            (CardId::LockbreakerPlus, false, 29, 0, 0),
+            (CardId::LockbreakerPlus, true, 29, 13, -2),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2938,10 +2938,10 @@ mod tests {
     #[test]
     fn counter_lattice_variants_refund_energy_only_against_focus_broken_targets() {
         for (card, primed, expected_hp, expected_energy) in [
-            (CardId::CounterLattice, false, 34, 2),
-            (CardId::CounterLattice, true, 34, 3),
-            (CardId::CounterLatticePlus, false, 32, 2),
-            (CardId::CounterLatticePlus, true, 32, 3),
+            (CardId::CounterLattice, false, 32, 2),
+            (CardId::CounterLattice, true, 32, 3),
+            (CardId::CounterLatticePlus, false, 29, 2),
+            (CardId::CounterLatticePlus, true, 29, 3),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -2980,10 +2980,10 @@ mod tests {
     #[test]
     fn terminal_loop_variants_reward_bleed_and_momentum_setup() {
         for (card, primed, expected_hp, expected_focus, expect_draw) in [
-            (CardId::TerminalLoop, false, 28, 0, false),
-            (CardId::TerminalLoop, true, 28, 1, true),
-            (CardId::TerminalLoopPlus, false, 25, 0, false),
-            (CardId::TerminalLoopPlus, true, 25, 2, true),
+            (CardId::TerminalLoop, false, 24, 0, false),
+            (CardId::TerminalLoop, true, 24, 1, true),
+            (CardId::TerminalLoopPlus, false, 20, 0, false),
+            (CardId::TerminalLoopPlus, true, 20, 2, true),
         ] {
             let mut state = blank_state();
             state.deck.hand = vec![card];
@@ -3045,7 +3045,7 @@ mod tests {
 
         state.resolve_enemy_intent(&mut Vec::new());
 
-        assert_eq!(state.player.fighter.hp, 35);
+        assert_eq!(state.player.fighter.hp, 32);
         assert_eq!(state.player.fighter.statuses.focus, -1);
     }
 
@@ -3119,7 +3119,7 @@ mod tests {
             target: None,
         });
 
-        assert_eq!(state.player.fighter.block, 14);
+        assert_eq!(state.player.fighter.block, 22);
         assert_eq!(state.deck.hand.len(), 2);
         assert!(state.deck.hand.contains(&CardId::GuardStep));
         assert!(state.deck.hand.contains(&CardId::FlareSlash));
