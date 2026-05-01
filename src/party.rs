@@ -78,16 +78,19 @@ impl PartyRunState {
     pub(crate) fn from_dungeons(dungeons: Vec<DungeonRun>) -> Option<Self> {
         let first = dungeons.first()?;
         let shared = Self::shared_from_dungeon(first);
-        let heroes = dungeons
-            .into_iter()
-            .map(|dungeon| HeroRunState {
+        let mut heroes = Vec::with_capacity(dungeons.len());
+        for dungeon in dungeons {
+            if Self::shared_from_dungeon(&dungeon) != shared {
+                return None;
+            }
+            heroes.push(HeroRunState {
                 deck: dungeon.deck,
                 modules: dungeon.modules,
                 player_hp: dungeon.player_hp,
                 player_max_hp: dungeon.player_max_hp,
                 credits: dungeon.credits,
-            })
-            .collect();
+            });
+        }
         Some(Self { shared, heroes })
     }
 
@@ -213,6 +216,9 @@ impl PartyRunState {
         deck_index: usize,
     ) -> Option<(CardId, CardId)> {
         let mut dungeon = self.active_dungeon(slot)?;
+        if !matches!(dungeon.current_room_kind(), Some(RoomKind::Rest)) {
+            return None;
+        }
         let from = *dungeon.deck.get(deck_index)?;
         let to = crate::content::upgraded_card(from)?;
         dungeon.deck[deck_index] = to;
@@ -871,6 +877,34 @@ mod tests {
         let party = PartyRunState::new(TEST_SEED, 3);
         assert_eq!(party.party_size(), 3);
         assert_eq!(party.hero(2).unwrap().player_hp, 32);
+    }
+
+    #[test]
+    fn from_dungeons_rejects_mismatched_shared_progression() {
+        let first = DungeonRun::new(TEST_SEED);
+        let mut second = first.clone();
+        second.current_level += 1;
+
+        assert!(PartyRunState::from_dungeons(vec![first, second]).is_none());
+    }
+
+    #[test]
+    fn rest_upgrade_only_applies_in_rest_room() {
+        let mut party = PartyRunState::new(TEST_SEED, 1);
+        let deck_index = party
+            .upgradable_card_indices(0)
+            .into_iter()
+            .next()
+            .expect("starter deck should have an upgrade");
+
+        assert_eq!(party.apply_rest_upgrade(0, deck_index), None);
+
+        party.shared.current_node = Some(0);
+        if let Some(node) = party.shared.nodes.get_mut(0) {
+            node.kind = RoomKind::Rest;
+        }
+
+        assert!(party.apply_rest_upgrade(0, deck_index).is_some());
     }
 
     #[test]

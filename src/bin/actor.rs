@@ -42,7 +42,13 @@ fn parse_args(args: Vec<String>) -> SimulationConfig {
                 let Some(value) = args.get(index) else {
                     usage_and_exit("Missing value for --players.");
                 };
-                config.players = parse_usize(value, "--players").clamp(1, 2);
+                let players = parse_usize(value, "--players");
+                if !matches!(players, 1 | 2) {
+                    usage_and_exit(&format!(
+                        "Invalid value for --players: {players}. Expected 1 or 2."
+                    ));
+                }
+                config.players = players;
             }
             "--verbose" => {
                 config.verbose = true;

@@ -1960,7 +1960,7 @@ const multiplayer = createMultiplayerController({
       }
       drawFrame();
       void flushHostEffects({ allowPrivilegedAction: false });
-      return;
+      return true;
     }
     if (payload.kind === "rest_heal") {
       if (typeof wasm.app_claim_rest_heal === "function") {
@@ -2995,6 +2995,7 @@ function onPointerDown(event) {
     const point = toCanvasPoint(event);
     if (pointInRect(point, blockingScreenActionRect(blocking)) && blocking.action) {
       multiplayer.activateBlockingAction?.(blocking.action);
+      return;
     }
     if (blocking.presentation !== "banner") {
       hidePlayerNameInput();

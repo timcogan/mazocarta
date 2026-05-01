@@ -9,6 +9,7 @@ const PAIR_PREFIX_ANSWER_V1: &str = "MZA1";
 const PAIR_TRANSPORT_PREFIX: &str = "MZQ1";
 const PAIR_CODEC_PLAIN: char = 'P';
 const PAIR_CODEC_COMPRESSED: char = 'Z';
+const MAX_PAIRING_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,8 +326,13 @@ fn inflate_raw(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let mut decoder = DeflateDecoder::new(bytes);
     let mut output = Vec::new();
     decoder
+        .by_ref()
+        .take((MAX_PAIRING_SIZE + 1) as u64)
         .read_to_end(&mut output)
         .map_err(|_| "Compressed pairing code could not be restored.".to_string())?;
+    if output.len() > MAX_PAIRING_SIZE {
+        return Err("Compressed pairing code exceeded the maximum size.".to_string());
+    }
     Ok(output)
 }
 
@@ -730,6 +736,16 @@ a=max-message-size:262144\r\n"
             .expect("parse")
             .expect("frame");
         assert_eq!(frame.chunk, raw_code);
+    }
+
+    #[test]
+    fn compressed_pairing_payloads_are_capped() {
+        let oversized = vec![b'A'; MAX_PAIRING_SIZE + 1];
+        let compressed = deflate_raw(&oversized).expect("compress");
+
+        let error = inflate_raw(&compressed).expect_err("oversized inflate should fail");
+
+        assert!(error.contains("maximum size"));
     }
 
     #[test]

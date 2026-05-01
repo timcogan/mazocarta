@@ -56,11 +56,31 @@ function printUsage(code, message = "") {
 
 function request(url) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, (res) => {
+    let settled = false;
+    let req;
+    const settle = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      req.removeListener("response", onResponse);
+      req.removeListener("error", onError);
+      req.removeListener("timeout", onTimeout);
+      callback(value);
+    };
+    const onError = (error) => settle(reject, error);
+    const onTimeout = () => {
+      settle(reject, new Error(`Request timed out after 5000ms: ${url}`));
+      req.destroy();
+    };
+    const onResponse = (res) => {
       res.resume();
-      resolve(res.statusCode || 0);
-    });
-    req.on("error", reject);
+      settle(resolve, res.statusCode || 0);
+    };
+    req = http.get(url);
+    req.setTimeout(5000, onTimeout);
+    req.on("response", onResponse);
+    req.on("error", onError);
   });
 }
 

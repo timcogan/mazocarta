@@ -129,6 +129,23 @@ impl PartySessionSnapshot {
         for index in self.configured_party_size..MAX_PARTY_SIZE {
             self.slots[index] = blank_slot(index);
         }
+        for (index, slot) in self
+            .slots
+            .iter_mut()
+            .enumerate()
+            .take(self.configured_party_size)
+        {
+            if index != self.local_slot && slot.claim == SlotClaimKind::Local {
+                slot.claim = SlotClaimKind::Open;
+                slot.connected = false;
+            }
+        }
+        let local_slot = &mut self.slots[self.local_slot];
+        local_slot.claim = SlotClaimKind::Local;
+        local_slot.connected = true;
+        if local_slot.name.trim().is_empty() {
+            local_slot.name = DEFAULT_LOCAL_NAME.to_string();
+        }
     }
 
     pub(crate) fn set_local_display_name(&mut self, name: &str) {
@@ -273,6 +290,23 @@ mod tests {
         assert_eq!(session.configured_party_size, 1);
         assert_eq!(session.slots[3].claim, SlotClaimKind::Open);
         assert!(session.slots[3].name.is_empty());
+    }
+
+    #[test]
+    fn shrinking_party_size_preserves_a_connected_local_slot() {
+        let mut session = PartySessionSnapshot::new(4);
+        session.slots[0] = blank_slot(0);
+        session.local_slot = 3;
+        session.slots[3].claim = SlotClaimKind::Local;
+        session.slots[3].connected = true;
+        session.slots[3].name = "Captain".to_string();
+
+        session.set_configured_party_size(1);
+
+        assert_eq!(session.local_slot, 0);
+        assert_eq!(session.slots[0].claim, SlotClaimKind::Local);
+        assert!(session.slots[0].connected);
+        assert_eq!(session.slots[0].name, DEFAULT_LOCAL_NAME);
     }
 
     #[test]

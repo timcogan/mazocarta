@@ -79,7 +79,7 @@ export function uiTitle(text, { level = 2, className = "" } = {}) {
 }
 
 export function uiCopy(text, { tone = "body", tag = "p", className = "" } = {}) {
-  if (!text) {
+  if (text == null) {
     return null;
   }
   const toneClass = {

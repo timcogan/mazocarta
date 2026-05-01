@@ -720,12 +720,15 @@ fn simulate_shop(dungeon: &mut DungeonRun) -> SimulationAdvance {
     let offers = shop_offers(seed, dungeon.current_level());
     match pick_shop_choice(dungeon, &offers) {
         ShopChoice::Buy(offer_index) => {
-            let offer = offers[offer_index];
-            resolve_progress(
-                dungeon.resolve_shop_purchase(offer.card, offer.price),
-                room_kind,
-                "Shop purchase could not resolve.",
-            )
+            if let Some(offer) = offers.get(offer_index).copied() {
+                resolve_progress(
+                    dungeon.resolve_shop_purchase(offer.card, offer.price),
+                    room_kind,
+                    "Shop purchase could not resolve.",
+                )
+            } else {
+                resolve_progress(None, room_kind, "Shop offer index was invalid.")
+            }
         }
         ShopChoice::Leave => resolve_progress(
             dungeon.resolve_shop_leave(),
@@ -1271,6 +1274,14 @@ mod tests {
             ),
             (
                 [CardId::GuardStep, CardId::QuickStrike, CardId::FlareSlash],
+                RewardChoice::Skip,
+            ),
+            (
+                [
+                    CardId::BarrierField,
+                    CardId::QuickStrike,
+                    CardId::FlareSlash,
+                ],
                 RewardChoice::Pick(0),
             ),
             (

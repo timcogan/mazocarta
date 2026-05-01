@@ -66,6 +66,7 @@ test("host first attack card does not freeze", async ({ page }) => {
   let state = await getCombatState(page);
   expect(state.hintText).toBe("Tap card or end turn");
   const beforeSnapshot = await getStoredHostCombatSnapshot(page);
+  expect(beforeSnapshot, "stored host combat snapshot before attack").not.toBeNull();
 
   await clickLogicalPoint(page, state.hitCenters, state.hitCenters.hand[0]);
   await expect
@@ -97,6 +98,7 @@ test("host first attack card does not freeze", async ({ page }) => {
     })
     .toBe(true);
   const afterSnapshot = await getStoredHostCombatSnapshot(page);
+  expect(afterSnapshot, "stored host combat snapshot after attack").not.toBeNull();
   expect(afterSnapshot.enemyHp[0]).toBeLessThan(beforeSnapshot.enemyHp[0]);
   expect(afterSnapshot.hand.length).toBeLessThan(beforeSnapshot.hand.length);
   expect(afterSnapshot.energy).toBeLessThan(beforeSnapshot.energy);
@@ -106,6 +108,7 @@ test("host first defense card does not freeze", async ({ page }) => {
   let state = await getCombatState(page);
   expect(state.hintText).toBe("Tap card or end turn");
   const beforeSnapshot = await getStoredHostCombatSnapshot(page);
+  expect(beforeSnapshot, "stored host combat snapshot before defense").not.toBeNull();
 
   await clickLogicalPoint(page, state.hitCenters, state.hitCenters.hand[1]);
   await expect
@@ -137,6 +140,7 @@ test("host first defense card does not freeze", async ({ page }) => {
     })
     .toBe(true);
   const afterSnapshot = await getStoredHostCombatSnapshot(page);
+  expect(afterSnapshot, "stored host combat snapshot after defense").not.toBeNull();
   expect(afterSnapshot.block).toBeGreaterThan(beforeSnapshot.block);
   expect(afterSnapshot.hand.length).toBeLessThan(beforeSnapshot.hand.length);
   expect(afterSnapshot.energy).toBeLessThan(beforeSnapshot.energy);

@@ -44,6 +44,7 @@
 }
 
 .multiplayer-room-card {
+
   --ui-card-max-width: 760px;
   border-color: transparent;
   background: transparent;
@@ -51,6 +52,7 @@
 }
 
 .multiplayer-guest-card {
+
   --ui-card-max-width: 460px;
   border-color: transparent;
   background: transparent;

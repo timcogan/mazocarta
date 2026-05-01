@@ -453,6 +453,27 @@ impl CombatState {
         })
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn expected_enemy_threat(&self) -> i32 {
+        let mut total = 0;
+        for enemy_index in 0..self.enemy_count() {
+            let Some(enemy) = self.enemy(enemy_index) else {
+                continue;
+            };
+            if enemy.fighter.hp <= 0 {
+                continue;
+            }
+            let Some(resolved) = self.resolved_enemy_intent(enemy_index) else {
+                continue;
+            };
+            let damage = scale_axis_value(resolved.damage, enemy.fighter.statuses.focus);
+            total += damage * resolved.hits as i32;
+            total += resolved.apply_bleed as i32 * 3;
+            total += resolved.on_hit_bleed as i32 * 3;
+        }
+        total
+    }
+
     pub(crate) fn apply_multiplayer_enemy_target_effects(
         &mut self,
         enemy_index: usize,
@@ -3043,6 +3064,35 @@ mod tests {
 
         assert_eq!(primary_enemy(&state).fighter.block, 8);
         assert_eq!(state.player.fighter.statuses.rhythm, -1);
+    }
+
+    #[test]
+    fn one_hero_enemy_resolution_parity_test() {
+        let mut single_path = blank_state();
+        set_primary_enemy_intent(&mut single_path, EnemyProfileId::ShardWeaver, 1);
+        single_path.player.fighter.block = 2;
+        primary_enemy_mut(&mut single_path).fighter.statuses.focus = 1;
+        primary_enemy_mut(&mut single_path)
+            .fighter
+            .statuses
+            .momentum = 1;
+        primary_enemy_mut(&mut single_path).on_hit_bleed = 2;
+
+        let mut split_path = single_path.clone();
+        let single_events = single_path.resolve_enemy_intent_for_current_player(0);
+        let resolved = split_path
+            .resolved_enemy_intent(0)
+            .expect("enemy intent should resolve");
+        let consumed_on_hit_bleed = resolved.on_hit_bleed > 0 && resolved.damage > 0;
+        let mut split_events = split_path.apply_multiplayer_enemy_target_effects(0, resolved);
+        split_events.extend(split_path.apply_multiplayer_enemy_self_effects(
+            0,
+            resolved,
+            consumed_on_hit_bleed,
+        ));
+
+        assert_eq!(split_events, single_events);
+        assert_eq!(split_path, single_path);
     }
 
     #[test]

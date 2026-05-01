@@ -1,8 +1,6 @@
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
-use crate::combat::{
-    Actor, CombatAction, CombatEvent, CombatOutcome, CombatState, scale_axis_value,
-};
+use crate::combat::{Actor, CombatAction, CombatEvent, CombatOutcome, CombatState};
 use crate::content::{
     CardArchetype, CardId, CardTarget, EventChoiceEffect, EventId, ModuleId, RewardTier,
     boss_module_choices, card_def, event_choice_effect, shop_offers, starter_module_choices,
@@ -891,26 +889,7 @@ fn playable_zero_cost_count(combat: &CombatState) -> usize {
 }
 
 pub(crate) fn expected_enemy_threat(combat: &CombatState) -> i32 {
-    let mut total = 0;
-    for enemy_index in 0..combat.enemy_count() {
-        let Some(enemy) = combat.enemy(enemy_index) else {
-            continue;
-        };
-        if enemy.fighter.hp <= 0 {
-            continue;
-        }
-        let Some(intent) = combat.current_intent(enemy_index) else {
-            continue;
-        };
-        let damage = scale_axis_value(
-            scale_axis_value(intent.damage, enemy.fighter.statuses.momentum),
-            enemy.fighter.statuses.focus,
-        );
-        total += damage * intent.hits as i32;
-        total += scale_axis_value(intent.apply_bleed as i32, enemy.fighter.statuses.momentum) * 3;
-        total += enemy.on_hit_bleed as i32 * 3;
-    }
-    total
+    combat.expected_enemy_threat()
 }
 
 fn is_zero_cost_card(card: CardId) -> bool {
@@ -992,6 +971,7 @@ fn best_scored_choice_index<T: Copy>(
         CardAddPolicy::DefensiveFallback => choices
             .iter()
             .copied()
+            .filter(|choice| choice.score >= zero_cost_threshold)
             .max_by(compare_scored_choice)
             .map(|choice| choice.value),
         CardAddPolicy::Skip => None,
@@ -1470,4 +1450,36 @@ pub(crate) fn choose_boss_module_reward(
         .filter(|module| !dungeon.has_module(*module))
         .collect::<Vec<_>>();
     choose_best_module(dungeon, &options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defensive_fallback_respects_score_threshold() {
+        let choices = [
+            ScoredChoice {
+                score: 13,
+                key: 0,
+                value: 0usize,
+                zero_cost: false,
+            },
+            ScoredChoice {
+                score: 9,
+                key: 1,
+                value: 1usize,
+                zero_cost: false,
+            },
+        ];
+
+        assert_eq!(
+            best_scored_choice_index(&choices, CardAddPolicy::DefensiveFallback, 14),
+            None
+        );
+        assert_eq!(
+            best_scored_choice_index(&choices, CardAddPolicy::DefensiveFallback, 13),
+            Some(0)
+        );
+    }
 }

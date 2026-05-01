@@ -4,8 +4,8 @@ set -euo pipefail
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 if [[ -z "${JAVA_HOME:-}" ]] && command -v javac >/dev/null 2>&1; then
-  JAVAC_PATH=$(readlink -f "$(command -v javac)")
-  export JAVA_HOME=$(CDPATH= cd -- "$(dirname "${JAVAC_PATH}")/.." && pwd)
+  JAVAC_PATH=$(command -v javac)
+  export JAVA_HOME=$(CDPATH= cd -P -- "$(dirname -- "$JAVAC_PATH")/.." && pwd -P)
 fi
 
 if [[ -n "${ANDROID_SDK_ROOT:-}" && -d "${ANDROID_SDK_ROOT}" ]]; then
