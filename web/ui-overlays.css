@@ -1,0 +1,299 @@
+#multiplayer-ui {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+  font-family: var(--mono);
+}
+
+#multiplayer-ui[data-open="true"] {
+  pointer-events: auto;
+}
+
+#multiplayer-ui .ui-shell {
+  padding:
+    calc(18px + env(safe-area-inset-top))
+    calc(18px + env(safe-area-inset-right))
+    calc(18px + env(safe-area-inset-bottom))
+    calc(18px + env(safe-area-inset-left));
+  background: #000000;
+  backdrop-filter: none;
+}
+
+#multiplayer-ui .ui-card.multiplayer-modal-card {
+  max-height: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable both-edges;
+  border-radius: 10px;
+  border-color: transparent;
+  background:
+    linear-gradient(180deg, rgba(2, 2, 2, 0.985), rgba(0, 0, 0, 0.96)),
+    rgba(0, 0, 0, 0.96);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.46),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+#multiplayer-ui .ui-header-copy {
+  align-items: center;
+  text-align: center;
+}
+
+.multiplayer-entry-card {
+  --ui-card-max-width: 560px;
+}
+
+.multiplayer-room-card {
+
+  --ui-card-max-width: 760px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.multiplayer-guest-card {
+
+  --ui-card-max-width: 460px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.multiplayer-claim-shell {
+  --ui-card-max-width: 640px;
+}
+
+.multiplayer-room-screen {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.multiplayer-room-stack {
+  gap: 18px;
+}
+
+.multiplayer-room-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.multiplayer-scanner-preview {
+  position: relative;
+  display: block;
+  width: 100%;
+  align-self: center;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: 1px solid var(--ui-stroke-card);
+  border-radius: 12px;
+  background: #050505;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.multiplayer-scanner-video.ui-video-surface {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #050505;
+  object-fit: contain;
+}
+
+.multiplayer-scanner-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.multiplayer-scanner-detection-box {
+  position: absolute;
+  border: 2px solid rgba(51, 255, 102, 0.92);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.58),
+    0 0 18px rgba(51, 255, 102, 0.26);
+  opacity: 0.94;
+  transition:
+    left 60ms linear,
+    top 60ms linear,
+    width 60ms linear,
+    height 60ms linear,
+    opacity 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.multiplayer-scanner-detection-box.is-accepted {
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.72),
+    0 0 28px rgba(51, 255, 102, 0.44);
+}
+
+.multiplayer-scanner-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.multiplayer-scanner-progress-track {
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(51, 255, 102, 0.24);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.multiplayer-scanner-progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(51, 255, 102, 0.62), rgba(123, 255, 168, 0.95));
+}
+
+.multiplayer-scanner-progress-label {
+  color: var(--ui-text-note);
+  font: 400 11px/1.2 var(--mono);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.multiplayer-guest-code.ui-textarea {
+  min-height: 120px;
+}
+
+.multiplayer-host-code.ui-textarea {
+  min-height: 132px;
+}
+
+.multiplayer-room-label {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.multiplayer-room-label--centered {
+  text-align: center;
+  align-self: center;
+}
+
+.multiplayer-qr-surface {
+  display: block;
+  align-self: center;
+  margin: 0 auto;
+  width: min(100%, 384px);
+  max-width: 100%;
+  height: auto;
+}
+
+.multiplayer-roster {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid rgba(51, 255, 102, 0.2);
+}
+
+.multiplayer-roster-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  border-bottom: 1px solid rgba(51, 255, 102, 0.18);
+}
+
+.multiplayer-roster-row[data-local="true"] {
+  border-bottom-color: var(--ui-stroke-idle);
+}
+
+.multiplayer-roster-row[data-offline="true"] {
+  border-bottom-color: rgba(111, 159, 123, 0.38);
+}
+
+.multiplayer-roster-name {
+  color: var(--ui-text-main);
+  font: 700 13px/1.2 var(--mono);
+}
+
+.multiplayer-roster-state {
+  color: var(--ui-text-note);
+  font: 400 12px/1.2 var(--mono);
+  text-transform: uppercase;
+}
+
+.multiplayer-roster-row[data-local="true"] .multiplayer-roster-state {
+  color: var(--ui-text-soft);
+}
+
+.multiplayer-roster-row[data-offline="true"] .multiplayer-roster-state {
+  color: var(--ui-text-dim);
+}
+
+.multiplayer-claim-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.multiplayer-claim-card.ui-button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 96px;
+  padding: 16px;
+  text-align: left;
+}
+
+.multiplayer-claim-title {
+  color: #f2fff4;
+}
+
+.multiplayer-claim-detail {
+  color: var(--ui-text-muted);
+  font: 400 12px/1.45 var(--mono);
+}
+
+@media (max-width: 760px) {
+  #multiplayer-ui .ui-shell {
+    padding:
+      calc(12px + env(safe-area-inset-top))
+      calc(12px + env(safe-area-inset-right))
+      calc(12px + env(safe-area-inset-bottom))
+      calc(12px + env(safe-area-inset-left));
+  }
+
+  .multiplayer-claim-grid {
+    grid-template-columns: 1fr;
+  }
+
+  #multiplayer-ui .ui-shell.multiplayer-room-shell {
+    align-items: flex-start;
+    padding-top: calc(8px + env(safe-area-inset-top));
+  }
+
+  #multiplayer-ui .ui-shell.multiplayer-guest-confirm-shell {
+    padding-top: calc(2px + env(safe-area-inset-top));
+  }
+
+  #multiplayer-ui .multiplayer-room-shell .ui-header-copy {
+    gap: 4px;
+  }
+
+  #multiplayer-ui .multiplayer-room-shell .ui-stack,
+  #multiplayer-ui .multiplayer-room-stack {
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .multiplayer-room-block {
+    gap: 8px;
+  }
+
+  .multiplayer-qr-surface {
+    width: 100%;
+  }
+}

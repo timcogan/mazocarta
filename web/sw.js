@@ -10,12 +10,20 @@ const SHELL_CACHE = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const PREVIEW_PATH = IS_PREVIEW_SCOPE ? null : new URL("preview/", APP_SCOPE_URL).pathname;
 const PREVIEW_PATH_WITHOUT_SLASH =
   PREVIEW_PATH && PREVIEW_PATH.endsWith("/") ? PREVIEW_PATH.slice(0, -1) : PREVIEW_PATH;
-const PRECACHE_URLS = [
+const CRITICAL_PRECACHE_URLS = [
   APP_SCOPE,
   INDEX_URL,
   new URL("./index.js", self.location.href).toString(),
-  new URL("./styles.css", self.location.href).toString(),
   new URL("./mazocarta.wasm", self.location.href).toString(),
+];
+const OPTIONAL_PRECACHE_URLS = [
+  new URL("./multiplayer.js", self.location.href).toString(),
+  new URL("./styles.css", self.location.href).toString(),
+  new URL("./ui-kit.css", self.location.href).toString(),
+  new URL("./ui-overlays.css", self.location.href).toString(),
+  new URL("./ui-kit.js", self.location.href).toString(),
+  new URL("./jsqr.js", self.location.href).toString(),
+  new URL("./qrcode.bundle.mjs", self.location.href).toString(),
   new URL("./mazocarta.svg", self.location.href).toString(),
   new URL("./icons/combat/heart.png", self.location.href).toString(),
   new URL("./icons/combat/shield.png", self.location.href).toString(),
@@ -32,9 +40,20 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
       .open(SHELL_CACHE)
-      .then((cache) =>
-        cache.addAll(PRECACHE_URLS.map((url) => new Request(url, { cache: "reload" }))),
-      ),
+      .then(async (cache) => {
+        await cache.addAll(
+          CRITICAL_PRECACHE_URLS.map((url) => new Request(url, { cache: "reload" })),
+        );
+        await Promise.allSettled(
+          OPTIONAL_PRECACHE_URLS.map(async (url) => {
+            const request = new Request(url, { cache: "reload" });
+            const response = await fetch(request);
+            if (response.ok) {
+              await cache.put(request, response);
+            }
+          }),
+        );
+      }),
   );
 });
 

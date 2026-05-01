@@ -1,0 +1,16 @@
+{
+  "name": "mazocarta-web-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor:qr": "node scripts/vendor-qr-libs.mjs",
+    "test:e2e": "playwright test",
+    "soak:2p": "node scripts/soak-multiplayer-2p.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0",
+    "esbuild": "^0.25.12",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4"
+  }
+}

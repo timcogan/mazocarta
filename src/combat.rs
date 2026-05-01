@@ -67,6 +67,22 @@ pub(crate) struct EncounterSetup {
     pub(crate) enemies: Vec<EncounterEnemySetup>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResolvedEnemyIntent {
+    pub(crate) damage: i32,
+    pub(crate) hits: u8,
+    pub(crate) on_hit_bleed: u8,
+    pub(crate) gain_block: i32,
+    pub(crate) prime_bleed: u8,
+    pub(crate) self_focus: i8,
+    pub(crate) self_rhythm: i8,
+    pub(crate) self_momentum: i8,
+    pub(crate) target_focus: i8,
+    pub(crate) target_rhythm: i8,
+    pub(crate) target_momentum: i8,
+    pub(crate) apply_bleed: u8,
+}
+
 impl Default for EncounterSetup {
     fn default() -> Self {
         Self {
@@ -344,6 +360,41 @@ impl CombatState {
         self.process_commands(queue)
     }
 
+    pub(crate) fn start_player_turn_only(&mut self) -> Vec<CombatEvent> {
+        self.process_commands([CombatCommand::StartTurn(Actor::Player)])
+    }
+
+    pub(crate) fn start_enemy_turn_only(&mut self) -> Vec<CombatEvent> {
+        self.process_commands([CombatCommand::StartTurn(Actor::Enemy(0))])
+    }
+
+    pub(crate) fn apply_player_end_turn_only(&mut self) -> Vec<CombatEvent> {
+        self.process_commands([
+            CombatCommand::EndTurn(Actor::Player),
+            CombatCommand::ApplyEndOfTurn(Actor::Player),
+            CombatCommand::CheckOutcome,
+        ])
+    }
+
+    pub(crate) fn apply_enemy_end_turn_only(&mut self) -> Vec<CombatEvent> {
+        self.process_commands([
+            CombatCommand::ApplyEndOfTurn(Actor::Enemy(0)),
+            CombatCommand::EndTurn(Actor::Enemy(0)),
+            CombatCommand::CheckOutcome,
+        ])
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn resolve_enemy_intent_for_current_player(
+        &mut self,
+        enemy_index: usize,
+    ) -> Vec<CombatEvent> {
+        let mut events = Vec::new();
+        self.resolve_enemy_intent_at(enemy_index, &mut events);
+        self.check_outcome(&mut events);
+        events
+    }
+
     pub(crate) fn is_player_turn(&self) -> bool {
         matches!(self.phase, TurnPhase::PlayerTurn)
     }
@@ -378,6 +429,184 @@ impl CombatState {
     pub(crate) fn current_intent(&self, index: usize) -> Option<EnemyIntent> {
         let enemy = self.enemy(index)?;
         Some(enemy_intent(enemy.profile, enemy.intent_index))
+    }
+
+    pub(crate) fn resolved_enemy_intent(&self, index: usize) -> Option<ResolvedEnemyIntent> {
+        let intent = self.current_intent(index)?;
+        let enemy_actor = Actor::Enemy(index);
+        let enemy_momentum = self.axis_value(enemy_actor, AxisKind::Momentum);
+        Some(ResolvedEnemyIntent {
+            damage: scale_axis_value(intent.damage, enemy_momentum),
+            hits: intent.hits,
+            on_hit_bleed: self
+                .enemy(index)
+                .map(|enemy| enemy.on_hit_bleed)
+                .unwrap_or(0),
+            gain_block: scale_axis_value(intent.gain_block, enemy_momentum),
+            prime_bleed: scale_axis_value(intent.prime_bleed as i32, enemy_momentum).max(0) as u8,
+            self_focus: scale_intent_axis_delta(intent.self_focus, enemy_momentum),
+            self_rhythm: scale_intent_axis_delta(intent.self_rhythm, enemy_momentum),
+            self_momentum: scale_intent_axis_delta(intent.self_momentum, enemy_momentum),
+            target_focus: scale_intent_axis_delta(intent.target_focus, enemy_momentum),
+            target_rhythm: scale_intent_axis_delta(intent.target_rhythm, enemy_momentum),
+            target_momentum: scale_intent_axis_delta(intent.target_momentum, enemy_momentum),
+            apply_bleed: scale_axis_value(intent.apply_bleed as i32, enemy_momentum).max(0) as u8,
+        })
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn expected_enemy_threat(&self) -> i32 {
+        let mut total = 0;
+        for enemy_index in 0..self.enemy_count() {
+            let Some(enemy) = self.enemy(enemy_index) else {
+                continue;
+            };
+            if enemy.fighter.hp <= 0 {
+                continue;
+            }
+            let Some(resolved) = self.resolved_enemy_intent(enemy_index) else {
+                continue;
+            };
+            let damage = scale_axis_value(resolved.damage, enemy.fighter.statuses.focus);
+            total += damage * resolved.hits as i32;
+            total += resolved.apply_bleed as i32 * 3;
+            total += resolved.on_hit_bleed as i32 * 3;
+        }
+        total
+    }
+
+    pub(crate) fn apply_multiplayer_enemy_target_effects(
+        &mut self,
+        enemy_index: usize,
+        resolved: ResolvedEnemyIntent,
+    ) -> Vec<CombatEvent> {
+        let mut events = Vec::new();
+        let mut on_hit_bleed = resolved.on_hit_bleed;
+
+        for hit_index in 0..resolved.hits {
+            if resolved.damage <= 0 {
+                break;
+            }
+            self.damage(
+                Actor::Enemy(enemy_index),
+                Actor::Player,
+                resolved.damage,
+                &mut events,
+            );
+            if on_hit_bleed > 0 {
+                self.apply_status(
+                    Actor::Player,
+                    StatusKind::Bleed,
+                    on_hit_bleed as i8,
+                    &mut events,
+                );
+                on_hit_bleed = 0;
+            }
+            if hit_index + 1 < resolved.hits && self.player.fighter.hp <= 0 {
+                break;
+            }
+        }
+
+        if self.player.fighter.hp > 0 {
+            if resolved.target_focus != 0 {
+                self.apply_status(
+                    Actor::Player,
+                    StatusKind::Focus,
+                    resolved.target_focus,
+                    &mut events,
+                );
+            }
+            if resolved.target_rhythm != 0 {
+                self.apply_status(
+                    Actor::Player,
+                    StatusKind::Rhythm,
+                    resolved.target_rhythm,
+                    &mut events,
+                );
+            }
+            if resolved.target_momentum != 0 {
+                self.apply_status(
+                    Actor::Player,
+                    StatusKind::Momentum,
+                    resolved.target_momentum,
+                    &mut events,
+                );
+            }
+            if resolved.apply_bleed > 0 {
+                self.apply_status(
+                    Actor::Player,
+                    StatusKind::Bleed,
+                    resolved.apply_bleed as i8,
+                    &mut events,
+                );
+            }
+        }
+
+        self.check_outcome(&mut events);
+        events
+    }
+
+    pub(crate) fn apply_multiplayer_enemy_self_effects(
+        &mut self,
+        enemy_index: usize,
+        resolved: ResolvedEnemyIntent,
+        consumed_on_hit_bleed: bool,
+    ) -> Vec<CombatEvent> {
+        let mut events = Vec::new();
+        if let Some(enemy) = self.enemy_mut(enemy_index) {
+            if consumed_on_hit_bleed {
+                enemy.on_hit_bleed = 0;
+            }
+        }
+
+        let enemy_actor = Actor::Enemy(enemy_index);
+        if resolved.gain_block > 0 {
+            self.gain_block(enemy_actor, resolved.gain_block, &mut events);
+        }
+        if resolved.self_focus != 0 {
+            self.apply_status(
+                enemy_actor,
+                StatusKind::Focus,
+                resolved.self_focus,
+                &mut events,
+            );
+        }
+        if resolved.self_rhythm != 0 {
+            self.apply_status(
+                enemy_actor,
+                StatusKind::Rhythm,
+                resolved.self_rhythm,
+                &mut events,
+            );
+        }
+        if resolved.self_momentum != 0 {
+            self.apply_status(
+                enemy_actor,
+                StatusKind::Momentum,
+                resolved.self_momentum,
+                &mut events,
+            );
+        }
+        if resolved.prime_bleed > 0 {
+            if let Some(enemy) = self.enemy_mut(enemy_index) {
+                enemy.on_hit_bleed = resolved.prime_bleed;
+            }
+            events.push(CombatEvent::EnemyPrimedBleed {
+                enemy_index,
+                amount: resolved.prime_bleed,
+            });
+        }
+        if let Some(enemy) = self.enemy_mut(enemy_index) {
+            enemy.intent_index = (enemy.intent_index + 1) % 3;
+        }
+        if let Some(next_intent) = self.current_intent(enemy_index) {
+            events.push(CombatEvent::IntentAdvanced {
+                enemy_index,
+                intent: next_intent,
+            });
+        }
+        self.check_outcome(&mut events);
+        events
     }
 
     pub(crate) fn rng_state(&self) -> u64 {
@@ -1477,101 +1706,104 @@ impl CombatState {
             .collect();
 
         for enemy_index in enemy_indices {
-            let Some(intent) = self.current_intent(enemy_index) else {
-                continue;
-            };
-            let enemy_actor = Actor::Enemy(enemy_index);
-            let enemy_momentum = self.axis_value(enemy_actor, AxisKind::Momentum);
-            let scaled_damage = scale_axis_value(intent.damage, enemy_momentum);
-            let scaled_block = scale_axis_value(intent.gain_block, enemy_momentum);
-            let scaled_prime_bleed =
-                scale_axis_value(intent.prime_bleed as i32, enemy_momentum).max(0) as u8;
-            let scaled_apply_bleed =
-                scale_axis_value(intent.apply_bleed as i32, enemy_momentum).max(0) as u8;
-
-            for hit_index in 0..intent.hits {
-                if scaled_damage <= 0 {
-                    break;
-                }
-                self.enemy_attack(enemy_index, scaled_damage, events);
-                if hit_index + 1 < intent.hits && self.player.fighter.hp <= 0 {
-                    break;
-                }
-            }
-
-            if self.player.fighter.hp <= 0 {
-                break;
-            }
-
-            if scaled_block > 0 {
-                self.gain_block(enemy_actor, scaled_block, events);
-            }
-
-            let self_focus = scale_intent_axis_delta(intent.self_focus, enemy_momentum);
-            if self_focus != 0 {
-                self.apply_status(enemy_actor, StatusKind::Focus, self_focus, events);
-            }
-
-            let self_rhythm = scale_intent_axis_delta(intent.self_rhythm, enemy_momentum);
-            if self_rhythm != 0 {
-                self.apply_status(enemy_actor, StatusKind::Rhythm, self_rhythm, events);
-            }
-
-            let self_momentum = scale_intent_axis_delta(intent.self_momentum, enemy_momentum);
-            if self_momentum != 0 {
-                self.apply_status(enemy_actor, StatusKind::Momentum, self_momentum, events);
-            }
-
-            if scaled_prime_bleed > 0 {
-                if let Some(enemy) = self.enemy_mut(enemy_index) {
-                    enemy.on_hit_bleed = scaled_prime_bleed;
-                }
-                events.push(CombatEvent::EnemyPrimedBleed {
-                    enemy_index,
-                    amount: scaled_prime_bleed,
-                });
-            }
-
-            let target_focus = scale_intent_axis_delta(intent.target_focus, enemy_momentum);
-            if target_focus != 0 {
-                self.apply_status(Actor::Player, StatusKind::Focus, target_focus, events);
-            }
-
-            let target_rhythm = scale_intent_axis_delta(intent.target_rhythm, enemy_momentum);
-            if target_rhythm != 0 {
-                self.apply_status(Actor::Player, StatusKind::Rhythm, target_rhythm, events);
-            }
-
-            let target_momentum = scale_intent_axis_delta(intent.target_momentum, enemy_momentum);
-            if target_momentum != 0 {
-                self.apply_status(Actor::Player, StatusKind::Momentum, target_momentum, events);
-            }
-
-            if scaled_apply_bleed > 0 {
-                self.apply_status(
-                    Actor::Player,
-                    StatusKind::Bleed,
-                    scaled_apply_bleed as i8,
-                    events,
-                );
-            }
-
-            if let Some(enemy) = self.enemy_mut(enemy_index) {
-                enemy.intent_index = (enemy.intent_index + 1) % 3;
-            }
-            if let Some(next_intent) = self.current_intent(enemy_index) {
-                events.push(CombatEvent::IntentAdvanced {
-                    enemy_index,
-                    intent: next_intent,
-                });
-            }
-
+            self.resolve_enemy_intent_at(enemy_index, events);
             if self.player.fighter.hp <= 0 {
                 break;
             }
         }
 
         self.end_turn(Actor::Enemy(0), events);
+    }
+
+    fn resolve_enemy_intent_at(&mut self, enemy_index: usize, events: &mut Vec<CombatEvent>) {
+        let Some(intent) = self.current_intent(enemy_index) else {
+            return;
+        };
+        let enemy_actor = Actor::Enemy(enemy_index);
+        let enemy_momentum = self.axis_value(enemy_actor, AxisKind::Momentum);
+        let scaled_damage = scale_axis_value(intent.damage, enemy_momentum);
+        let scaled_block = scale_axis_value(intent.gain_block, enemy_momentum);
+        let scaled_prime_bleed =
+            scale_axis_value(intent.prime_bleed as i32, enemy_momentum).max(0) as u8;
+        let scaled_apply_bleed =
+            scale_axis_value(intent.apply_bleed as i32, enemy_momentum).max(0) as u8;
+
+        for hit_index in 0..intent.hits {
+            if scaled_damage <= 0 {
+                break;
+            }
+            self.enemy_attack(enemy_index, scaled_damage, events);
+            if hit_index + 1 < intent.hits && self.player.fighter.hp <= 0 {
+                break;
+            }
+        }
+
+        if self.player.fighter.hp <= 0 {
+            return;
+        }
+
+        if scaled_block > 0 {
+            self.gain_block(enemy_actor, scaled_block, events);
+        }
+
+        let self_focus = scale_intent_axis_delta(intent.self_focus, enemy_momentum);
+        if self_focus != 0 {
+            self.apply_status(enemy_actor, StatusKind::Focus, self_focus, events);
+        }
+
+        let self_rhythm = scale_intent_axis_delta(intent.self_rhythm, enemy_momentum);
+        if self_rhythm != 0 {
+            self.apply_status(enemy_actor, StatusKind::Rhythm, self_rhythm, events);
+        }
+
+        let self_momentum = scale_intent_axis_delta(intent.self_momentum, enemy_momentum);
+        if self_momentum != 0 {
+            self.apply_status(enemy_actor, StatusKind::Momentum, self_momentum, events);
+        }
+
+        if scaled_prime_bleed > 0 {
+            if let Some(enemy) = self.enemy_mut(enemy_index) {
+                enemy.on_hit_bleed = scaled_prime_bleed;
+            }
+            events.push(CombatEvent::EnemyPrimedBleed {
+                enemy_index,
+                amount: scaled_prime_bleed,
+            });
+        }
+
+        let target_focus = scale_intent_axis_delta(intent.target_focus, enemy_momentum);
+        if target_focus != 0 {
+            self.apply_status(Actor::Player, StatusKind::Focus, target_focus, events);
+        }
+
+        let target_rhythm = scale_intent_axis_delta(intent.target_rhythm, enemy_momentum);
+        if target_rhythm != 0 {
+            self.apply_status(Actor::Player, StatusKind::Rhythm, target_rhythm, events);
+        }
+
+        let target_momentum = scale_intent_axis_delta(intent.target_momentum, enemy_momentum);
+        if target_momentum != 0 {
+            self.apply_status(Actor::Player, StatusKind::Momentum, target_momentum, events);
+        }
+
+        if scaled_apply_bleed > 0 {
+            self.apply_status(
+                Actor::Player,
+                StatusKind::Bleed,
+                scaled_apply_bleed as i8,
+                events,
+            );
+        }
+
+        if let Some(enemy) = self.enemy_mut(enemy_index) {
+            enemy.intent_index = (enemy.intent_index + 1) % 3;
+        }
+        if let Some(next_intent) = self.current_intent(enemy_index) {
+            events.push(CombatEvent::IntentAdvanced {
+                enemy_index,
+                intent: next_intent,
+            });
+        }
     }
 
     fn enemy_attack(&mut self, enemy_index: usize, amount: i32, events: &mut Vec<CombatEvent>) {
@@ -1934,6 +2166,18 @@ mod tests {
         state.player.fighter.hp = 40;
         state.player.fighter.max_hp = 40;
         state
+    }
+
+    #[test]
+    fn enemy_end_turn_only_emits_turn_ended() {
+        let mut state = blank_state();
+        state.phase = TurnPhase::EnemyTurn;
+
+        let events = state.apply_enemy_end_turn_only();
+
+        assert!(events.contains(&CombatEvent::TurnEnded {
+            actor: Actor::Enemy(0),
+        }));
     }
 
     #[test]
@@ -2833,6 +3077,35 @@ mod tests {
 
         assert_eq!(primary_enemy(&state).fighter.block, 8);
         assert_eq!(state.player.fighter.statuses.rhythm, -1);
+    }
+
+    #[test]
+    fn one_hero_enemy_resolution_parity_test() {
+        let mut single_path = blank_state();
+        set_primary_enemy_intent(&mut single_path, EnemyProfileId::ShardWeaver, 1);
+        single_path.player.fighter.block = 2;
+        primary_enemy_mut(&mut single_path).fighter.statuses.focus = 1;
+        primary_enemy_mut(&mut single_path)
+            .fighter
+            .statuses
+            .momentum = 1;
+        primary_enemy_mut(&mut single_path).on_hit_bleed = 2;
+
+        let mut split_path = single_path.clone();
+        let single_events = single_path.resolve_enemy_intent_for_current_player(0);
+        let resolved = split_path
+            .resolved_enemy_intent(0)
+            .expect("enemy intent should resolve");
+        let consumed_on_hit_bleed = resolved.on_hit_bleed > 0 && resolved.damage > 0;
+        let mut split_events = split_path.apply_multiplayer_enemy_target_effects(0, resolved);
+        split_events.extend(split_path.apply_multiplayer_enemy_self_effects(
+            0,
+            resolved,
+            consumed_on_hit_bleed,
+        ));
+
+        assert_eq!(split_events, single_events);
+        assert_eq!(split_path, single_path);
     }
 
     #[test]

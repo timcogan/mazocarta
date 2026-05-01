@@ -1,23 +1,34 @@
 use std::collections::VecDeque;
 use std::fmt::Write;
 
+#[cfg(any(test, feature = "e2e"))]
+use crate::autoplay::{
+    CombatChoice as AutoplayCombatChoice, RestChoice as AutoplayRestChoice,
+    RewardChoice as AutoplayRewardChoice, ShopChoice as AutoplayShopChoice,
+    choose_best_module as choose_autoplay_best_module,
+    choose_combat_action as choose_autoplay_combat_action,
+    pick_event_choice as pick_autoplay_event_choice, pick_map_node as pick_autoplay_map_node,
+    pick_party_map_node, pick_rest_choice as pick_autoplay_rest_choice,
+    pick_reward_choice as pick_autoplay_reward_choice,
+    pick_shop_choice as pick_autoplay_shop_choice,
+};
 use crate::combat::{
     Actor, CombatAction, CombatEvent, CombatOutcome, CombatState, DeckState, EncounterSetup,
-    EnemyState, FighterState, PlayerState, StatusKind, StatusSet, preview_scaled_value,
+    EnemyState, FighterState, PlayerState, StatusKind, StatusSet, TurnPhase, preview_scaled_value,
 };
 use crate::content::{
     AxisKind, CardArchetype, CardDef, CardId, EnemyIntent, EnemyProfileId, EnemySpriteLayerTone,
     EventId, Language, ModuleDef, ModuleId, RewardTier, ShopOffer, all_base_cards,
-    boss_module_choices, card_def, default_starter_module, enemy_profile_level, enemy_sprite_def,
-    localized_card_def, localized_card_name, localized_enemy_intent, localized_enemy_name,
-    localized_event_choice_body, localized_event_choice_title, localized_event_def,
-    localized_module_def, localized_text, reward_choices, shop_offers, starter_module_choices,
-    upgraded_card,
+    boss_module_choices, card_def, enemy_profile_level, enemy_sprite_def, localized_card_def,
+    localized_card_name, localized_enemy_intent, localized_enemy_name, localized_event_choice_body,
+    localized_event_choice_title, localized_event_def, localized_module_def, localized_text,
+    reward_choices, shop_offers, starter_module_choices, upgraded_card,
 };
 use crate::dungeon::{
     DungeonProgress, DungeonRun, EventResolution, NodeSelection, RoomKind, credits_reward_for_room,
     localized_level_codename, localized_level_summary,
 };
+use crate::party::{PartyCombatState, PartyRunState};
 use crate::run_logic::{
     apply_post_victory_modules as apply_post_victory_module_effects,
     combat_seed_for_dungeon as shared_combat_seed_for_dungeon,
@@ -25,13 +36,14 @@ use crate::run_logic::{
 use crate::save::{
     RunSaveEnvelope, SavedCheckpoint, SavedCombatState, SavedDeckState, SavedDungeonNode,
     SavedDungeonRun, SavedEnemyState, SavedEventState, SavedFighterState, SavedModuleSelectState,
-    SavedPlayerState, SavedRewardState, SavedRunState, SavedShopOffer, SavedShopState,
-    parse_run_save, resolve_card_id, resolve_deck_card_id, resolve_encounter_setup,
-    resolve_enemy_profile, resolve_event_id, resolve_module_id, resolve_reward_tier,
-    resolve_room_kind, resolve_turn_phase, save_encounter_setup, serialize_card_id,
-    serialize_enemy_profile, serialize_envelope, serialize_event_id, serialize_module_id,
-    serialize_reward_tier, serialize_room_kind, serialize_turn_phase,
+    SavedPartyState, SavedPlayerState, SavedRestState, SavedRewardState, SavedRunState,
+    SavedShopOffer, SavedShopState, parse_run_save, resolve_card_id, resolve_deck_card_id,
+    resolve_encounter_setup, resolve_enemy_profile, resolve_event_id, resolve_module_id,
+    resolve_reward_tier, resolve_room_kind, resolve_turn_phase, save_encounter_setup,
+    serialize_card_id, serialize_enemy_profile, serialize_envelope, serialize_event_id,
+    serialize_module_id, serialize_reward_tier, serialize_room_kind, serialize_turn_phase,
 };
+use crate::session::{HeroRuntimeSummary, PartySessionSnapshot, serialize_party_session};
 
 const LOGICAL_WIDTH: f32 = 1280.0;
 const LOGICAL_HEIGHT: f32 = 720.0;
@@ -180,6 +192,7 @@ const MAP_DEBUG_BUTTON_PAD_X: f32 = 10.0;
 const MAP_DEBUG_BUTTON_PAD_Y: f32 = 6.0;
 const MAP_DEBUG_BUTTON_GAP: f32 = 6.0;
 const BOOT_CONTINUE_LABEL: &str = "Continue";
+const BOOT_MULTIPLAYER_LABEL: &str = "Multiplayer";
 const BOOT_RESTART_LABEL: &str = "Restart";
 const BOOT_SETTINGS_LABEL: &str = "Settings";
 const BOOT_INSTALL_LABEL: &str = "Install";
@@ -231,6 +244,7 @@ impl Rect {
 enum HitTarget {
     Start,
     Continue,
+    Multiplayer,
     Settings,
     Install,
     Update,
@@ -345,6 +359,169 @@ struct DisplayedCombatStats {
     enemies: Vec<ActorDisplayedStats>,
 }
 
+#[derive(Clone, Debug)]
+struct CombatPlaybackBaseline {
+    displayed: DisplayedCombatStats,
+}
+
+#[derive(Clone, Debug)]
+struct MultiplayerCombatViewState {
+    layout: Layout,
+    baseline: Option<CombatPlaybackBaseline>,
+    deck: DeckState,
+    hand: Vec<CardId>,
+    hand_len: usize,
+    phase: TurnPhase,
+    turn: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MultiplayerCombatLayoutTransition {
+    RemoveCard(Option<usize>),
+    RevealHand,
+}
+
+const MULTIPLAYER_COMBAT_ACTION_NONE: u32 = 0;
+const MULTIPLAYER_COMBAT_ACTION_END_TURN: u32 = 1;
+const MULTIPLAYER_COMBAT_ACTION_PLAY_ALL_ENEMIES: u32 = 2;
+const MULTIPLAYER_COMBAT_ACTION_PLAY_ENEMY: u32 = 3;
+const MULTIPLAYER_COMBAT_ACTION_PLAY_SELF: u32 = 4;
+
+#[cfg(any(test, feature = "e2e"))]
+mod e2e_debug_codes {
+    use super::BASE_SEED;
+
+    pub(super) const E2E_FIXTURE_SEED: u64 = BASE_SEED ^ 0x0E2E_F17E_DEAD_BEEF;
+    pub(super) const E2E_FIXTURE_HOST_FIRST_CARD: u32 = 1;
+    pub(super) const E2E_FIXTURE_MULTIPLAYER_MAP: u32 = 2;
+    pub(super) const E2E_FIXTURE_MULTIPLAYER_REWARD_BARRIER: u32 = 3;
+    pub(super) const E2E_COMBAT_HINT_WAITING_PLAYERS: u32 = 1;
+    pub(super) const E2E_COMBAT_HINT_RESOLVING_ENEMY_TURN: u32 = 2;
+    pub(super) const E2E_COMBAT_HINT_RESOLVING_ACTION: u32 = 3;
+    pub(super) const E2E_COMBAT_HINT_RESOLVING_ENCOUNTER: u32 = 4;
+    pub(super) const E2E_COMBAT_HINT_TAP_ENEMY: u32 = 5;
+    pub(super) const E2E_COMBAT_HINT_TAP_PLAYER: u32 = 6;
+    pub(super) const E2E_COMBAT_HINT_TAP_CARD_OR_END_TURN: u32 = 7;
+    pub(super) const E2E_COMBAT_HINT_INSUFFICIENT_ENERGY: u32 = 8;
+    pub(super) const E2E_COMBAT_LOCK_LOCAL_READY: u32 = 1 << 0;
+    pub(super) const E2E_COMBAT_LOCK_PENDING_LOCAL_ACTION: u32 = 1 << 1;
+    pub(super) const E2E_COMBAT_LOCK_AUTO_PLAYBACK: u32 = 1 << 2;
+    pub(super) const E2E_COMBAT_LOCK_PENDING_OUTCOME: u32 = 1 << 3;
+    pub(super) const E2E_COMBAT_LOCK_PLAYBACK_PAUSE: u32 = 1 << 4;
+    pub(super) const E2E_COMBAT_LOCK_ACTIVE_STATS: u32 = 1 << 5;
+    pub(super) const E2E_COMBAT_LOCK_STAT_QUEUE: u32 = 1 << 6;
+    pub(super) const E2E_AUTOPLAY_ACTION_WAIT: u32 = 0;
+    pub(super) const E2E_AUTOPLAY_ACTION_OPENING_INTRO_CONTINUE: u32 = 1;
+    pub(super) const E2E_AUTOPLAY_ACTION_LEVEL_INTRO_CONTINUE: u32 = 2;
+    pub(super) const E2E_AUTOPLAY_ACTION_MODULE_SELECT: u32 = 3;
+    pub(super) const E2E_AUTOPLAY_ACTION_REWARD_SELECT: u32 = 4;
+    pub(super) const E2E_AUTOPLAY_ACTION_REWARD_SKIP: u32 = 5;
+    pub(super) const E2E_AUTOPLAY_ACTION_EVENT_CHOICE: u32 = 6;
+    pub(super) const E2E_AUTOPLAY_ACTION_REST_HEAL: u32 = 7;
+    pub(super) const E2E_AUTOPLAY_ACTION_REST_UPGRADE: u32 = 8;
+    pub(super) const E2E_AUTOPLAY_ACTION_SHOP_BUY: u32 = 9;
+    pub(super) const E2E_AUTOPLAY_ACTION_SHOP_LEAVE: u32 = 10;
+    pub(super) const E2E_AUTOPLAY_ACTION_COMBAT: u32 = 11;
+    pub(super) const E2E_AUTOPLAY_ACTION_MAP_SELECT: u32 = 12;
+}
+
+#[cfg(any(test, feature = "e2e"))]
+use e2e_debug_codes::*;
+
+#[cfg(any(test, feature = "e2e"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DebugAutoplayAction {
+    Wait,
+    OpeningIntroContinue,
+    LevelIntroContinue,
+    ModuleSelect { index: usize },
+    RewardSelect { index: usize },
+    RewardSkip,
+    EventChoice { index: usize },
+    RestHeal,
+    RestUpgrade { index: usize },
+    ShopBuy { index: usize },
+    ShopLeave,
+    Combat { action_code: u32 },
+    MapSelect { node_id: usize },
+}
+
+#[cfg(any(test, feature = "e2e"))]
+impl DebugAutoplayAction {
+    fn code(self) -> u32 {
+        match self {
+            Self::Wait => E2E_AUTOPLAY_ACTION_WAIT,
+            Self::OpeningIntroContinue => E2E_AUTOPLAY_ACTION_OPENING_INTRO_CONTINUE,
+            Self::LevelIntroContinue => E2E_AUTOPLAY_ACTION_LEVEL_INTRO_CONTINUE,
+            Self::ModuleSelect { .. } => E2E_AUTOPLAY_ACTION_MODULE_SELECT,
+            Self::RewardSelect { .. } => E2E_AUTOPLAY_ACTION_REWARD_SELECT,
+            Self::RewardSkip => E2E_AUTOPLAY_ACTION_REWARD_SKIP,
+            Self::EventChoice { .. } => E2E_AUTOPLAY_ACTION_EVENT_CHOICE,
+            Self::RestHeal => E2E_AUTOPLAY_ACTION_REST_HEAL,
+            Self::RestUpgrade { .. } => E2E_AUTOPLAY_ACTION_REST_UPGRADE,
+            Self::ShopBuy { .. } => E2E_AUTOPLAY_ACTION_SHOP_BUY,
+            Self::ShopLeave => E2E_AUTOPLAY_ACTION_SHOP_LEAVE,
+            Self::Combat { .. } => E2E_AUTOPLAY_ACTION_COMBAT,
+            Self::MapSelect { .. } => E2E_AUTOPLAY_ACTION_MAP_SELECT,
+        }
+    }
+
+    fn param_a(self) -> u32 {
+        match self {
+            Self::ModuleSelect { index }
+            | Self::RewardSelect { index }
+            | Self::EventChoice { index }
+            | Self::RestUpgrade { index }
+            | Self::ShopBuy { index } => index as u32,
+            Self::Combat { action_code } => action_code,
+            Self::MapSelect { node_id } => node_id as u32,
+            Self::Wait
+            | Self::OpeningIntroContinue
+            | Self::LevelIntroContinue
+            | Self::RewardSkip
+            | Self::RestHeal
+            | Self::ShopLeave => 0,
+        }
+    }
+
+    fn param_b(self) -> u32 {
+        0
+    }
+
+    fn from_wire(code: u32, param_a: u32, _param_b: u32) -> Option<Self> {
+        match code {
+            E2E_AUTOPLAY_ACTION_WAIT => Some(Self::Wait),
+            E2E_AUTOPLAY_ACTION_OPENING_INTRO_CONTINUE => Some(Self::OpeningIntroContinue),
+            E2E_AUTOPLAY_ACTION_LEVEL_INTRO_CONTINUE => Some(Self::LevelIntroContinue),
+            E2E_AUTOPLAY_ACTION_MODULE_SELECT => Some(Self::ModuleSelect {
+                index: param_a as usize,
+            }),
+            E2E_AUTOPLAY_ACTION_REWARD_SELECT => Some(Self::RewardSelect {
+                index: param_a as usize,
+            }),
+            E2E_AUTOPLAY_ACTION_REWARD_SKIP => Some(Self::RewardSkip),
+            E2E_AUTOPLAY_ACTION_EVENT_CHOICE => Some(Self::EventChoice {
+                index: param_a as usize,
+            }),
+            E2E_AUTOPLAY_ACTION_REST_HEAL => Some(Self::RestHeal),
+            E2E_AUTOPLAY_ACTION_REST_UPGRADE => Some(Self::RestUpgrade {
+                index: param_a as usize,
+            }),
+            E2E_AUTOPLAY_ACTION_SHOP_BUY => Some(Self::ShopBuy {
+                index: param_a as usize,
+            }),
+            E2E_AUTOPLAY_ACTION_SHOP_LEAVE => Some(Self::ShopLeave),
+            E2E_AUTOPLAY_ACTION_COMBAT => Some(Self::Combat {
+                action_code: param_a,
+            }),
+            E2E_AUTOPLAY_ACTION_MAP_SELECT => Some(Self::MapSelect {
+                node_id: param_a as usize,
+            }),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CombatStat {
     Hp,
@@ -430,6 +607,7 @@ struct Layout {
     enemy_arrangement: CombatGridArrangement,
     enemy_rects: Vec<Rect>,
     player_rect: Rect,
+    remote_party_card_rects: Vec<Rect>,
     #[cfg_attr(not(test), allow(dead_code))]
     hand_arrangement: CombatGridArrangement,
     hand_rects: Vec<Rect>,
@@ -579,6 +757,7 @@ struct BootHeroLayout {
 #[derive(Clone, Copy, Debug)]
 struct BootButtonsLayout {
     start_button: Rect,
+    multiplayer_button: Rect,
     restart_button: Rect,
     settings_button: Rect,
     install_button: Option<Rect>,
@@ -991,6 +1170,13 @@ pub(crate) struct App {
     screen: AppScreen,
     combat: CombatState,
     dungeon: Option<DungeonRun>,
+    party_run: Option<PartyRunState>,
+    party_combat: Option<PartyCombatState>,
+    party_rest: Vec<Option<RestState>>,
+    party_shop: Vec<Option<ShopState>>,
+    party_module_select_slots: Vec<Option<ModuleSelectState>>,
+    party_reward_slots: Vec<Option<RewardState>>,
+    party_ready: Vec<bool>,
     rest: Option<RestState>,
     shop: Option<ShopState>,
     event: Option<EventState>,
@@ -1006,6 +1192,7 @@ pub(crate) struct App {
     enemy_vfx_rects: Vec<Option<Rect>>,
     enemy_defeat_vfx_started: Vec<bool>,
     combat_feedback: CombatFeedbackState,
+    pending_local_multiplayer_combat_action: Option<CombatAction>,
     layout_transition: Option<LayoutTransition>,
     combat_layout_target: Option<Layout>,
     screen_transition: Option<ScreenTransition>,
@@ -1021,20 +1208,27 @@ pub(crate) struct App {
     player_name_input_value: String,
     player_name_generation: u32,
     player_name_input_focused: bool,
+    input_slot_override: Option<usize>,
     install_capability: InstallCapability,
     restart_count: u64,
     seed_entropy: u64,
+    next_run_seed_override: Option<u64>,
     debug_mode: bool,
     share_request: Option<String>,
     victory_burst_cooldown_ms: f32,
     has_saved_run: bool,
     run_save_snapshot: Option<String>,
     run_save_generation: u32,
+    party_session: PartySessionSnapshot,
+    party_snapshot: String,
+    party_generation: u32,
     resume_request_pending: bool,
+    multiplayer_request_pending: bool,
     install_request_pending: bool,
     update_available: bool,
     update_request_pending: bool,
     player_name_buffer: Vec<u8>,
+    party_slot_name_buffer: Vec<u8>,
     restore_buffer: Vec<u8>,
     settings_layout_cache: SettingsLayout,
     settings_player_name_input_metrics_cache: SettingsPlayerNameInputMetrics,
@@ -1055,10 +1249,17 @@ impl App {
         let displayed_stats = displayed_combat_stats(&combat);
         let displayed_intents = displayed_enemy_intents(&combat, Language::English);
 
-        Self {
+        let mut app = Self {
             screen: AppScreen::Boot,
             combat,
             dungeon: None,
+            party_run: None,
+            party_combat: None,
+            party_rest: Vec::new(),
+            party_shop: Vec::new(),
+            party_module_select_slots: Vec::new(),
+            party_reward_slots: Vec::new(),
+            party_ready: Vec::new(),
             rest: None,
             shop: None,
             event: None,
@@ -1081,6 +1282,7 @@ impl App {
                 displayed_intents,
                 ..CombatFeedbackState::default()
             },
+            pending_local_multiplayer_combat_action: None,
             layout_transition: None,
             combat_layout_target: None,
             screen_transition: None,
@@ -1096,24 +1298,33 @@ impl App {
             player_name_input_value: String::new(),
             player_name_generation: 0,
             player_name_input_focused: false,
+            input_slot_override: None,
             install_capability: InstallCapability::Unavailable,
             restart_count: 0,
             seed_entropy: BASE_SEED ^ 0x51A7_C0DE_1EAF_BAAD,
+            next_run_seed_override: None,
             debug_mode: false,
             share_request: None,
             victory_burst_cooldown_ms: 0.0,
             has_saved_run: false,
             run_save_snapshot: None,
             run_save_generation: 0,
+            party_session: PartySessionSnapshot::default(),
+            party_snapshot: String::new(),
+            party_generation: 0,
             resume_request_pending: false,
+            multiplayer_request_pending: false,
             install_request_pending: false,
             update_available: false,
             update_request_pending: false,
             player_name_buffer: Vec::new(),
+            party_slot_name_buffer: Vec::new(),
             restore_buffer: Vec::new(),
             settings_layout_cache,
             settings_player_name_input_metrics_cache,
-        }
+        };
+        app.refresh_party_snapshot_cache();
+        app
     }
 
     fn logical_width(&self) -> f32 {
@@ -1130,6 +1341,327 @@ impl App {
 
     pub(crate) fn is_boot_screen(&self) -> bool {
         matches!(self.screen, AppScreen::Boot)
+    }
+
+    fn multiplayer_enabled(&self) -> bool {
+        self.party_session.configured_party_size > 1
+    }
+
+    fn party_slot_count(&self) -> usize {
+        if self.multiplayer_enabled() {
+            self.party_session.configured_party_size.max(1)
+        } else {
+            1
+        }
+    }
+
+    fn local_slot_index(&self) -> usize {
+        self.party_session
+            .local_slot
+            .min(self.party_slot_count().saturating_sub(1))
+    }
+
+    fn active_view_slot_index(&self) -> usize {
+        self.input_slot_override
+            .unwrap_or_else(|| self.local_slot_index())
+            .min(self.party_slot_count().saturating_sub(1))
+    }
+
+    fn captain_slot_index(&self) -> usize {
+        self.party_session
+            .captain_slot
+            .min(self.party_slot_count().saturating_sub(1))
+    }
+
+    fn local_slot_is_captain(&self) -> bool {
+        self.local_slot_index() == self.captain_slot_index()
+    }
+
+    fn local_multiplayer_guest(&self) -> bool {
+        self.multiplayer_run_active()
+            && self.input_slot_override.is_none()
+            && !self.local_slot_is_captain()
+    }
+
+    fn local_party_ready(&self) -> bool {
+        self.party_ready
+            .get(self.active_view_slot_index())
+            .copied()
+            .unwrap_or(false)
+    }
+
+    fn local_combat_hero_ready(&self) -> bool {
+        self.party_combat
+            .as_ref()
+            .and_then(|party_combat| party_combat.heroes.get(self.local_slot_index()))
+            .map(|hero| hero.ready)
+            .unwrap_or(false)
+    }
+
+    fn all_living_combat_heroes_ready(&self) -> bool {
+        self.party_combat
+            .as_ref()
+            .map(PartyCombatState::all_living_active_heroes_ready)
+            .unwrap_or(false)
+    }
+
+    fn remote_party_slot_disconnected(&self, slot: usize) -> bool {
+        slot < self.party_session.configured_party_size
+            && self
+                .party_session
+                .slots
+                .get(slot)
+                .is_some_and(|slot_state| {
+                    slot_state.claim == crate::session::SlotClaimKind::Remote
+                        && !slot_state.connected
+                })
+    }
+
+    fn sync_party_combat_inactive_slots_from_session(&mut self) -> bool {
+        let inactive_slots = (0..self.party_slot_count())
+            .map(|slot| self.remote_party_slot_disconnected(slot))
+            .collect::<Vec<_>>();
+        let Some(party_combat) = self.party_combat.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        for slot in 0..party_combat.hero_count() {
+            changed |= party_combat
+                .set_hero_inactive(slot, inactive_slots.get(slot).copied().unwrap_or(false));
+        }
+        changed
+    }
+
+    fn multiplayer_combat_state_change_busy(&self) -> bool {
+        self.screen_transition.is_some()
+            || self.combat_feedback.playback_kind.is_some()
+            || self.combat_feedback.pending_outcome.is_some()
+            || self.combat_feedback.auto_playback_active
+            || self.combat_feedback.playback_pause_ms > 0.0
+            || !self.combat_feedback.active_stats.is_empty()
+            || !self.combat_feedback.stat_queue.is_empty()
+    }
+
+    fn apply_remote_slot_combat_state_change(
+        &mut self,
+        previous_view: Option<MultiplayerCombatViewState>,
+    ) {
+        if !matches!(self.screen, AppScreen::Combat) {
+            return;
+        }
+        self.sync_active_view_from_party_state();
+        let playback_started = if let Some(previous) = previous_view.as_ref() {
+            self.apply_multiplayer_combat_view_state(previous, None, false)
+        } else {
+            self.sync_combat_feedback_to_combat();
+            false
+        };
+        if let Some(outcome) = self
+            .party_combat
+            .as_ref()
+            .and_then(PartyCombatState::outcome)
+        {
+            if playback_started {
+                self.combat_feedback.pending_outcome = Some(outcome);
+            } else {
+                self.finalize_combat_outcome(outcome);
+            }
+        } else {
+            self.screen = AppScreen::Combat;
+        }
+    }
+
+    fn party_control_slot_index(&self) -> usize {
+        self.active_view_slot_index()
+    }
+
+    fn multiplayer_run_active(&self) -> bool {
+        self.multiplayer_enabled() && self.party_run.is_some()
+    }
+
+    fn reset_singleplayer_party_session(&mut self) {
+        let local_name = self.player_label().to_string();
+        self.party_session = crate::session::PartySessionSnapshot::new(1);
+        self.party_session.set_local_display_name(&local_name);
+    }
+
+    fn reset_party_screen_state(&mut self) {
+        self.party_combat = None;
+        self.party_rest.clear();
+        self.party_shop.clear();
+        self.party_module_select_slots.clear();
+        self.party_reward_slots.clear();
+        self.party_ready.clear();
+        self.pending_local_multiplayer_combat_action = None;
+    }
+
+    fn prepare_starter_party_module_select(&mut self) {
+        let slot_count = self.party_slot_count();
+        let seed = self
+            .party_run
+            .as_ref()
+            .map(|party_run| party_run.shared.seed)
+            .unwrap_or(BASE_SEED);
+        self.party_module_select_slots = (0..slot_count)
+            .map(|_| {
+                Some(ModuleSelectState {
+                    options: starter_module_choices(),
+                    seed,
+                    context: ModuleSelectContext::Starter,
+                })
+            })
+            .collect();
+        self.party_ready = vec![false; slot_count];
+        self.module_select = self
+            .party_module_select_slots
+            .get(self.active_view_slot_index())
+            .cloned()
+            .flatten();
+    }
+
+    fn displayed_remote_party_slots(&self) -> Vec<crate::session::PartySlotSnapshot> {
+        let snapshot = self.current_party_session_snapshot();
+        let local_slot = self.local_slot_index();
+        snapshot
+            .slots
+            .iter()
+            .filter(|slot| {
+                slot.slot < snapshot.configured_party_size
+                    && slot.slot != local_slot
+                    && (slot.claim != crate::session::SlotClaimKind::Open
+                        || slot.in_run
+                        || slot.in_combat)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn remote_party_card_rects_for_player_panel(
+        &self,
+        player_rect: Rect,
+        metrics: PlayerPanelMetrics,
+        tile_gap: f32,
+        tile_insets: TileInsets,
+        remote_count: usize,
+    ) -> Vec<Rect> {
+        if remote_count == 0 {
+            return Vec::new();
+        }
+
+        let gap = (metrics.line_gap * 0.35).max(3.0);
+        let columns = if remote_count == 1 {
+            1
+        } else if self.logical_width() >= 640.0 {
+            3.min(remote_count)
+        } else {
+            2.min(remote_count)
+        }
+        .max(1);
+        let side_margin = (tile_insets.pad_x * 0.45).max(6.0);
+        let band_width = (self.logical_width() - side_margin * 2.0).max(0.0);
+        let max_card_width = 142.0;
+        let min_card_width = 96.0;
+        let ideal_card_width =
+            (band_width - gap * columns.saturating_sub(1) as f32) / columns as f32;
+        let card_width = ideal_card_width.clamp(min_card_width, max_card_width);
+        let card_metrics = card_box_metrics(card_width);
+        let card_height = (card_metrics.top_pad
+            + metrics.label_size
+            + text_bottom_breathing_room(metrics.label_size)
+            + card_metrics.bottom_pad)
+            .max(24.0);
+        let band_top = player_rect.y + player_rect.h + tile_gap;
+        let mut card_rects = Vec::with_capacity(remote_count);
+
+        for index in 0..remote_count {
+            let row = index / columns;
+            let row_start = row * columns;
+            let row_count = (remote_count - row_start).min(columns).max(1);
+            let row_width =
+                card_width * row_count as f32 + gap * row_count.saturating_sub(1) as f32;
+            let row_x = side_margin + (band_width - row_width) * 0.5;
+            card_rects.push(Rect {
+                x: row_x + (index % columns) as f32 * (card_width + gap),
+                y: band_top + row as f32 * (card_height + gap),
+                w: card_width,
+                h: card_height,
+            });
+        }
+        card_rects
+    }
+
+    fn sync_active_view_from_party_state(&mut self) {
+        if !self.multiplayer_enabled() {
+            return;
+        }
+        let slot = self.active_view_slot_index();
+        self.dungeon = self
+            .party_run
+            .as_ref()
+            .and_then(|party_run| party_run.active_dungeon(slot));
+        if matches!(self.screen, AppScreen::Combat) {
+            if let Some(combat) = self
+                .party_combat
+                .as_ref()
+                .and_then(|party_combat| party_combat.view_for_slot(slot))
+            {
+                self.combat = combat;
+            }
+        }
+        self.rest = if matches!(self.screen, AppScreen::Rest) {
+            self.party_rest.get(slot).cloned().flatten()
+        } else {
+            None
+        };
+        self.shop = if matches!(self.screen, AppScreen::Shop) {
+            self.party_shop.get(slot).cloned().flatten()
+        } else {
+            None
+        };
+        self.module_select = if matches!(self.screen, AppScreen::ModuleSelect) {
+            self.party_module_select_slots.get(slot).cloned().flatten()
+        } else {
+            None
+        };
+        self.reward = if matches!(self.screen, AppScreen::Reward) {
+            self.party_reward_slots.get(slot).cloned().flatten()
+        } else {
+            None
+        };
+        if matches!(self.screen, AppScreen::LevelIntro) {
+            if let Some(dungeon) = self.dungeon.as_ref() {
+                self.level_intro = Some(LevelIntroState {
+                    level: dungeon.current_level(),
+                    codename: localized_level_codename(dungeon.current_level(), self.language),
+                    summary: localized_level_summary(dungeon.current_level(), self.language),
+                });
+            }
+        }
+        if matches!(
+            self.screen,
+            AppScreen::Map | AppScreen::Combat | AppScreen::Event
+        ) {
+            self.level_intro = None;
+        }
+    }
+
+    fn reset_party_ready_for_alive_heroes(&mut self) {
+        let slot_count = self.party_slot_count();
+        self.party_ready = vec![true; slot_count];
+        if let Some(party_run) = self.party_run.as_ref() {
+            for slot in 0..slot_count {
+                let alive = party_run
+                    .hero(slot)
+                    .map(|hero| hero.player_hp > 0)
+                    .unwrap_or(false)
+                    && !self.remote_party_slot_disconnected(slot);
+                self.party_ready[slot] = !alive;
+            }
+        }
+    }
+
+    fn all_party_ready(&self) -> bool {
+        self.party_ready.iter().all(|ready| *ready)
     }
 
     fn legend_visible(&self) -> bool {
@@ -1205,6 +1737,7 @@ impl App {
             self.relocalize_combat_feedback_intents();
         }
         self.language_generation = self.language_generation.wrapping_add(1);
+        self.refresh_party_snapshot_cache();
         self.refresh_hover();
         self.dirty = true;
         if self.dirty {
@@ -1269,6 +1802,7 @@ impl App {
             self.player_name = next;
             self.player_name_generation = self.player_name_generation.wrapping_add(1);
         }
+        self.refresh_party_snapshot_cache();
         self.dirty = true;
         self.rebuild_frame();
     }
@@ -1510,9 +2044,272 @@ impl App {
         };
     }
 
+    fn current_combat_playback_baseline(&self) -> Option<CombatPlaybackBaseline> {
+        matches!(self.screen, AppScreen::Combat).then(|| CombatPlaybackBaseline {
+            displayed: displayed_combat_stats(&self.combat),
+        })
+    }
+
+    fn current_combat_hand_cards(&self) -> Vec<CardId> {
+        (0..self.combat.hand_len())
+            .filter_map(|index| self.combat.hand_card(index))
+            .collect()
+    }
+
+    fn current_multiplayer_combat_view_state(&self) -> Option<MultiplayerCombatViewState> {
+        matches!(self.screen, AppScreen::Combat).then(|| MultiplayerCombatViewState {
+            layout: self.layout(),
+            baseline: self.current_combat_playback_baseline(),
+            deck: self.combat.deck.clone(),
+            hand: self.current_combat_hand_cards(),
+            hand_len: self.combat.hand_len(),
+            phase: self.combat.phase,
+            turn: self.combat.turn,
+        })
+    }
+
+    fn infer_removed_hand_index(previous: &[CardId], current: &[CardId]) -> Option<usize> {
+        if previous.len() != current.len() + 1 {
+            return None;
+        }
+
+        (0..previous.len()).find(|&removed_index| {
+            previous[..removed_index] == current[..removed_index]
+                && previous[removed_index + 1..] == current[removed_index..]
+        })
+    }
+
+    fn multiplayer_combat_playback_kind(
+        &self,
+        previous: &MultiplayerCombatViewState,
+    ) -> CombatPlaybackKind {
+        if self.combat.turn != previous.turn
+            || (matches!(previous.phase, TurnPhase::PlayerTurn)
+                && !matches!(self.combat.phase, TurnPhase::PlayerTurn))
+        {
+            CombatPlaybackKind::EnemyTurn
+        } else {
+            CombatPlaybackKind::PlayerAction
+        }
+    }
+
+    fn multiplayer_combat_layout_transition(
+        &self,
+        previous: &MultiplayerCombatViewState,
+        preferred_removed_index: Option<usize>,
+    ) -> Option<MultiplayerCombatLayoutTransition> {
+        let current_hand = self.current_combat_hand_cards();
+        if self.combat.turn != previous.turn
+            || (matches!(previous.phase, TurnPhase::PlayerTurn)
+                && matches!(self.combat.phase, TurnPhase::PlayerTurn)
+                && previous.hand.is_empty()
+                && !current_hand.is_empty())
+        {
+            return (!current_hand.is_empty())
+                .then_some(MultiplayerCombatLayoutTransition::RevealHand);
+        }
+
+        if current_hand == previous.hand {
+            return None;
+        }
+
+        if previous.hand.len() == current_hand.len() + 1 {
+            let removed_index = preferred_removed_index
+                .or_else(|| Self::infer_removed_hand_index(&previous.hand, &current_hand));
+            return Some(MultiplayerCombatLayoutTransition::RemoveCard(removed_index));
+        }
+
+        Some(MultiplayerCombatLayoutTransition::RemoveCard(None))
+    }
+
+    fn apply_multiplayer_combat_view_state(
+        &mut self,
+        previous: &MultiplayerCombatViewState,
+        preferred_removed_index: Option<usize>,
+        animate_local_player: bool,
+    ) -> bool {
+        let playback_kind = self.multiplayer_combat_playback_kind(previous);
+        let layout_transition =
+            self.multiplayer_combat_layout_transition(previous, preferred_removed_index);
+        let mut playback_started = false;
+        if let Some(baseline) = previous.baseline.clone() {
+            playback_started =
+                self.begin_multiplayer_diff_playback(baseline, playback_kind, animate_local_player);
+        } else {
+            self.sync_combat_feedback_to_combat();
+        }
+
+        if matches!(self.screen, AppScreen::Combat) {
+            match layout_transition {
+                Some(MultiplayerCombatLayoutTransition::RemoveCard(removed_index)) => {
+                    self.begin_layout_transition(
+                        previous.layout.clone(),
+                        previous.hand_len,
+                        removed_index,
+                    );
+                }
+                Some(MultiplayerCombatLayoutTransition::RevealHand) => {
+                    if !(playback_started && playback_kind == CombatPlaybackKind::EnemyTurn) {
+                        self.begin_hand_reveal_transition(previous.layout.clone());
+                    }
+                }
+                None => {}
+            }
+        }
+
+        playback_started
+    }
+
+    fn queue_multiplayer_stat_change(
+        changes: &mut Vec<QueuedStatChange>,
+        actor: Actor,
+        stat: CombatStat,
+        before: i32,
+        after: i32,
+        decrease_tint: StatTint,
+    ) {
+        if before == after {
+            return;
+        }
+        changes.push(QueuedStatChange {
+            actor,
+            stat,
+            op: StatChangeOp::Set(after),
+            tint: if after > before {
+                StatTint::BlockGain
+            } else {
+                decrease_tint
+            },
+        });
+    }
+
+    fn begin_multiplayer_diff_playback(
+        &mut self,
+        baseline: CombatPlaybackBaseline,
+        playback_kind: CombatPlaybackKind,
+        animate_local_player: bool,
+    ) -> bool {
+        if !matches!(self.screen, AppScreen::Combat) {
+            return false;
+        }
+
+        let displayed_after = displayed_combat_stats(&self.combat);
+        let mut changes = Vec::new();
+
+        if animate_local_player {
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Player,
+                CombatStat::Hp,
+                baseline.displayed.player.hp,
+                displayed_after.player.hp,
+                StatTint::Damage,
+            );
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Player,
+                CombatStat::Block,
+                baseline.displayed.player.block,
+                displayed_after.player.block,
+                StatTint::NeutralLoss,
+            );
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Player,
+                CombatStat::Energy,
+                baseline.displayed.player_meta.energy,
+                displayed_after.player_meta.energy,
+                StatTint::NeutralLoss,
+            );
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Player,
+                CombatStat::DrawPile,
+                baseline.displayed.player_meta.draw_pile,
+                displayed_after.player_meta.draw_pile,
+                StatTint::NeutralLoss,
+            );
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Player,
+                CombatStat::DiscardPile,
+                baseline.displayed.player_meta.discard_pile,
+                displayed_after.player_meta.discard_pile,
+                StatTint::NeutralLoss,
+            );
+        }
+
+        let enemy_count = baseline
+            .displayed
+            .enemies
+            .len()
+            .max(displayed_after.enemies.len());
+        for enemy_index in 0..enemy_count {
+            let before = baseline
+                .displayed
+                .enemies
+                .get(enemy_index)
+                .copied()
+                .unwrap_or_default();
+            let after = displayed_after
+                .enemies
+                .get(enemy_index)
+                .copied()
+                .unwrap_or_default();
+            if before.hp > 0 && after.hp <= 0 {
+                self.begin_enemy_defeat_vfx(enemy_index);
+            }
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Enemy(enemy_index),
+                CombatStat::Hp,
+                before.hp,
+                after.hp,
+                StatTint::Damage,
+            );
+            Self::queue_multiplayer_stat_change(
+                &mut changes,
+                Actor::Enemy(enemy_index),
+                CombatStat::Block,
+                before.block,
+                after.block,
+                StatTint::NeutralLoss,
+            );
+        }
+
+        if changes.is_empty() {
+            self.sync_combat_feedback_to_combat();
+            return false;
+        }
+
+        self.enemy_defeat_vfx_started = (0..self.combat.enemy_count())
+            .map(|enemy_index| !self.combat.enemy_is_alive(enemy_index))
+            .collect();
+        self.combat_feedback = CombatFeedbackState {
+            displayed: baseline.displayed,
+            displayed_intents: displayed_enemy_intents(&self.combat, self.language),
+            playback_kind: Some(playback_kind),
+            ..CombatFeedbackState::default()
+        };
+        self.queue_stat_change_group(changes);
+        self.prime_next_stat_countdown_if_idle();
+        true
+    }
+
+    fn waiting_on_other_players(&self) -> bool {
+        self.multiplayer_run_active()
+            && matches!(self.screen, AppScreen::Combat)
+            && self.combat.is_player_turn()
+            && self.local_combat_hero_ready()
+            && !self.all_living_combat_heroes_ready()
+    }
+
     fn combat_input_locked(&self) -> bool {
         matches!(self.screen, AppScreen::Combat)
-            && (self.combat_feedback.auto_playback_active
+            && ((self.multiplayer_run_active()
+                && (self.local_combat_hero_ready()
+                    || self.pending_local_multiplayer_combat_action.is_some()))
+                || self.combat_feedback.auto_playback_active
                 || self.combat_feedback.pending_outcome.is_some()
                 || self.combat_feedback.playback_pause_ms > 0.0
                 || !self.combat_feedback.active_stats.is_empty()
@@ -2742,7 +3539,9 @@ impl App {
     }
 
     pub(crate) fn pointer_down(&mut self, x: f32, y: f32) {
-        if self.screen_transition.is_some() {
+        if self.screen_transition.is_some()
+            && !matches!(self.screen, AppScreen::Reward | AppScreen::Event)
+        {
             return;
         }
 
@@ -2777,6 +3576,384 @@ impl App {
     }
 
     pub(crate) fn pointer_up(&mut self, _x: f32, _y: f32) {}
+
+    pub(crate) fn module_select_card_index_at_point(&self, x: f32, y: f32) -> i32 {
+        if !matches!(self.screen, AppScreen::ModuleSelect) {
+            return -1;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return -1;
+        };
+        match self.hit_test(lx, ly) {
+            Some(HitTarget::ModuleSelectCard(index)) => index as i32,
+            _ => -1,
+        }
+    }
+
+    pub(crate) fn continue_button_hit_at_point(&self, x: f32, y: f32) -> bool {
+        if !matches!(self.screen, AppScreen::OpeningIntro | AppScreen::LevelIntro) {
+            return false;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return false;
+        };
+        matches!(self.hit_test(lx, ly), Some(HitTarget::Continue))
+    }
+
+    pub(crate) fn menu_button_hit_at_point(&self, x: f32, y: f32) -> bool {
+        if !matches!(self.screen, AppScreen::Map | AppScreen::Combat) {
+            return false;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return false;
+        };
+        matches!(self.hit_test(lx, ly), Some(HitTarget::Menu))
+    }
+
+    pub(crate) fn reward_card_index_at_point(&self, x: f32, y: f32) -> i32 {
+        if !matches!(self.screen, AppScreen::Reward) {
+            return -1;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return -1;
+        };
+        match self.hit_test(lx, ly) {
+            Some(HitTarget::RewardCard(index)) => index as i32,
+            _ => -1,
+        }
+    }
+
+    pub(crate) fn reward_skip_hit_at_point(&self, x: f32, y: f32) -> bool {
+        if !matches!(self.screen, AppScreen::Reward) {
+            return false;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return false;
+        };
+        matches!(self.hit_test(lx, ly), Some(HitTarget::RewardSkip))
+    }
+
+    pub(crate) fn event_choice_index_at_point(&self, x: f32, y: f32) -> i32 {
+        if !matches!(self.screen, AppScreen::Event) {
+            return -1;
+        }
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return -1;
+        };
+        match self.hit_test(lx, ly) {
+            Some(HitTarget::EventChoice(index)) => index as i32,
+            _ => -1,
+        }
+    }
+
+    pub(crate) fn activate_opening_intro_action(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::OpeningIntro) || self.screen_transition.is_some() {
+            return false;
+        }
+        self.handle_opening_intro_action();
+        true
+    }
+
+    pub(crate) fn activate_level_intro_action(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::LevelIntro) || self.screen_transition.is_some() {
+            return false;
+        }
+        self.handle_level_intro_action();
+        true
+    }
+
+    pub(crate) fn activate_module_select_card(&mut self, index: usize) -> bool {
+        if !matches!(self.screen, AppScreen::ModuleSelect) || self.screen_transition.is_some() {
+            return false;
+        }
+        self.claim_module_select(index);
+        true
+    }
+
+    pub(crate) fn activate_reward_card(&mut self, index: usize) -> bool {
+        if !matches!(self.screen, AppScreen::Reward) {
+            return false;
+        }
+        self.claim_reward(index);
+        true
+    }
+
+    pub(crate) fn activate_reward_skip(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::Reward) {
+            return false;
+        }
+        self.skip_reward();
+        true
+    }
+
+    pub(crate) fn activate_event_choice(&mut self, index: usize) -> bool {
+        if !matches!(self.screen, AppScreen::Event) {
+            return false;
+        }
+        self.claim_event_choice(index);
+        true
+    }
+
+    pub(crate) fn activate_rest_heal(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::Rest) {
+            return false;
+        }
+        self.claim_rest_heal();
+        true
+    }
+
+    pub(crate) fn activate_rest_upgrade(&mut self, index: usize) -> bool {
+        if !matches!(self.screen, AppScreen::Rest) {
+            return false;
+        }
+        self.claim_rest_upgrade(index);
+        true
+    }
+
+    pub(crate) fn activate_shop_offer(&mut self, index: usize) -> bool {
+        if !matches!(self.screen, AppScreen::Shop) {
+            return false;
+        }
+        self.claim_shop_offer(index);
+        true
+    }
+
+    pub(crate) fn activate_shop_leave(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::Shop) {
+            return false;
+        }
+        self.leave_shop();
+        true
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn activate_map_node(&mut self, node_id: usize) -> bool {
+        if !matches!(self.screen, AppScreen::Map) {
+            return false;
+        }
+        self.select_map_node(node_id);
+        true
+    }
+
+    pub(crate) fn multiplayer_combat_action_code_at_point(&self, x: f32, y: f32) -> u32 {
+        encode_multiplayer_combat_action(self.multiplayer_combat_action_for_pointer_down(x, y))
+    }
+
+    pub(crate) fn multiplayer_combat_action_code_for_key(&self, key_code: u32) -> u32 {
+        encode_multiplayer_combat_action(self.multiplayer_combat_action_for_key(key_code))
+    }
+
+    pub(crate) fn handle_local_multiplayer_combat_pointer_down(&mut self, x: f32, y: f32) -> u32 {
+        if !self.multiplayer_enabled()
+            || !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return MULTIPLAYER_COMBAT_ACTION_NONE;
+        }
+
+        let Some((lx, ly)) = self.to_logical(x, y) else {
+            return MULTIPLAYER_COMBAT_ACTION_NONE;
+        };
+        let Some(target) = self.hit_test(lx, ly) else {
+            self.clear_local_multiplayer_combat_selection();
+            return MULTIPLAYER_COMBAT_ACTION_NONE;
+        };
+
+        if let Some(action) = self.multiplayer_combat_action_for_hit_target(target) {
+            return if self.preview_local_multiplayer_combat_action(action) {
+                encode_multiplayer_combat_action(Some(action))
+            } else {
+                MULTIPLAYER_COMBAT_ACTION_NONE
+            };
+        }
+
+        match target {
+            HitTarget::RunInfoPanel | HitTarget::EnemyInspectPanel => {}
+            HitTarget::Card(index) => self.select_or_play_card(index),
+            HitTarget::Enemy(enemy_index) => self.toggle_or_switch_enemy_inspect(enemy_index),
+            HitTarget::Player => {
+                if self.ui.selected_card.is_none() {
+                    if self.ui.enemy_inspect_open || self.enemy_inspect_visible() {
+                        self.open_run_info();
+                    } else {
+                        self.toggle_run_info();
+                    }
+                }
+            }
+            HitTarget::Menu
+            | HitTarget::EndTurn
+            | HitTarget::EndBattle
+            | HitTarget::Start
+            | HitTarget::Continue
+            | HitTarget::Multiplayer
+            | HitTarget::DebugLevelDown
+            | HitTarget::DebugLevelUp
+            | HitTarget::DebugFillDeck
+            | HitTarget::Share
+            | HitTarget::Restart
+            | HitTarget::RestHeal
+            | HitTarget::RestCard(_)
+            | HitTarget::RestConfirm
+            | HitTarget::RestPagePrev
+            | HitTarget::RestPageNext
+            | HitTarget::ShopCard(_)
+            | HitTarget::ShopLeave
+            | HitTarget::EventChoice(_)
+            | HitTarget::Legend
+            | HitTarget::LegendPanel
+            | HitTarget::Info
+            | HitTarget::RewardCard(_)
+            | HitTarget::RewardSkip
+            | HitTarget::MapNode(_)
+            | HitTarget::ModuleSelectCard(_)
+            | HitTarget::RestartModal
+            | HitTarget::RestartConfirm
+            | HitTarget::RestartCancel
+            | HitTarget::Settings
+            | HitTarget::SettingsModal
+            | HitTarget::SettingsLanguageEnglish
+            | HitTarget::SettingsLanguageSpanish
+            | HitTarget::SettingsBackgroundBinary
+            | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsClose
+            | HitTarget::Install
+            | HitTarget::Update
+            | HitTarget::InstallHelpModal
+            | HitTarget::InstallHelpClose
+            | HitTarget::DebugClearSave => {}
+        }
+
+        MULTIPLAYER_COMBAT_ACTION_NONE
+    }
+
+    pub(crate) fn handle_local_multiplayer_combat_key(&mut self, key_code: u32) -> u32 {
+        if !self.multiplayer_enabled()
+            || !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return MULTIPLAYER_COMBAT_ACTION_NONE;
+        }
+
+        if let Some(action) = self.multiplayer_combat_action_for_key(key_code) {
+            return if self.preview_local_multiplayer_combat_action(action) {
+                encode_multiplayer_combat_action(Some(action))
+            } else {
+                MULTIPLAYER_COMBAT_ACTION_NONE
+            };
+        }
+
+        match key_code {
+            27 if self.ui.run_info_open => self.close_run_info(),
+            27 if self.ui.enemy_inspect_open => self.close_enemy_inspect(),
+            27 if self.run_info_visible() => self.close_run_info(),
+            27 if self.enemy_inspect_visible() => self.close_enemy_inspect(),
+            27 => self.clear_local_multiplayer_combat_selection(),
+            49..=57 => {
+                let index = (key_code - 49) as usize;
+                if index < self.combat.hand_len() {
+                    self.select_or_play_card(index);
+                }
+            }
+            _ => {}
+        }
+
+        MULTIPLAYER_COMBAT_ACTION_NONE
+    }
+
+    pub(crate) fn apply_multiplayer_combat_action_code(&mut self, slot: usize, code: u32) -> bool {
+        let Some(action) = decode_multiplayer_combat_action(code) else {
+            return false;
+        };
+        self.apply_remote_multiplayer_combat_action(slot, action)
+    }
+
+    pub(crate) fn apply_local_multiplayer_combat_action_code(&mut self, code: u32) -> bool {
+        let Some(action) = decode_multiplayer_combat_action(code) else {
+            return false;
+        };
+        if !self.multiplayer_enabled()
+            || !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+        {
+            return false;
+        }
+
+        self.preview_local_multiplayer_combat_action(action)
+    }
+
+    fn clear_local_multiplayer_combat_selection(&mut self) {
+        if self.ui.selected_card.is_some() {
+            self.snapshot_combat_layout_target();
+        }
+        if self.ui.selected_card.take().is_some() {
+            self.push_log(self.tr("Selection cleared.", "Selección cancelada."));
+            self.refresh_hover();
+            self.dirty = true;
+        }
+    }
+
+    pub(crate) fn clear_local_multiplayer_pending_combat_action(&mut self) {
+        if self
+            .pending_local_multiplayer_combat_action
+            .take()
+            .is_some()
+        {
+            self.refresh_hover();
+            self.dirty = true;
+        }
+    }
+
+    fn preview_local_multiplayer_combat_action(&mut self, action: CombatAction) -> bool {
+        if !self.multiplayer_enabled()
+            || !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return false;
+        }
+
+        match action {
+            CombatAction::PlayCard { .. } => {
+                self.pending_local_multiplayer_combat_action = Some(action);
+                if self.ui.selected_card.is_some() {
+                    self.snapshot_combat_layout_target();
+                }
+                self.ui.selected_card = None;
+            }
+            CombatAction::EndTurn => {
+                let previous_view = self.current_multiplayer_combat_view_state();
+                let slot = self.local_slot_index();
+                let changed = self
+                    .party_combat
+                    .as_mut()
+                    .is_some_and(|party_combat| party_combat.ready_hero(slot));
+                if !changed {
+                    return false;
+                }
+                self.pending_local_multiplayer_combat_action = Some(action);
+                self.input_slot_override = None;
+                self.sync_active_view_from_party_state();
+                self.ui.selected_card = None;
+                if let Some(previous) = previous_view.as_ref() {
+                    for (rect, card) in previous
+                        .layout
+                        .hand_rects
+                        .iter()
+                        .copied()
+                        .zip(previous.hand.iter().copied())
+                    {
+                        self.spawn_card_pixel_burst(rect, card);
+                    }
+                    self.begin_layout_transition(previous.layout.clone(), previous.hand_len, None);
+                }
+            }
+        }
+        self.refresh_hover();
+        self.dirty = true;
+        true
+    }
 
     pub(crate) fn key_down(&mut self, key_code: u32) {
         if self.screen_transition.is_some() {
@@ -2859,13 +4036,13 @@ impl App {
                         .as_ref()
                         .is_some_and(|module_select| index < module_select.options.len())
                     {
-                        self.claim_module_select(index);
+                        self.activate_module_select_card(index);
                     }
                 }
             }
             AppScreen::LevelIntro => {
                 if matches!(key_code, 13 | 32 | 27) {
-                    self.continue_from_level_intro();
+                    self.handle_level_intro_action();
                 }
             }
             AppScreen::Rest => match key_code {
@@ -3023,12 +4200,1088 @@ impl App {
             .unwrap_or(0)
     }
 
+    pub(crate) fn begin_remote_input_slot(&mut self, slot: u32) -> bool {
+        if !self.multiplayer_run_active() {
+            return false;
+        }
+        let slot = (slot as usize).min(self.party_slot_count().saturating_sub(1));
+        self.input_slot_override = Some(slot);
+        self.sync_active_view_from_party_state();
+        if matches!(self.screen, AppScreen::Combat) {
+            self.sync_combat_feedback_to_combat();
+        }
+        true
+    }
+
+    pub(crate) fn end_remote_input_slot(&mut self) {
+        if self.input_slot_override.take().is_some() {
+            self.sync_active_view_from_party_state();
+            if matches!(self.screen, AppScreen::Combat) {
+                self.sync_combat_feedback_to_combat();
+            }
+        }
+    }
+
+    pub(crate) fn party_snapshot_generation(&self) -> u32 {
+        self.party_generation
+    }
+
+    pub(crate) fn party_snapshot_ptr(&self) -> *const u8 {
+        self.party_snapshot.as_ptr()
+    }
+
+    pub(crate) fn party_snapshot_len(&self) -> usize {
+        self.party_snapshot.len()
+    }
+
+    pub(crate) fn party_size(&self) -> u32 {
+        self.party_session.configured_party_size as u32
+    }
+
+    pub(crate) fn set_party_size(&mut self, size: u32) {
+        let clamped = (size as usize).clamp(1, crate::session::MAX_PARTY_SIZE);
+        if self.party_session.configured_party_size == clamped {
+            return;
+        }
+        self.party_session.set_configured_party_size(clamped);
+        self.refresh_party_snapshot_cache();
+        self.refresh_run_save_snapshot();
+    }
+
+    fn claim_host_party_slot(&mut self) {
+        self.party_session.local_slot = 0;
+        self.party_session.captain_slot = 0;
+        let player_label = self.player_label().to_owned();
+        self.party_session.set_local_display_name(&player_label);
+        if let Some(slot) = self.party_session.slots.get_mut(0) {
+            slot.claim = crate::session::SlotClaimKind::Local;
+            slot.connected = true;
+        }
+    }
+
+    pub(crate) fn start_multiplayer_run_from_web(&mut self) -> bool {
+        if !matches!(self.screen, AppScreen::Boot) || !self.multiplayer_enabled() {
+            return false;
+        }
+        self.claim_host_party_slot();
+        self.start_run();
+        if self.dirty {
+            self.rebuild_frame();
+        }
+        true
+    }
+
+    pub(crate) fn resume_multiplayer_run_from_web(&mut self) -> bool {
+        if !self.multiplayer_enabled() {
+            return false;
+        }
+        self.claim_host_party_slot();
+        let slot_count = self.party_slot_count();
+        let fallback_dungeon = self
+            .party_run
+            .as_ref()
+            .and_then(|party_run| party_run.active_dungeon(0))
+            .or_else(|| self.dungeon.clone());
+        let Some(fallback_dungeon) = fallback_dungeon else {
+            return false;
+        };
+
+        let previous_party_run = self.party_run.clone();
+        let previous_party_combat = self.party_combat.clone();
+        let previous_party_rest = self.party_rest.clone();
+        let previous_party_shop = self.party_shop.clone();
+        let previous_party_module_select = self.party_module_select_slots.clone();
+        let previous_party_reward = self.party_reward_slots.clone();
+        let fallback_combat = self.combat.clone();
+        let fallback_rest = self.rest.clone();
+        let fallback_shop = self.shop.clone();
+        let fallback_module_select = self.module_select.clone();
+        let fallback_reward = self.reward.clone();
+
+        let dungeons = (0..slot_count)
+            .map(|slot| {
+                previous_party_run
+                    .as_ref()
+                    .and_then(|party_run| party_run.active_dungeon(slot))
+                    .or_else(|| self.dungeon.clone())
+                    .unwrap_or_else(|| fallback_dungeon.clone())
+            })
+            .collect::<Vec<_>>();
+        let Some(party_run) = PartyRunState::from_dungeons(dungeons) else {
+            return false;
+        };
+
+        self.party_run = Some(party_run);
+        self.party_ready = vec![false; slot_count];
+        self.party_combat = if matches!(self.screen, AppScreen::Combat) {
+            let fallback_view = previous_party_combat
+                .as_ref()
+                .and_then(|combat| combat.view_for_slot(0))
+                .unwrap_or(fallback_combat);
+            let views = (0..slot_count)
+                .map(|slot| {
+                    previous_party_combat
+                        .as_ref()
+                        .and_then(|combat| combat.view_for_slot(slot))
+                        .unwrap_or_else(|| fallback_view.clone())
+                })
+                .collect::<Vec<_>>();
+            PartyCombatState::from_views(views, self.party_ready.clone())
+        } else {
+            None
+        };
+        self.party_rest = if matches!(self.screen, AppScreen::Rest) {
+            (0..slot_count)
+                .map(|slot| {
+                    previous_party_rest
+                        .get(slot)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| fallback_rest.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.party_shop = if matches!(self.screen, AppScreen::Shop) {
+            (0..slot_count)
+                .map(|slot| {
+                    previous_party_shop
+                        .get(slot)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| fallback_shop.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.party_module_select_slots = if matches!(self.screen, AppScreen::ModuleSelect) {
+            (0..slot_count)
+                .map(|slot| {
+                    previous_party_module_select
+                        .get(slot)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| fallback_module_select.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.party_reward_slots = if matches!(self.screen, AppScreen::Reward) {
+            (0..slot_count)
+                .map(|slot| {
+                    previous_party_reward
+                        .get(slot)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| fallback_reward.clone())
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !matches!(self.screen, AppScreen::Event) {
+            self.event = None;
+        }
+        self.sync_party_combat_inactive_slots_from_session();
+        self.sync_active_view_from_party_state();
+        self.refresh_run_save_snapshot();
+        self.dirty = true;
+        if self.dirty {
+            self.rebuild_frame();
+        }
+        true
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn load_e2e_fixture(&mut self, code: u32) -> bool {
+        match code {
+            E2E_FIXTURE_HOST_FIRST_CARD => {
+                self.load_e2e_host_first_card_fixture();
+                true
+            }
+            E2E_FIXTURE_MULTIPLAYER_MAP => {
+                self.load_e2e_multiplayer_map_fixture();
+                true
+            }
+            E2E_FIXTURE_MULTIPLAYER_REWARD_BARRIER => {
+                self.load_e2e_multiplayer_reward_barrier_fixture();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_set_next_run_seed(&mut self, seed: u64) {
+        self.next_run_seed_override = Some(limit_run_seed(seed));
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_autoplay_action_code(&self) -> u32 {
+        self.debug_autoplay_action().code()
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_autoplay_action_param_a(&self) -> u32 {
+        self.debug_autoplay_action().param_a()
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_autoplay_action_param_b(&self) -> u32 {
+        self.debug_autoplay_action().param_b()
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_apply_autoplay_action(
+        &mut self,
+        code: u32,
+        param_a: u32,
+        param_b: u32,
+    ) -> bool {
+        let Some(action) = DebugAutoplayAction::from_wire(code, param_a, param_b) else {
+            return false;
+        };
+        self.apply_debug_autoplay_action_value(action)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn debug_autoplay_action(&self) -> DebugAutoplayAction {
+        if self.waiting_on_other_players()
+            || self.screen_transition.is_some()
+            || self.screen == AppScreen::Boot
+        {
+            return DebugAutoplayAction::Wait;
+        }
+
+        match self.screen {
+            AppScreen::OpeningIntro => DebugAutoplayAction::OpeningIntroContinue,
+            AppScreen::LevelIntro => DebugAutoplayAction::LevelIntroContinue,
+            AppScreen::ModuleSelect => {
+                let slot = self.active_view_slot_index();
+                let Some(module_select) = self
+                    .party_module_select_slots
+                    .get(slot)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| self.module_select.clone())
+                else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let dungeon = if self.multiplayer_enabled() {
+                    self.party_run
+                        .as_ref()
+                        .and_then(|party_run| party_run.active_dungeon(slot))
+                } else {
+                    self.dungeon.clone()
+                };
+                let Some(dungeon) = dungeon else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let Some(module) = choose_autoplay_best_module(&dungeon, &module_select.options)
+                else {
+                    return DebugAutoplayAction::Wait;
+                };
+                module_select
+                    .options
+                    .iter()
+                    .position(|candidate| *candidate == module)
+                    .map(|index| DebugAutoplayAction::ModuleSelect { index })
+                    .unwrap_or(DebugAutoplayAction::Wait)
+            }
+            AppScreen::Reward => {
+                let slot = self.active_view_slot_index();
+                let Some(reward) = self
+                    .party_reward_slots
+                    .get(slot)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| self.reward.clone())
+                else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let dungeon = if self.multiplayer_enabled() {
+                    self.party_run
+                        .as_ref()
+                        .and_then(|party_run| party_run.active_dungeon(slot))
+                } else {
+                    self.dungeon.clone()
+                };
+                let Some(dungeon) = dungeon else {
+                    return DebugAutoplayAction::Wait;
+                };
+                match pick_autoplay_reward_choice(&dungeon, &reward.options, reward.tier) {
+                    AutoplayRewardChoice::Pick(index) => {
+                        DebugAutoplayAction::RewardSelect { index }
+                    }
+                    AutoplayRewardChoice::Skip => DebugAutoplayAction::RewardSkip,
+                }
+            }
+            AppScreen::Event => {
+                let Some(event) = self.event else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let slot = self.active_view_slot_index();
+                let dungeon = if self.multiplayer_enabled() {
+                    self.party_run
+                        .as_ref()
+                        .and_then(|party_run| party_run.active_dungeon(slot))
+                } else {
+                    self.dungeon.clone()
+                };
+                let Some(dungeon) = dungeon else {
+                    return DebugAutoplayAction::Wait;
+                };
+                pick_autoplay_event_choice(&dungeon, event.event)
+                    .map(|index| DebugAutoplayAction::EventChoice { index })
+                    .unwrap_or(DebugAutoplayAction::Wait)
+            }
+            AppScreen::Rest => {
+                let slot = self.active_view_slot_index();
+                let Some(rest) = self
+                    .party_rest
+                    .get(slot)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| self.rest.clone())
+                else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let dungeon = if self.multiplayer_enabled() {
+                    self.party_run
+                        .as_ref()
+                        .and_then(|party_run| party_run.active_dungeon(slot))
+                } else {
+                    self.dungeon.clone()
+                };
+                let Some(dungeon) = dungeon else {
+                    return DebugAutoplayAction::Wait;
+                };
+                match pick_autoplay_rest_choice(&dungeon) {
+                    Some(AutoplayRestChoice::Heal) => DebugAutoplayAction::RestHeal,
+                    Some(AutoplayRestChoice::Upgrade(deck_index)) => rest
+                        .upgrade_options
+                        .iter()
+                        .position(|candidate| *candidate == deck_index)
+                        .map(|index| DebugAutoplayAction::RestUpgrade { index })
+                        .unwrap_or(DebugAutoplayAction::Wait),
+                    None => DebugAutoplayAction::Wait,
+                }
+            }
+            AppScreen::Shop => {
+                let slot = self.active_view_slot_index();
+                let Some(shop) = self
+                    .party_shop
+                    .get(slot)
+                    .cloned()
+                    .flatten()
+                    .or_else(|| self.shop.clone())
+                else {
+                    return DebugAutoplayAction::Wait;
+                };
+                let dungeon = if self.multiplayer_enabled() {
+                    self.party_run
+                        .as_ref()
+                        .and_then(|party_run| party_run.active_dungeon(slot))
+                } else {
+                    self.dungeon.clone()
+                };
+                let Some(dungeon) = dungeon else {
+                    return DebugAutoplayAction::Wait;
+                };
+                match pick_autoplay_shop_choice(&dungeon, &shop.offers) {
+                    AutoplayShopChoice::Buy(index) => DebugAutoplayAction::ShopBuy { index },
+                    AutoplayShopChoice::Leave => DebugAutoplayAction::ShopLeave,
+                }
+            }
+            AppScreen::Combat => {
+                if self.combat_input_locked() {
+                    return DebugAutoplayAction::Wait;
+                }
+                match choose_autoplay_combat_action(&self.combat) {
+                    AutoplayCombatChoice::PlayCard {
+                        hand_index,
+                        target_enemy,
+                    } => {
+                        let action = if self.combat.card_targets_all_enemies(hand_index) {
+                            CombatAction::PlayCard {
+                                hand_index,
+                                target: None,
+                            }
+                        } else if let Some(enemy_index) = target_enemy {
+                            CombatAction::PlayCard {
+                                hand_index,
+                                target: Some(Actor::Enemy(enemy_index)),
+                            }
+                        } else {
+                            CombatAction::PlayCard {
+                                hand_index,
+                                target: Some(Actor::Player),
+                            }
+                        };
+                        DebugAutoplayAction::Combat {
+                            action_code: encode_multiplayer_combat_action(Some(action)),
+                        }
+                    }
+                    AutoplayCombatChoice::EndTurn => DebugAutoplayAction::Combat {
+                        action_code: encode_multiplayer_combat_action(Some(CombatAction::EndTurn)),
+                    },
+                }
+            }
+            AppScreen::Map => {
+                if self.multiplayer_enabled() && !self.local_slot_is_captain() {
+                    return DebugAutoplayAction::Wait;
+                }
+                let node_id = if self.multiplayer_enabled() {
+                    self.party_run.as_ref().and_then(pick_party_map_node)
+                } else {
+                    self.dungeon.as_ref().and_then(pick_autoplay_map_node)
+                };
+                node_id
+                    .map(|node_id| DebugAutoplayAction::MapSelect { node_id })
+                    .unwrap_or(DebugAutoplayAction::Wait)
+            }
+            AppScreen::Boot | AppScreen::Result(_) => DebugAutoplayAction::Wait,
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn apply_debug_autoplay_action_value(&mut self, action: DebugAutoplayAction) -> bool {
+        match action {
+            DebugAutoplayAction::Wait => false,
+            DebugAutoplayAction::OpeningIntroContinue => self.activate_opening_intro_action(),
+            DebugAutoplayAction::LevelIntroContinue => self.activate_level_intro_action(),
+            DebugAutoplayAction::ModuleSelect { index } => self.activate_module_select_card(index),
+            DebugAutoplayAction::RewardSelect { index } => self.activate_reward_card(index),
+            DebugAutoplayAction::RewardSkip => self.activate_reward_skip(),
+            DebugAutoplayAction::EventChoice { index } => self.activate_event_choice(index),
+            DebugAutoplayAction::RestHeal => self.activate_rest_heal(),
+            DebugAutoplayAction::RestUpgrade { index } => self.activate_rest_upgrade(index),
+            DebugAutoplayAction::ShopBuy { index } => self.activate_shop_offer(index),
+            DebugAutoplayAction::ShopLeave => self.activate_shop_leave(),
+            DebugAutoplayAction::Combat { action_code } => {
+                self.apply_debug_local_combat_action_code(action_code)
+            }
+            DebugAutoplayAction::MapSelect { node_id } => self.activate_map_node(node_id),
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn apply_debug_local_combat_action_code(&mut self, code: u32) -> bool {
+        let Some(action) = decode_multiplayer_combat_action(code) else {
+            return false;
+        };
+        if !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return false;
+        }
+        self.perform_action(action);
+        true
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_combat_hint_code(&self) -> u32 {
+        if self.waiting_on_other_players() {
+            return E2E_COMBAT_HINT_WAITING_PLAYERS;
+        }
+        if self.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn) {
+            return E2E_COMBAT_HINT_RESOLVING_ENEMY_TURN;
+        }
+        if self.combat_feedback.playback_kind == Some(CombatPlaybackKind::PlayerAction) {
+            return E2E_COMBAT_HINT_RESOLVING_ACTION;
+        }
+        if self.combat_feedback.pending_outcome.is_some() || self.combat_input_locked() {
+            return E2E_COMBAT_HINT_RESOLVING_ENCOUNTER;
+        }
+        match self.ui.selected_card {
+            Some(index) if index < self.combat.hand_len() => {
+                if !self.combat.can_play_card(index) {
+                    E2E_COMBAT_HINT_INSUFFICIENT_ENERGY
+                } else if self.combat.card_requires_enemy(index) {
+                    E2E_COMBAT_HINT_TAP_ENEMY
+                } else if self.combat.card_targets_all_enemies(index) {
+                    E2E_COMBAT_HINT_TAP_CARD_OR_END_TURN
+                } else {
+                    E2E_COMBAT_HINT_TAP_PLAYER
+                }
+            }
+            _ => E2E_COMBAT_HINT_TAP_CARD_OR_END_TURN,
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_combat_input_locked(&self) -> bool {
+        self.combat_input_locked()
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_combat_lock_mask(&self) -> u32 {
+        if !matches!(self.screen, AppScreen::Combat) {
+            return 0;
+        }
+
+        let mut mask = 0;
+        if self.multiplayer_run_active() && self.local_combat_hero_ready() {
+            mask |= E2E_COMBAT_LOCK_LOCAL_READY;
+        }
+        if self.pending_local_multiplayer_combat_action.is_some() {
+            mask |= E2E_COMBAT_LOCK_PENDING_LOCAL_ACTION;
+        }
+        if self.combat_feedback.auto_playback_active {
+            mask |= E2E_COMBAT_LOCK_AUTO_PLAYBACK;
+        }
+        if self.combat_feedback.pending_outcome.is_some() {
+            mask |= E2E_COMBAT_LOCK_PENDING_OUTCOME;
+        }
+        if self.combat_feedback.playback_pause_ms > 0.0 {
+            mask |= E2E_COMBAT_LOCK_PLAYBACK_PAUSE;
+        }
+        if !self.combat_feedback.active_stats.is_empty() {
+            mask |= E2E_COMBAT_LOCK_ACTIVE_STATS;
+        }
+        if !self.combat_feedback.stat_queue.is_empty() {
+            mask |= E2E_COMBAT_LOCK_STAT_QUEUE;
+        }
+        mask
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_pending_local_multiplayer_combat_action_code(&self) -> u32 {
+        encode_multiplayer_combat_action(self.pending_local_multiplayer_combat_action)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_combat_playback_queue_len(&self) -> u32 {
+        self.combat_feedback.playback_queue.len() as u32
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_combat_active_stat_count(&self) -> u32 {
+        self.combat_feedback.active_stats.len() as u32
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn debug_result_code(&self) -> u32 {
+        match self.screen {
+            AppScreen::Result(CombatOutcome::Victory) => 1,
+            AppScreen::Result(CombatOutcome::Defeat) => 2,
+            _ => 0,
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_hand_len_for_debug(&self) -> u32 {
+        if matches!(self.screen, AppScreen::Combat) {
+            self.combat.hand_len() as u32
+        } else {
+            0
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_enemy_count_for_debug(&self) -> u32 {
+        if matches!(self.screen, AppScreen::Combat) {
+            self.combat.enemy_count() as u32
+        } else {
+            0
+        }
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_hand_card_center_x(&self, index: u32) -> f32 {
+        self.layout()
+            .hand_rects
+            .get(index as usize)
+            .map(|rect| rect.x + rect.w * 0.5)
+            .unwrap_or(-1.0)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_hand_card_center_y(&self, index: u32) -> f32 {
+        self.layout()
+            .hand_rects
+            .get(index as usize)
+            .map(|rect| rect.y + rect.h * 0.5)
+            .unwrap_or(-1.0)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_enemy_center_x(&self, index: u32) -> f32 {
+        self.layout()
+            .enemy_rect(index as usize)
+            .map(|rect| rect.x + rect.w * 0.5)
+            .unwrap_or(-1.0)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_enemy_center_y(&self, index: u32) -> f32 {
+        self.layout()
+            .enemy_rect(index as usize)
+            .map(|rect| rect.y + rect.h * 0.5)
+            .unwrap_or(-1.0)
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_player_center_x(&self) -> f32 {
+        let rect = self.layout().player_rect;
+        rect.x + rect.w * 0.5
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_player_center_y(&self) -> f32 {
+        let rect = self.layout().player_rect;
+        rect.y + rect.h * 0.5
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_end_turn_center_x(&self) -> f32 {
+        let rect = self.layout().end_turn_button;
+        rect.x + rect.w * 0.5
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    pub(crate) fn combat_end_turn_center_y(&self) -> f32 {
+        let rect = self.layout().end_turn_button;
+        rect.y + rect.h * 0.5
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn load_e2e_host_first_card_fixture(&mut self) {
+        let viewport = self.viewport;
+        let language = self.language;
+        let language_generation = self.language_generation;
+        let background_mode = self.background_mode;
+        let background_mode_generation = self.background_mode_generation;
+        let player_name = self.player_name.clone();
+        let player_name_input_value = self.player_name_input_value.clone();
+        let player_name_generation = self.player_name_generation;
+        let debug_mode = self.debug_mode;
+        let install_capability = self.install_capability;
+
+        *self = Self::new();
+        self.viewport = viewport;
+        self.language = language;
+        self.language_generation = language_generation;
+        self.background_mode = background_mode;
+        self.background_mode_generation = background_mode_generation;
+        self.player_name = player_name;
+        self.player_name_input_value = player_name_input_value;
+        self.player_name_generation = player_name_generation;
+        self.debug_mode = debug_mode;
+        self.install_capability = install_capability;
+        self.refresh_settings_layout_cache();
+
+        self.set_party_size(2);
+        let mut dungeon = DungeonRun::new(E2E_FIXTURE_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        let other_dungeon = dungeon.clone();
+        let setup = dungeon
+            .current_encounter_setup()
+            .expect("e2e fixture combat setup should exist");
+        let party_run = PartyRunState::from_dungeons(vec![dungeon.clone(), other_dungeon.clone()])
+            .expect("e2e fixture party run should build");
+        let setups = vec![setup.clone(), setup];
+        let decks = vec![dungeon.deck.clone(), other_dungeon.deck.clone()];
+        let modules = vec![dungeon.modules.clone(), other_dungeon.modules.clone()];
+
+        self.dungeon = Some(dungeon);
+        self.party_run = Some(party_run);
+        self.party_combat = PartyCombatState::new(E2E_FIXTURE_SEED, &setups, &decks, &modules);
+        if let Some(party_combat) = self.party_combat.as_mut() {
+            party_combat.heroes[0].player.energy = 3;
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+            party_combat.heroes[0].deck.draw_pile = vec![CardId::ZeroPoint];
+            party_combat.heroes[0].deck.discard_pile.clear();
+            if let Some(hero) = party_combat.heroes.get_mut(1) {
+                hero.player.energy = 3;
+                hero.deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+                hero.deck.draw_pile = vec![CardId::ZeroPoint];
+                hero.deck.discard_pile.clear();
+            }
+            party_combat.enemies[0].fighter.hp = 14;
+            party_combat.enemies[0].fighter.max_hp = 14;
+            party_combat.enemies[0].fighter.block = 0;
+        }
+        self.party_session.local_slot = 0;
+        self.party_session.captain_slot = 0;
+        let player_label = self.player_label().to_owned();
+        self.party_session.set_local_display_name(&player_label);
+        if let Some(slot) = self.party_session.slots.get_mut(0) {
+            slot.claim = crate::session::SlotClaimKind::Local;
+            slot.connected = true;
+        }
+        if let Some(slot) = self.party_session.slots.get_mut(1) {
+            slot.claim = crate::session::SlotClaimKind::Remote;
+            slot.connected = true;
+            slot.name = "Player 2".to_string();
+        }
+        self.screen = AppScreen::Combat;
+        self.sync_active_view_from_party_state();
+        self.sync_combat_feedback_to_combat();
+        self.screen_transition = None;
+        self.layout_transition = None;
+        self.pending_local_multiplayer_combat_action = None;
+        self.refresh_run_save_snapshot();
+        self.refresh_party_snapshot_cache();
+        self.refresh_hover();
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn load_e2e_multiplayer_map_fixture(&mut self) {
+        let viewport = self.viewport;
+        let language = self.language;
+        let language_generation = self.language_generation;
+        let background_mode = self.background_mode;
+        let background_mode_generation = self.background_mode_generation;
+        let player_name = self.player_name.clone();
+        let player_name_input_value = self.player_name_input_value.clone();
+        let player_name_generation = self.player_name_generation;
+        let debug_mode = self.debug_mode;
+        let install_capability = self.install_capability;
+
+        *self = Self::new();
+        self.viewport = viewport;
+        self.language = language;
+        self.language_generation = language_generation;
+        self.background_mode = background_mode;
+        self.background_mode_generation = background_mode_generation;
+        self.player_name = player_name;
+        self.player_name_input_value = player_name_input_value;
+        self.player_name_generation = player_name_generation;
+        self.debug_mode = debug_mode;
+        self.install_capability = install_capability;
+        self.refresh_settings_layout_cache();
+
+        self.set_party_size(2);
+        self.debug_mode = true;
+
+        let mut dungeon = DungeonRun::new(E2E_FIXTURE_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 2,
+                lane: 3,
+                kind: RoomKind::Rest,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        let other_dungeon = dungeon.clone();
+        let setup = dungeon
+            .current_encounter_setup()
+            .expect("e2e multiplayer map fixture combat setup should exist");
+        let party_run = PartyRunState::from_dungeons(vec![dungeon.clone(), other_dungeon.clone()])
+            .expect("e2e multiplayer map fixture party run should build");
+        let setups = vec![setup.clone(), setup];
+        let decks = vec![dungeon.deck.clone(), other_dungeon.deck.clone()];
+        let modules = vec![dungeon.modules.clone(), other_dungeon.modules.clone()];
+
+        self.dungeon = Some(dungeon);
+        self.party_run = Some(party_run);
+        self.party_combat = PartyCombatState::new(E2E_FIXTURE_SEED, &setups, &decks, &modules);
+        self.party_session.local_slot = 0;
+        self.party_session.captain_slot = 0;
+        let player_label = self.player_label().to_owned();
+        self.party_session.set_local_display_name(&player_label);
+        if let Some(slot) = self.party_session.slots.get_mut(0) {
+            slot.claim = crate::session::SlotClaimKind::Local;
+            slot.connected = true;
+        }
+        if let Some(slot) = self.party_session.slots.get_mut(1) {
+            slot.claim = crate::session::SlotClaimKind::Remote;
+            slot.connected = true;
+            slot.name = "Player 2".to_string();
+        }
+        self.screen = AppScreen::Combat;
+        self.sync_active_view_from_party_state();
+        self.sync_combat_feedback_to_combat();
+        self.screen_transition = None;
+        self.layout_transition = None;
+        self.pending_local_multiplayer_combat_action = None;
+
+        self.debug_end_battle();
+        self.claim_reward(0);
+        self.begin_remote_input_slot(1);
+        self.claim_reward(0);
+        self.end_remote_input_slot();
+
+        self.screen_transition = None;
+        self.layout_transition = None;
+        self.pending_local_multiplayer_combat_action = None;
+        self.refresh_run_save_snapshot();
+        self.refresh_party_snapshot_cache();
+        self.refresh_hover();
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    #[cfg(any(test, feature = "e2e"))]
+    fn load_e2e_multiplayer_reward_barrier_fixture(&mut self) {
+        let viewport = self.viewport;
+        let language = self.language;
+        let language_generation = self.language_generation;
+        let background_mode = self.background_mode;
+        let background_mode_generation = self.background_mode_generation;
+        let player_name = self.player_name.clone();
+        let player_name_input_value = self.player_name_input_value.clone();
+        let player_name_generation = self.player_name_generation;
+        let debug_mode = self.debug_mode;
+        let install_capability = self.install_capability;
+
+        *self = Self::new();
+        self.viewport = viewport;
+        self.language = language;
+        self.language_generation = language_generation;
+        self.background_mode = background_mode;
+        self.background_mode_generation = background_mode_generation;
+        self.player_name = player_name;
+        self.player_name_input_value = player_name_input_value;
+        self.player_name_generation = player_name_generation;
+        self.debug_mode = debug_mode;
+        self.install_capability = install_capability;
+        self.refresh_settings_layout_cache();
+
+        self.set_party_size(2);
+        self.debug_mode = true;
+
+        let mut dungeon = DungeonRun::new(E2E_FIXTURE_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 2,
+                lane: 3,
+                kind: RoomKind::Rest,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        let other_dungeon = dungeon.clone();
+        let setup = dungeon
+            .current_encounter_setup()
+            .expect("e2e multiplayer reward fixture combat setup should exist");
+        let party_run = PartyRunState::from_dungeons(vec![dungeon.clone(), other_dungeon.clone()])
+            .expect("e2e multiplayer reward fixture party run should build");
+        let setups = vec![setup.clone(), setup];
+        let decks = vec![dungeon.deck.clone(), other_dungeon.deck.clone()];
+        let modules = vec![dungeon.modules.clone(), other_dungeon.modules.clone()];
+
+        self.dungeon = Some(dungeon);
+        self.party_run = Some(party_run);
+        self.party_combat = PartyCombatState::new(E2E_FIXTURE_SEED, &setups, &decks, &modules);
+        self.party_session.local_slot = 0;
+        self.party_session.captain_slot = 0;
+        let player_label = self.player_label().to_owned();
+        self.party_session.set_local_display_name(&player_label);
+        if let Some(slot) = self.party_session.slots.get_mut(0) {
+            slot.claim = crate::session::SlotClaimKind::Local;
+            slot.connected = true;
+        }
+        if let Some(slot) = self.party_session.slots.get_mut(1) {
+            slot.claim = crate::session::SlotClaimKind::Remote;
+            slot.connected = true;
+            slot.name = "Player 2".to_string();
+        }
+        self.screen = AppScreen::Combat;
+        self.sync_active_view_from_party_state();
+        self.sync_combat_feedback_to_combat();
+        self.screen_transition = None;
+        self.layout_transition = None;
+        self.pending_local_multiplayer_combat_action = None;
+
+        self.debug_end_battle();
+
+        self.screen_transition = None;
+        self.layout_transition = None;
+        self.pending_local_multiplayer_combat_action = None;
+        self.refresh_run_save_snapshot();
+        self.refresh_party_snapshot_cache();
+        self.refresh_hover();
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    pub(crate) fn prepare_party_slot_name_buffer(&mut self, len: usize) -> *mut u8 {
+        let len = len.min(PLAYER_NAME_MAX_BUFFER_BYTES);
+        self.party_slot_name_buffer.clear();
+        self.party_slot_name_buffer.resize(len, 0);
+        self.party_slot_name_buffer.as_mut_ptr()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync_remote_party_slot_from_buffer(
+        &mut self,
+        slot: u32,
+        connected: bool,
+        ready: bool,
+        in_run: bool,
+        in_combat: bool,
+        alive: bool,
+        hp: i32,
+        max_hp: i32,
+        block: i32,
+        len: usize,
+    ) -> bool {
+        if len > self.party_slot_name_buffer.len() {
+            log::debug!(
+                "Ignoring remote party slot update: len {} exceeds buffer length {}.",
+                len,
+                self.party_slot_name_buffer.len()
+            );
+            return false;
+        }
+
+        let name = if len == 0 {
+            None
+        } else {
+            match std::str::from_utf8(&self.party_slot_name_buffer[..len]) {
+                Ok(raw) => Some(raw.to_owned()),
+                Err(error) => {
+                    log::debug!(
+                        "Ignoring remote party slot update: invalid UTF-8 for len {}: {}",
+                        len,
+                        error
+                    );
+                    return false;
+                }
+            }
+        };
+
+        let updated = self.party_session.sync_remote_slot(
+            slot as usize,
+            name.as_deref(),
+            connected,
+            ready,
+            HeroRuntimeSummary {
+                in_run,
+                in_combat,
+                hp,
+                max_hp,
+                block,
+                alive,
+            },
+        );
+        let combat_changed = self.sync_party_combat_inactive_slots_from_session();
+        if combat_changed && matches!(self.screen, AppScreen::Combat) {
+            self.sync_active_view_from_party_state();
+            if !self.multiplayer_combat_state_change_busy() {
+                self.sync_combat_feedback_to_combat();
+            }
+        }
+        if updated || combat_changed {
+            self.refresh_run_save_snapshot();
+        }
+        updated || combat_changed
+    }
+
+    pub(crate) fn disconnect_remote_party_slot(&mut self, slot: u32) -> bool {
+        let slot = slot as usize;
+        let can_apply_combat_change = matches!(self.screen, AppScreen::Combat)
+            && !self.multiplayer_combat_state_change_busy();
+        let previous_view = can_apply_combat_change
+            .then(|| self.current_multiplayer_combat_view_state())
+            .flatten();
+        let updated = self.party_session.disconnect_remote_slot(slot);
+        let mut combat_changed = false;
+        if updated {
+            combat_changed = self.sync_party_combat_inactive_slots_from_session();
+            if can_apply_combat_change {
+                let playback_slot = self.active_view_slot_index();
+                let resolved = self.party_combat.as_mut().is_some_and(|party_combat| {
+                    party_combat
+                        .resolve_if_all_living_active_heroes_ready(playback_slot)
+                        .is_some()
+                });
+                combat_changed |= resolved;
+            }
+        }
+        if combat_changed && can_apply_combat_change {
+            self.apply_remote_slot_combat_state_change(previous_view);
+        } else if combat_changed && matches!(self.screen, AppScreen::Combat) {
+            self.sync_active_view_from_party_state();
+        }
+        if updated || combat_changed {
+            self.refresh_run_save_snapshot();
+            self.refresh_hover();
+            self.dirty = true;
+        }
+        updated || combat_changed
+    }
+
+    pub(crate) fn clear_remote_party_slot(&mut self, slot: u32) -> bool {
+        let updated = self.party_session.clear_remote_slot(slot as usize);
+        if updated {
+            self.refresh_run_save_snapshot();
+        }
+        updated
+    }
+
     pub(crate) fn resume_request_pending(&self) -> bool {
         self.resume_request_pending
     }
 
     pub(crate) fn clear_resume_request(&mut self) {
         self.resume_request_pending = false;
+    }
+
+    pub(crate) fn multiplayer_request_pending(&self) -> bool {
+        self.multiplayer_request_pending
+    }
+
+    pub(crate) fn clear_multiplayer_request(&mut self) {
+        self.multiplayer_request_pending = false;
     }
 
     fn activate_boot_install_action(&mut self) {
@@ -3113,18 +5366,148 @@ impl App {
         restored
     }
 
+    pub(crate) fn apply_multiplayer_snapshot_from_buffer(&mut self, len: usize) -> bool {
+        if len > self.restore_buffer.len() {
+            return false;
+        }
+
+        let raw = match std::str::from_utf8(&self.restore_buffer[..len]) {
+            Ok(raw) => raw.to_owned(),
+            Err(_) => return false,
+        };
+
+        let previous_multiplayer_combat_view = self.current_multiplayer_combat_view_state();
+        let previous_screen = self.screen;
+        let previous_opening_intro = self.opening_intro.clone();
+        let previous_level_intro = self.level_intro.clone();
+        let previous_pending_local_multiplayer_action =
+            self.pending_local_multiplayer_combat_action;
+        let previous_combat_selection = if matches!(previous_screen, AppScreen::Combat) {
+            self.ui.selected_card.and_then(|index| {
+                self.combat
+                    .hand_card(index)
+                    .map(|card| (index, card, self.combat.turn, self.combat.phase))
+            })
+        } else {
+            None
+        };
+        let restored = self.restore_from_save_raw(&raw).is_ok();
+        if restored {
+            if matches!(previous_screen, AppScreen::OpeningIntro)
+                && matches!(self.screen, AppScreen::OpeningIntro)
+            {
+                self.opening_intro =
+                    previous_opening_intro.or_else(|| Some(OpeningIntroState::default()));
+            }
+            if matches!(previous_screen, AppScreen::LevelIntro)
+                && matches!(self.screen, AppScreen::LevelIntro)
+                && previous_level_intro.is_some()
+            {
+                self.level_intro = previous_level_intro;
+            }
+            if let Some((index, card, turn, phase)) = previous_combat_selection {
+                if matches!(self.screen, AppScreen::Combat)
+                    && self.combat.turn == turn
+                    && self.combat.phase == phase
+                    && self.combat.hand_card(index) == Some(card)
+                {
+                    self.ui.selected_card = Some(index);
+                }
+            }
+            self.pending_local_multiplayer_combat_action =
+                previous_pending_local_multiplayer_action;
+            if let Some(CombatAction::EndTurn) = previous_pending_local_multiplayer_action {
+                let snapshot_matches_pre_ack_view = matches!(self.screen, AppScreen::Combat)
+                    && !self.local_combat_hero_ready()
+                    && previous_multiplayer_combat_view
+                        .as_ref()
+                        .is_some_and(|previous| {
+                            self.combat.turn == previous.turn && self.combat.phase == previous.phase
+                        });
+                if snapshot_matches_pre_ack_view {
+                    let slot = self.local_slot_index();
+                    let re_applied = self
+                        .party_combat
+                        .as_mut()
+                        .is_some_and(|party_combat| party_combat.ready_hero(slot));
+                    if re_applied {
+                        self.sync_active_view_from_party_state();
+                    }
+                }
+            }
+            if matches!(self.screen, AppScreen::Combat) {
+                let current_hand = self.current_combat_hand_cards();
+                let current_deck = self.combat.deck.clone();
+                let snapshot_acknowledged_action = match previous_pending_local_multiplayer_action {
+                    Some(CombatAction::EndTurn) => {
+                        self.local_combat_hero_ready()
+                            || previous_multiplayer_combat_view
+                                .as_ref()
+                                .is_some_and(|previous| {
+                                    self.combat.turn != previous.turn
+                                        || self.combat.phase != previous.phase
+                                })
+                    }
+                    Some(CombatAction::PlayCard { .. }) => previous_multiplayer_combat_view
+                        .as_ref()
+                        .is_some_and(|previous| {
+                            self.combat.turn != previous.turn
+                                || self.combat.phase != previous.phase
+                                || current_deck != previous.deck
+                                || current_hand != previous.hand
+                        }),
+                    None => true,
+                };
+                if snapshot_acknowledged_action {
+                    self.pending_local_multiplayer_combat_action = None;
+                }
+            } else {
+                self.pending_local_multiplayer_combat_action = None;
+            }
+            if let Some(previous) = previous_multiplayer_combat_view.as_ref() {
+                self.apply_multiplayer_combat_view_state(previous, None, true);
+            }
+            if self.dirty {
+                self.rebuild_frame();
+            }
+        } else {
+            self.pending_local_multiplayer_combat_action = None;
+        }
+        restored
+    }
+
     fn activate_boot_primary_action(&mut self) {
         if self.has_saved_run {
             self.request_resume();
         } else {
-            self.start_run();
+            self.start_singleplayer_run();
         }
+    }
+
+    fn start_singleplayer_run(&mut self) {
+        self.reset_singleplayer_party_session();
+        self.start_run();
     }
 
     fn clear_boot_request_flags(&mut self) {
         self.resume_request_pending = false;
+        self.multiplayer_request_pending = false;
         self.install_request_pending = false;
         self.update_request_pending = false;
+    }
+
+    fn request_multiplayer(&mut self) {
+        if !matches!(self.screen, AppScreen::Boot) {
+            return;
+        }
+
+        self.ui.restart_confirm_open = false;
+        self.ui.settings_open = false;
+        self.ui.install_help_open = false;
+        self.clear_boot_request_flags();
+        self.multiplayer_request_pending = true;
+        self.refresh_hover();
+        self.dirty = true;
     }
 
     fn request_resume(&mut self) {
@@ -3350,6 +5733,7 @@ impl App {
         match target {
             HitTarget::Start => self.start_run(),
             HitTarget::Continue => self.request_resume(),
+            HitTarget::Multiplayer => self.request_multiplayer(),
             HitTarget::Settings => self.open_settings(),
             HitTarget::Install => self.activate_boot_install_action(),
             HitTarget::Update => self.request_update(),
@@ -3404,10 +5788,135 @@ impl App {
         self.set_run_save_snapshot(None);
     }
 
+    fn current_screen_key(&self) -> &'static str {
+        match self.screen {
+            AppScreen::Boot => "boot",
+            AppScreen::OpeningIntro => "opening_intro",
+            AppScreen::ModuleSelect => "module_select",
+            AppScreen::Map => "map",
+            AppScreen::LevelIntro => "level_intro",
+            AppScreen::Rest => "rest",
+            AppScreen::Shop => "shop",
+            AppScreen::Event => "event",
+            AppScreen::Reward => "reward",
+            AppScreen::Combat => "combat",
+            AppScreen::Result(_) => "result",
+        }
+    }
+
+    fn current_local_runtime_summary(&self) -> HeroRuntimeSummary {
+        match self.screen {
+            AppScreen::Combat => HeroRuntimeSummary {
+                in_run: true,
+                in_combat: true,
+                hp: self.combat.player.fighter.hp,
+                max_hp: self.combat.player.fighter.max_hp,
+                block: self.combat.player.fighter.block,
+                alive: self.combat.player.fighter.hp > 0,
+            },
+            AppScreen::OpeningIntro
+            | AppScreen::ModuleSelect
+            | AppScreen::Map
+            | AppScreen::LevelIntro
+            | AppScreen::Rest
+            | AppScreen::Shop
+            | AppScreen::Event
+            | AppScreen::Reward => self
+                .dungeon
+                .as_ref()
+                .map(|dungeon| HeroRuntimeSummary {
+                    in_run: true,
+                    in_combat: false,
+                    hp: dungeon.player_hp,
+                    max_hp: dungeon.player_max_hp,
+                    block: 0,
+                    alive: dungeon.player_hp > 0,
+                })
+                .unwrap_or_default(),
+            AppScreen::Boot | AppScreen::Result(_) => HeroRuntimeSummary::default(),
+        }
+    }
+
+    fn current_party_session_snapshot(&self) -> PartySessionSnapshot {
+        let mut snapshot = self.party_session.clone().normalize();
+        snapshot.set_local_display_name(self.player_label());
+        if self.multiplayer_run_active() {
+            snapshot.screen = self.current_screen_key().to_string();
+            snapshot.in_run = true;
+            if let Some(party_run) = self.party_run.as_ref() {
+                for slot in 0..party_run.party_size() {
+                    let Some(hero) = party_run.hero(slot) else {
+                        continue;
+                    };
+                    let (in_combat, hp, max_hp, block, ready) =
+                        if let Some(party_combat) = self.party_combat.as_ref() {
+                            if let Some(hero_state) = party_combat.heroes.get(slot) {
+                                (
+                                    true,
+                                    hero_state.player.fighter.hp,
+                                    hero_state.player.fighter.max_hp,
+                                    hero_state.player.fighter.block,
+                                    hero_state.ready,
+                                )
+                            } else {
+                                (false, hero.player_hp, hero.player_max_hp, 0, false)
+                            }
+                        } else {
+                            (
+                                false,
+                                hero.player_hp,
+                                hero.player_max_hp,
+                                0,
+                                self.party_ready.get(slot).copied().unwrap_or(false),
+                            )
+                        };
+                    if let Some(slot_state) = snapshot.slots.get_mut(slot) {
+                        slot_state.in_run = true;
+                        slot_state.in_combat = in_combat;
+                        slot_state.hp = hp;
+                        slot_state.max_hp = max_hp;
+                        slot_state.block = block;
+                        slot_state.ready = ready;
+                        slot_state.life = if hp > 0 {
+                            crate::session::SlotLifeState::Alive
+                        } else {
+                            crate::session::SlotLifeState::Dead
+                        };
+                    }
+                }
+            }
+        } else {
+            snapshot.update_local_runtime(
+                self.current_screen_key(),
+                self.current_local_runtime_summary(),
+            );
+        }
+        snapshot
+    }
+
+    fn refresh_party_snapshot_cache(&mut self) {
+        let snapshot =
+            serialize_party_session(&self.current_party_session_snapshot()).unwrap_or_default();
+        if self.party_snapshot == snapshot {
+            return;
+        }
+        self.party_snapshot = snapshot;
+        self.party_generation = self.party_generation.wrapping_add(1);
+    }
+
     fn refresh_run_save_snapshot(&mut self) {
+        self.refresh_party_snapshot_cache();
         match self.screen {
             AppScreen::Boot => {}
-            AppScreen::OpeningIntro => self.clear_run_save_snapshot(),
+            AppScreen::OpeningIntro => {
+                if self.multiplayer_run_active() {
+                    if let Some(snapshot) = self.serialize_current_run() {
+                        self.set_run_save_snapshot(Some(snapshot));
+                    }
+                } else {
+                    self.clear_run_save_snapshot();
+                }
+            }
             AppScreen::Result(_) => self.clear_run_save_snapshot(),
             AppScreen::Map
             | AppScreen::ModuleSelect
@@ -3430,13 +5939,24 @@ impl App {
     }
 
     fn build_run_save_envelope(&self) -> Option<RunSaveEnvelope> {
+        let party = self.current_party_session_snapshot();
         let active_state = self.build_active_run_state()?;
         let fallback_checkpoint = self.build_fallback_checkpoint(&active_state)?;
         let log = self.log.iter().cloned().collect();
-        Some(RunSaveEnvelope::new(active_state, fallback_checkpoint, log))
+        Some(RunSaveEnvelope::new(
+            party,
+            active_state,
+            fallback_checkpoint,
+            log,
+        ))
     }
 
     fn build_active_run_state(&self) -> Option<SavedRunState> {
+        if self.multiplayer_run_active() {
+            return Some(SavedRunState::Party {
+                party_state: self.save_party_state()?,
+            });
+        }
         let dungeon = self.save_dungeon_run(self.dungeon.as_ref()?);
         match self.screen {
             AppScreen::Map => Some(SavedRunState::Map { dungeon }),
@@ -3468,6 +5988,9 @@ impl App {
 
     fn build_fallback_checkpoint(&self, active_state: &SavedRunState) -> Option<SavedCheckpoint> {
         match active_state {
+            SavedRunState::Party { party_state } => Some(SavedCheckpoint::Party {
+                party_state: party_state.clone(),
+            }),
             SavedRunState::Map { dungeon } => Some(SavedCheckpoint::Map {
                 dungeon: dungeon.clone(),
             }),
@@ -3545,15 +6068,13 @@ impl App {
                 .map(serialize_card_id)
                 .map(str::to_string)
                 .collect(),
-            modules: Some(
-                dungeon
-                    .modules
-                    .iter()
-                    .copied()
-                    .map(serialize_module_id)
-                    .map(str::to_string)
-                    .collect(),
-            ),
+            modules: dungeon
+                .modules
+                .iter()
+                .copied()
+                .map(serialize_module_id)
+                .map(str::to_string)
+                .collect(),
             player_hp: dungeon.player_hp,
             player_max_hp: dungeon.player_max_hp,
             credits: dungeon.credits,
@@ -3583,7 +6104,7 @@ impl App {
                 .map(str::to_string)
                 .collect(),
             seed: module_select.seed,
-            kind: Some(kind),
+            kind,
             boss_level,
         }
     }
@@ -3601,6 +6122,80 @@ impl App {
             followup_completed_run: reward.followup.completed_run,
             seed: reward.seed,
         }
+    }
+
+    fn save_rest_state(&self, rest: &RestState) -> SavedRestState {
+        SavedRestState {
+            heal_amount: rest.heal_amount,
+            upgrade_options: rest.upgrade_options.clone(),
+        }
+    }
+
+    fn save_party_state(&self) -> Option<SavedPartyState> {
+        let party_run = self.party_run.as_ref()?;
+        let dungeons = (0..party_run.party_size())
+            .map(|slot| {
+                party_run
+                    .active_dungeon(slot)
+                    .map(|dungeon| self.save_dungeon_run(&dungeon))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let combats = if let Some(party_combat) = self.party_combat.as_ref() {
+            Some(
+                (0..party_combat.hero_count())
+                    .map(|slot| {
+                        party_combat
+                            .view_for_slot(slot)
+                            .map(|combat| self.save_specific_combat_state(&combat))
+                    })
+                    .collect::<Option<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
+        let rest_slots = (!self.party_rest.is_empty()).then(|| {
+            self.party_rest
+                .iter()
+                .map(|rest| rest.as_ref().map(|rest| self.save_rest_state(rest)))
+                .collect()
+        });
+        let shop_slots = (!self.party_shop.is_empty()).then(|| {
+            self.party_shop
+                .iter()
+                .map(|shop| shop.as_ref().map(|shop| self.save_shop_state(shop)))
+                .collect()
+        });
+        let module_select_slots = (!self.party_module_select_slots.is_empty()).then(|| {
+            self.party_module_select_slots
+                .iter()
+                .map(|state| {
+                    state
+                        .as_ref()
+                        .map(|state| self.save_module_select_state(state))
+                })
+                .collect()
+        });
+        let reward_slots = (!self.party_reward_slots.is_empty()).then(|| {
+            self.party_reward_slots
+                .iter()
+                .map(|reward| reward.as_ref().map(|reward| self.save_reward_state(reward)))
+                .collect()
+        });
+
+        Some(SavedPartyState {
+            screen: self.current_screen_key().to_string(),
+            dungeons,
+            combats,
+            rest_slots,
+            shop_slots,
+            event: self
+                .event
+                .as_ref()
+                .map(|event| self.save_event_state(event)),
+            module_select_slots,
+            reward_slots,
+            ready: self.party_ready.clone(),
+        })
     }
 
     fn save_event_state(&self, event: &EventState) -> SavedEventState {
@@ -3623,23 +6218,22 @@ impl App {
         }
     }
 
-    fn save_combat_state(&self) -> SavedCombatState {
+    fn save_specific_combat_state(&self, combat: &CombatState) -> SavedCombatState {
         SavedCombatState {
             player: SavedPlayerState {
                 fighter: SavedFighterState {
-                    hp: self.combat.player.fighter.hp,
-                    max_hp: self.combat.player.fighter.max_hp,
-                    block: self.combat.player.fighter.block,
-                    bleed: self.combat.player.fighter.statuses.bleed,
-                    focus: self.combat.player.fighter.statuses.focus,
-                    rhythm: self.combat.player.fighter.statuses.rhythm,
-                    momentum: self.combat.player.fighter.statuses.momentum,
+                    hp: combat.player.fighter.hp,
+                    max_hp: combat.player.fighter.max_hp,
+                    block: combat.player.fighter.block,
+                    bleed: combat.player.fighter.statuses.bleed,
+                    focus: combat.player.fighter.statuses.focus,
+                    rhythm: combat.player.fighter.statuses.rhythm,
+                    momentum: combat.player.fighter.statuses.momentum,
                 },
-                energy: self.combat.player.energy,
-                max_energy: self.combat.player.max_energy,
+                energy: combat.player.energy,
+                max_energy: combat.player.max_energy,
             },
-            enemies: self
-                .combat
+            enemies: combat
                 .enemies
                 .iter()
                 .map(|enemy| SavedEnemyState {
@@ -3658,8 +6252,7 @@ impl App {
                 })
                 .collect(),
             deck: SavedDeckState {
-                draw_pile: self
-                    .combat
+                draw_pile: combat
                     .deck
                     .draw_pile
                     .iter()
@@ -3667,8 +6260,7 @@ impl App {
                     .map(serialize_card_id)
                     .map(str::to_string)
                     .collect(),
-                hand: self
-                    .combat
+                hand: combat
                     .deck
                     .hand
                     .iter()
@@ -3676,8 +6268,7 @@ impl App {
                     .map(serialize_card_id)
                     .map(str::to_string)
                     .collect(),
-                discard_pile: self
-                    .combat
+                discard_pile: combat
                     .deck
                     .discard_pile
                     .iter()
@@ -3686,14 +6277,19 @@ impl App {
                     .map(str::to_string)
                     .collect(),
             },
-            phase: serialize_turn_phase(self.combat.phase).to_string(),
-            turn: self.combat.turn,
-            rng_state: self.combat.rng_state(),
+            phase: serialize_turn_phase(combat.phase).to_string(),
+            turn: combat.turn,
+            rng_state: combat.rng_state(),
         }
+    }
+
+    fn save_combat_state(&self) -> SavedCombatState {
+        self.save_specific_combat_state(&self.combat)
     }
 
     fn restore_from_save_raw(&mut self, raw: &str) -> Result<(), String> {
         let envelope = parse_run_save(raw)?;
+        self.party_session = envelope.party.clone().normalize();
         let restore_result = self
             .restore_active_state(&envelope.active_state, &envelope.log)
             .or_else(|_| self.restore_fallback_checkpoint(&envelope.fallback_checkpoint));
@@ -3722,6 +6318,9 @@ impl App {
         saved_log: &[String],
     ) -> Result<bool, String> {
         match active_state {
+            SavedRunState::Party { party_state } => {
+                self.restore_saved_party_state(party_state)?;
+            }
             SavedRunState::Map { dungeon } => {
                 let dungeon = self.restore_saved_dungeon(dungeon)?;
                 self.apply_restored_state(
@@ -3833,6 +6432,9 @@ impl App {
         checkpoint: &SavedCheckpoint,
     ) -> Result<bool, String> {
         match checkpoint {
+            SavedCheckpoint::Party { party_state } => {
+                self.restore_saved_party_state(party_state)?;
+            }
             SavedCheckpoint::Map { dungeon } => {
                 let dungeon = self.restore_saved_dungeon(dungeon)?;
                 self.apply_restored_state(
@@ -3976,14 +6578,9 @@ impl App {
                 .collect(),
             modules: saved
                 .modules
-                .as_ref()
-                .map(|modules| {
-                    modules
-                        .iter()
-                        .filter_map(|module| resolve_module_id(module))
-                        .collect()
-                })
-                .unwrap_or_else(|| vec![default_starter_module()]),
+                .iter()
+                .filter_map(|module| resolve_module_id(module))
+                .collect(),
             player_hp: saved.player_hp,
             player_max_hp: saved.player_max_hp,
             credits: saved.credits,
@@ -4004,14 +6601,14 @@ impl App {
         &self,
         saved: &SavedModuleSelectState,
     ) -> Result<ModuleSelectContext, String> {
-        match saved.kind.as_deref() {
-            None | Some("starter") => Ok(ModuleSelectContext::Starter),
-            Some("boss_reward") => Ok(ModuleSelectContext::BossReward {
+        match saved.kind.as_str() {
+            "starter" => Ok(ModuleSelectContext::Starter),
+            "boss_reward" => Ok(ModuleSelectContext::BossReward {
                 boss_level: saved
                     .boss_level
                     .ok_or_else(|| "Saved boss module reward is missing boss_level.".to_string())?,
             }),
-            Some(other) => Err(format!("Unknown module select kind {}.", other)),
+            other => Err(format!("Unknown module select kind {}.", other)),
         }
     }
 
@@ -4019,8 +6616,8 @@ impl App {
         &self,
         saved: &SavedModuleSelectState,
     ) -> ModuleSelectContext {
-        match saved.kind.as_deref() {
-            Some("boss_reward") => ModuleSelectContext::BossReward {
+        match saved.kind.as_str() {
+            "boss_reward" => ModuleSelectContext::BossReward {
                 boss_level: saved.boss_level.unwrap_or(1).clamp(1, 2),
             },
             _ => ModuleSelectContext::Starter,
@@ -4119,6 +6716,13 @@ impl App {
             },
             seed: saved.seed,
         })
+    }
+
+    fn restore_saved_rest_state(&self, saved: &SavedRestState) -> RestState {
+        RestState {
+            heal_amount: saved.heal_amount,
+            upgrade_options: saved.upgrade_options.clone(),
+        }
     }
 
     fn restore_saved_shop_exact(&self, saved: &SavedShopState) -> Result<ShopState, String> {
@@ -4232,6 +6836,155 @@ impl App {
         ))
     }
 
+    fn restore_saved_party_screen(&self, screen: &str) -> Result<AppScreen, String> {
+        match screen {
+            "opening_intro" => Ok(AppScreen::OpeningIntro),
+            "module_select" => Ok(AppScreen::ModuleSelect),
+            "map" => Ok(AppScreen::Map),
+            "level_intro" => Ok(AppScreen::LevelIntro),
+            "rest" => Ok(AppScreen::Rest),
+            "shop" => Ok(AppScreen::Shop),
+            "event" => Ok(AppScreen::Event),
+            "reward" => Ok(AppScreen::Reward),
+            "combat" => Ok(AppScreen::Combat),
+            other => Err(format!("Unknown multiplayer screen {}.", other)),
+        }
+    }
+
+    fn restore_saved_party_state(&mut self, saved: &SavedPartyState) -> Result<(), String> {
+        let screen = self.restore_saved_party_screen(&saved.screen)?;
+        let dungeons = saved
+            .dungeons
+            .iter()
+            .map(|dungeon| self.restore_saved_dungeon(dungeon))
+            .collect::<Result<Vec<_>, String>>()?;
+        let slot_count = dungeons.len();
+        let party_run = PartyRunState::from_dungeons(dungeons)
+            .ok_or_else(|| "Saved multiplayer run is missing hero dungeons.".to_string())?;
+
+        let mut ready = saved.ready.clone();
+        if ready.len() < slot_count {
+            ready.resize(slot_count, false);
+        } else if ready.len() > slot_count {
+            ready.truncate(slot_count);
+        }
+
+        let party_combat = if let Some(combats) = saved.combats.as_ref() {
+            let views = combats
+                .iter()
+                .map(|combat| self.restore_saved_combat_exact(combat))
+                .collect::<Result<Vec<_>, String>>()?;
+            Some(
+                PartyCombatState::from_views(views, ready.clone())
+                    .ok_or_else(|| "Saved multiplayer combat is invalid.".to_string())?,
+            )
+        } else {
+            None
+        };
+
+        let party_rest = saved
+            .rest_slots
+            .as_ref()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .map(|rest| {
+                        rest.as_ref()
+                            .map(|rest| self.restore_saved_rest_state(rest))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let party_shop = saved
+            .shop_slots
+            .as_ref()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .map(|shop| {
+                        shop.as_ref()
+                            .map(|shop| self.restore_saved_shop_exact(shop))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let party_module_select_slots = saved
+            .module_select_slots
+            .as_ref()
+            .map(|slots| {
+                slots
+                    .iter()
+                    .map(|state| {
+                        state
+                            .as_ref()
+                            .map(|state| self.restore_saved_module_select_exact(state))
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let party_reward_slots = saved
+            .reward_slots
+            .as_ref()
+            .map(|slots| {
+                let level = party_run.current_level();
+                slots
+                    .iter()
+                    .map(|reward| {
+                        reward
+                            .as_ref()
+                            .map(|reward| {
+                                self.restore_saved_reward_exact(reward)
+                                    .or_else(|_| self.restore_saved_reward_fallback(reward, level))
+                            })
+                            .transpose()
+                    })
+                    .collect::<Result<Vec<_>, String>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        self.screen = screen;
+        self.party_run = Some(party_run);
+        self.party_combat = party_combat;
+        self.party_rest = party_rest;
+        self.party_shop = party_shop;
+        self.party_module_select_slots = party_module_select_slots;
+        self.party_reward_slots = party_reward_slots;
+        self.party_ready = ready;
+        self.event = saved
+            .event
+            .as_ref()
+            .map(|event| self.restore_saved_event_exact(event))
+            .transpose()?;
+        self.opening_intro = if matches!(screen, AppScreen::OpeningIntro) {
+            Some(OpeningIntroState::default())
+        } else {
+            None
+        };
+        self.sync_party_combat_inactive_slots_from_session();
+        self.sync_active_view_from_party_state();
+        self.ui = UiState::default();
+        self.pointer_pos = None;
+        self.floaters.clear();
+        self.pixel_shards.clear();
+        self.enemy_vfx_rects.clear();
+        self.enemy_defeat_vfx_started = vec![false; self.combat.enemy_count()];
+        self.layout_transition = None;
+        self.combat_layout_target = None;
+        self.screen_transition = None;
+        self.share_request = None;
+        self.victory_burst_cooldown_ms = 0.0;
+        self.resume_request_pending = false;
+        if matches!(screen, AppScreen::Combat) {
+            self.sync_combat_feedback_to_combat();
+        }
+        Ok(())
+    }
+
     fn apply_restored_state(
         &mut self,
         screen: AppScreen,
@@ -4323,21 +7076,36 @@ impl App {
 
     fn start_run(&mut self) {
         let from_screen = self.screen;
-        let seed = limit_run_seed(scramble_seed(
-            BASE_SEED
-                ^ self.seed_entropy
-                ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                ^ self.boot_time_ms.to_bits() as u64,
-        ));
+        let seed = self.next_run_seed_override.take().unwrap_or_else(|| {
+            limit_run_seed(scramble_seed(
+                BASE_SEED
+                    ^ self.seed_entropy
+                    ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                    ^ self.boot_time_ms.to_bits() as u64,
+            ))
+        });
         self.clear_boot_request_flags();
         self.restart_count = self.restart_count.wrapping_add(1);
         self.seed_entropy = scramble_seed(seed ^ 0x94D0_49BB_1331_11EB);
-        self.dungeon = Some(DungeonRun::new(seed));
-        self.module_select = Some(ModuleSelectState {
-            options: starter_module_choices(),
-            seed,
-            context: ModuleSelectContext::Starter,
-        });
+        self.reset_party_screen_state();
+        if self.multiplayer_enabled() {
+            let slot_count = self.party_slot_count();
+            self.party_run = Some(PartyRunState::new(seed, slot_count));
+            self.party_ready = vec![false; slot_count];
+            self.dungeon = self
+                .party_run
+                .as_ref()
+                .and_then(|party_run| party_run.active_dungeon(self.active_view_slot_index()));
+            self.module_select = None;
+        } else {
+            self.party_run = None;
+            self.dungeon = Some(DungeonRun::new(seed));
+            self.module_select = Some(ModuleSelectState {
+                options: starter_module_choices(),
+                seed,
+                context: ModuleSelectContext::Starter,
+            });
+        }
         self.rest = None;
         self.shop = None;
         self.event = None;
@@ -4362,10 +7130,12 @@ impl App {
         self.dirty = true;
     }
 
-    fn return_to_menu(&mut self) {
+    pub(crate) fn return_to_menu(&mut self) {
         let from_screen = self.screen;
         self.screen = AppScreen::Boot;
         self.dungeon = None;
+        self.party_run = None;
+        self.reset_party_screen_state();
         self.rest = None;
         self.shop = None;
         self.event = None;
@@ -4390,6 +7160,96 @@ impl App {
     }
 
     fn begin_encounter(&mut self, setup: EncounterSetup) {
+        if self.multiplayer_enabled() {
+            let from_screen = self.screen;
+            let Some(party_run) = self.party_run.as_ref() else {
+                return;
+            };
+            let seed = self
+                .party_run
+                .as_ref()
+                .and_then(PartyRunState::current_room_seed)
+                .unwrap_or(BASE_SEED);
+            let slot_count = self.party_slot_count();
+            let enemy_hp_multiplier = slot_count.max(1) as i32;
+            let setups: Vec<_> = (0..slot_count)
+                .map(|slot| {
+                    let mut slot_setup = party_run
+                        .current_encounter_setup(slot)
+                        .unwrap_or_else(|| setup.clone());
+                    for enemy in &mut slot_setup.enemies {
+                        enemy.hp = enemy.hp.saturating_mul(enemy_hp_multiplier);
+                        enemy.max_hp = enemy.max_hp.saturating_mul(enemy_hp_multiplier);
+                    }
+                    slot_setup
+                })
+                .collect();
+            let decks: Vec<_> = (0..slot_count)
+                .map(|slot| {
+                    party_run
+                        .hero(slot)
+                        .map(|hero| hero.deck.clone())
+                        .unwrap_or_else(crate::content::starter_deck)
+                })
+                .collect();
+            let modules: Vec<_> = (0..slot_count)
+                .map(|slot| {
+                    party_run
+                        .hero(slot)
+                        .map(|hero| hero.modules.clone())
+                        .unwrap_or_default()
+                })
+                .collect();
+            let Some(mut party_combat) = PartyCombatState::new(seed, &setups, &decks, &modules)
+            else {
+                return;
+            };
+            for slot in 0..slot_count {
+                if party_run
+                    .hero(slot)
+                    .map(|hero| hero.player_hp <= 0)
+                    .unwrap_or(false)
+                {
+                    if let Some(hero) = party_combat.heroes.get_mut(slot) {
+                        hero.player.fighter.hp = 0;
+                        hero.ready = true;
+                    }
+                }
+            }
+            self.party_combat = Some(party_combat);
+            self.sync_party_combat_inactive_slots_from_session();
+            self.rest = None;
+            self.shop = None;
+            self.event = None;
+            self.module_select = None;
+            self.reward = None;
+            self.level_intro = None;
+            self.opening_intro = None;
+            self.party_rest.clear();
+            self.party_shop.clear();
+            self.party_module_select_slots.clear();
+            self.party_reward_slots.clear();
+            self.party_ready.clear();
+            self.screen = AppScreen::Combat;
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.floaters.clear();
+            self.pixel_shards.clear();
+            self.enemy_vfx_rects.clear();
+            self.sync_active_view_from_party_state();
+            self.enemy_defeat_vfx_started = vec![false; self.combat.enemy_count()];
+            self.share_request = None;
+            self.victory_burst_cooldown_ms = 0.0;
+            self.layout_transition = None;
+            self.screen_transition = None;
+            self.log.clear();
+            self.sync_combat_feedback_to_combat();
+            self.begin_screen_transition(from_screen, AppScreen::Combat);
+            self.refresh_run_save_snapshot();
+            self.dirty = true;
+            return;
+        }
+
         let from_screen = self.screen;
         let seed = self
             .dungeon
@@ -4431,6 +7291,77 @@ impl App {
     }
 
     fn claim_module_select(&mut self, index: usize) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            let Some((module, context)) = self
+                .party_module_select_slots
+                .get(slot)
+                .and_then(|state| state.as_ref())
+                .and_then(|module_select| {
+                    module_select
+                        .options
+                        .get(index)
+                        .copied()
+                        .map(|module| (module, module_select.context))
+                })
+            else {
+                return;
+            };
+            if let Some(party_run) = &mut self.party_run {
+                party_run.add_module(slot, module);
+            }
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.push_log(match self.language {
+                Language::English => {
+                    format!("Selected {}.", self.localized_module_def(module).name)
+                }
+                Language::Spanish => {
+                    format!("Elegiste {}.", self.localized_module_def(module).name)
+                }
+            });
+            self.sync_active_view_from_party_state();
+            if self.all_party_ready() {
+                if matches!(context, ModuleSelectContext::BossReward { .. }) {
+                    self.module_select = None;
+                    self.party_module_select_slots.clear();
+                    self.party_ready.clear();
+                    self.begin_level_intro();
+                } else {
+                    let from_screen = self.screen;
+                    self.module_select = None;
+                    self.party_module_select_slots.clear();
+                    self.party_ready.clear();
+                    self.rest = None;
+                    self.shop = None;
+                    self.event = None;
+                    self.reward = None;
+                    self.level_intro = None;
+                    self.opening_intro = None;
+                    self.screen = AppScreen::Map;
+                    self.ui = UiState::default();
+                    self.pointer_pos = None;
+                    self.layout_transition = None;
+                    self.screen_transition = None;
+                    self.push_log(self.tr(
+                        "Route seeded. Select the first room.",
+                        "Ruta lista. Elige la primera sala.",
+                    ));
+                    self.begin_screen_transition(from_screen, AppScreen::Map);
+                    self.refresh_run_save_snapshot();
+                    self.dirty = true;
+                }
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let Some((module, context)) = self.module_select.as_ref().and_then(|module_select| {
             module_select
                 .options
@@ -4489,7 +7420,11 @@ impl App {
         };
 
         match target {
-            HitTarget::Menu => self.return_to_menu(),
+            HitTarget::Menu => {
+                if self.input_slot_override.is_none() && !self.local_multiplayer_guest() {
+                    self.return_to_menu();
+                }
+            }
             HitTarget::Info => self.toggle_run_info(),
             HitTarget::Legend => {
                 let open_legend = !(self.ui.legend_open || self.legend_visible());
@@ -4509,6 +7444,7 @@ impl App {
             HitTarget::MapNode(node_id) => self.select_map_node(node_id),
             HitTarget::Start
             | HitTarget::Continue
+            | HitTarget::Multiplayer
             | HitTarget::Share
             | HitTarget::Restart
             | HitTarget::RestHeal
@@ -4637,7 +7573,7 @@ impl App {
 
     fn handle_level_intro_pointer(&mut self, x: f32, y: f32) {
         if self.hit_test(x, y) == Some(HitTarget::Continue) {
-            self.continue_from_level_intro();
+            self.handle_level_intro_action();
         }
     }
 
@@ -4647,7 +7583,55 @@ impl App {
         }
     }
 
+    fn handle_level_intro_action(&mut self) {
+        if !matches!(self.screen, AppScreen::LevelIntro) {
+            return;
+        }
+
+        if self.multiplayer_run_active() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            if self.all_party_ready() {
+                self.party_ready.clear();
+                self.continue_from_level_intro();
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
+        self.continue_from_level_intro();
+    }
+
     fn handle_opening_intro_action(&mut self) {
+        if !matches!(self.screen, AppScreen::OpeningIntro) {
+            return;
+        }
+
+        if self.multiplayer_run_active() {
+            if self.local_party_ready() {
+                return;
+            }
+            self.complete_opening_intro();
+            let slot = self.party_control_slot_index();
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            if self.all_party_ready() {
+                self.continue_from_opening_intro();
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         self.continue_from_opening_intro();
     }
 
@@ -4772,6 +7756,25 @@ impl App {
     }
 
     fn select_map_node(&mut self, node_id: usize) {
+        if self.multiplayer_enabled() {
+            if !self.local_slot_is_captain() {
+                return;
+            }
+            let selection = self
+                .party_run
+                .as_mut()
+                .and_then(|party_run| party_run.select_node(node_id, self.debug_mode));
+            self.sync_active_view_from_party_state();
+            match selection {
+                Some(NodeSelection::Encounter(setup)) => self.begin_encounter(setup),
+                Some(NodeSelection::Rest) => self.begin_rest(),
+                Some(NodeSelection::Shop) => self.begin_shop(),
+                Some(NodeSelection::Event(event)) => self.begin_event(event),
+                None => {}
+            }
+            return;
+        }
+
         let debug_mode = self.debug_mode;
         let selection = self.dungeon.as_mut().and_then(|dungeon| {
             if debug_mode && !dungeon.is_available(node_id) {
@@ -4791,6 +7794,48 @@ impl App {
     }
 
     fn begin_rest(&mut self) {
+        if self.multiplayer_enabled() {
+            let from_screen = self.screen;
+            let slot_count = self.party_slot_count();
+            self.party_rest = (0..slot_count)
+                .map(|slot| {
+                    self.party_run.as_ref().and_then(|party_run| {
+                        party_run.hero(slot).and_then(|hero| {
+                            if hero.player_hp <= 0 {
+                                None
+                            } else {
+                                Some(RestState {
+                                    heal_amount: party_run.rest_heal_amount(slot),
+                                    upgrade_options: party_run.upgradable_card_indices(slot),
+                                })
+                            }
+                        })
+                    })
+                })
+                .collect();
+            self.reset_party_ready_for_alive_heroes();
+            self.rest = self
+                .party_rest
+                .get(self.active_view_slot_index())
+                .cloned()
+                .flatten();
+            self.module_select = None;
+            self.shop = None;
+            self.event = None;
+            self.reward = None;
+            self.level_intro = None;
+            self.share_request = None;
+            self.screen = AppScreen::Rest;
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.layout_transition = None;
+            self.screen_transition = None;
+            self.begin_screen_transition(from_screen, AppScreen::Rest);
+            self.refresh_run_save_snapshot();
+            self.dirty = true;
+            return;
+        }
+
         let from_screen = self.screen;
         let Some(dungeon) = self.dungeon.as_ref() else {
             return;
@@ -4816,6 +7861,57 @@ impl App {
     }
 
     fn begin_reward(&mut self, tier: RewardTier, followup: RewardFollowup, seed: u64) {
+        if self.multiplayer_enabled() {
+            let from_screen = self.screen;
+            let reward_level = self
+                .party_run
+                .as_ref()
+                .map(PartyRunState::current_level)
+                .unwrap_or(1);
+            let slot_count = self.party_slot_count();
+            self.party_reward_slots = (0..slot_count)
+                .map(|slot| {
+                    self.party_run.as_ref().and_then(|party_run| {
+                        party_run.hero(slot).and_then(|hero| {
+                            if hero.player_hp <= 0 {
+                                None
+                            } else {
+                                let slot_seed =
+                                    seed ^ ((slot as u64 + 1).wrapping_mul(0x94D0_49BB_1331_11EB));
+                                Some(RewardState {
+                                    tier,
+                                    options: reward_choices(slot_seed, tier, reward_level),
+                                    followup,
+                                    seed: slot_seed,
+                                })
+                            }
+                        })
+                    })
+                })
+                .collect();
+            self.reset_party_ready_for_alive_heroes();
+            self.rest = None;
+            self.shop = None;
+            self.event = None;
+            self.module_select = None;
+            self.level_intro = None;
+            self.share_request = None;
+            self.reward = self
+                .party_reward_slots
+                .get(self.active_view_slot_index())
+                .cloned()
+                .flatten();
+            self.screen = AppScreen::Reward;
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.layout_transition = None;
+            self.screen_transition = None;
+            self.begin_screen_transition(from_screen, AppScreen::Reward);
+            self.refresh_run_save_snapshot();
+            self.dirty = true;
+            return;
+        }
+
         let from_screen = self.screen;
         let reward_level = self
             .dungeon
@@ -4845,6 +7941,70 @@ impl App {
     }
 
     fn begin_boss_module_reward(&mut self, boss_level: usize) {
+        if self.multiplayer_enabled() {
+            let from_screen = self.screen;
+            let slot_count = self.party_slot_count();
+            self.party_module_select_slots = (0..slot_count)
+                .map(|slot| {
+                    self.party_run.as_ref().and_then(|party_run| {
+                        party_run.hero(slot).and_then(|hero| {
+                            if hero.player_hp <= 0 {
+                                None
+                            } else {
+                                let options = boss_module_choices(boss_level)
+                                    .into_iter()
+                                    .filter(|module| !party_run.has_module(slot, *module))
+                                    .collect::<Vec<_>>();
+                                if options.is_empty() {
+                                    None
+                                } else {
+                                    Some(ModuleSelectState {
+                                        options,
+                                        seed: party_run.current_room_seed().unwrap_or(BASE_SEED),
+                                        context: ModuleSelectContext::BossReward { boss_level },
+                                    })
+                                }
+                            }
+                        })
+                    })
+                })
+                .collect();
+            self.reset_party_ready_for_alive_heroes();
+            for (slot, state) in self.party_module_select_slots.iter().enumerate() {
+                if state.is_none() {
+                    if let Some(ready) = self.party_ready.get_mut(slot) {
+                        *ready = true;
+                    }
+                }
+            }
+            if self.all_party_ready() {
+                self.party_module_select_slots.clear();
+                self.party_ready.clear();
+                self.begin_level_intro();
+                return;
+            }
+            self.rest = None;
+            self.shop = None;
+            self.event = None;
+            self.reward = None;
+            self.level_intro = None;
+            self.share_request = None;
+            self.module_select = self
+                .party_module_select_slots
+                .get(self.active_view_slot_index())
+                .cloned()
+                .flatten();
+            self.screen = AppScreen::ModuleSelect;
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.layout_transition = None;
+            self.screen_transition = None;
+            self.begin_screen_transition(from_screen, AppScreen::ModuleSelect);
+            self.refresh_run_save_snapshot();
+            self.dirty = true;
+            return;
+        }
+
         let from_screen = self.screen;
         let Some(dungeon) = self.dungeon.as_ref() else {
             return;
@@ -4881,6 +8041,53 @@ impl App {
     }
 
     fn begin_shop(&mut self) {
+        if self.multiplayer_enabled() {
+            let from_screen = self.screen;
+            let Some(party_run) = self.party_run.as_ref() else {
+                return;
+            };
+            let seed = party_run.current_room_seed().unwrap_or(BASE_SEED);
+            let slot_count = self.party_slot_count();
+            self.party_shop = (0..slot_count)
+                .map(|slot| {
+                    party_run.hero(slot).and_then(|hero| {
+                        if hero.player_hp <= 0 {
+                            None
+                        } else {
+                            Some(ShopState {
+                                offers: shop_offers(
+                                    seed ^ ((slot as u64 + 1).wrapping_mul(0x517C_C1B7_2722_0A95)),
+                                    party_run.current_level(),
+                                ),
+                                seed,
+                            })
+                        }
+                    })
+                })
+                .collect();
+            self.reset_party_ready_for_alive_heroes();
+            self.rest = None;
+            self.module_select = None;
+            self.event = None;
+            self.reward = None;
+            self.level_intro = None;
+            self.share_request = None;
+            self.shop = self
+                .party_shop
+                .get(self.active_view_slot_index())
+                .cloned()
+                .flatten();
+            self.screen = AppScreen::Shop;
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.layout_transition = None;
+            self.screen_transition = None;
+            self.begin_screen_transition(from_screen, AppScreen::Shop);
+            self.refresh_run_save_snapshot();
+            self.dirty = true;
+            return;
+        }
+
         let from_screen = self.screen;
         let Some(dungeon) = self.dungeon.as_ref() else {
             return;
@@ -4922,6 +8129,9 @@ impl App {
             codename: localized_level_codename(dungeon.current_level(), self.language),
             summary: localized_level_summary(dungeon.current_level(), self.language),
         });
+        if self.multiplayer_run_active() {
+            self.reset_party_ready_for_alive_heroes();
+        }
         self.opening_intro = None;
         self.screen = AppScreen::LevelIntro;
         self.ui = UiState::default();
@@ -4942,6 +8152,9 @@ impl App {
         self.level_intro = None;
         self.opening_intro = None;
         self.share_request = None;
+        if self.multiplayer_run_active() {
+            self.reset_party_ready_for_alive_heroes();
+        }
         self.event = Some(EventState { event });
         self.screen = AppScreen::Event;
         self.ui = UiState::default();
@@ -4971,6 +8184,10 @@ impl App {
     fn continue_from_opening_intro(&mut self) {
         if !matches!(self.screen, AppScreen::OpeningIntro) {
             return;
+        }
+
+        if self.multiplayer_run_active() {
+            self.prepare_starter_party_module_select();
         }
 
         let from_screen = self.screen;
@@ -5003,6 +8220,54 @@ impl App {
     }
 
     fn claim_rest_heal(&mut self) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            let can_resolve = self
+                .party_rest
+                .get(slot)
+                .and_then(|rest| rest.as_ref())
+                .is_some_and(|rest| rest.heal_amount > 0 || rest.upgrade_options.is_empty());
+            if !can_resolve {
+                return;
+            }
+            let Some(healed) = self
+                .party_run
+                .as_mut()
+                .and_then(|party_run| party_run.apply_rest_heal(slot))
+            else {
+                return;
+            };
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.sync_active_view_from_party_state();
+            if healed > 0 {
+                self.push_log(match self.language {
+                    Language::English => format!("Rest site restores {healed} HP."),
+                    Language::Spanish => format!("El descanso restaura {healed} HP."),
+                });
+            } else {
+                self.push_log(self.tr("Rest site complete.", "Descanso completado."));
+            }
+            if self.all_party_ready() {
+                let Some(progress) = self
+                    .party_run
+                    .as_mut()
+                    .and_then(PartyRunState::complete_current_node_shared)
+                else {
+                    return;
+                };
+                self.finish_rest_action(progress);
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let can_resolve = self
             .rest
             .as_ref()
@@ -5030,6 +8295,55 @@ impl App {
     }
 
     fn claim_rest_upgrade(&mut self, index: usize) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            let deck_index = self
+                .party_rest
+                .get(slot)
+                .and_then(|rest| rest.as_ref())
+                .and_then(|rest| rest.upgrade_options.get(index).copied());
+            let Some(deck_index) = deck_index else {
+                return;
+            };
+            let Some((from, to)) = self
+                .party_run
+                .as_mut()
+                .and_then(|party_run| party_run.apply_rest_upgrade(slot, deck_index))
+            else {
+                return;
+            };
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.sync_active_view_from_party_state();
+            self.push_log(format!(
+                "{} {} {}.",
+                self.tr("Upgraded", "Mejoraste"),
+                localized_card_name(from, self.language),
+                match self.language {
+                    Language::English => format!("to {}", localized_card_name(to, self.language)),
+                    Language::Spanish => format!("a {}", localized_card_name(to, self.language)),
+                }
+            ));
+            if self.all_party_ready() {
+                let Some(progress) = self
+                    .party_run
+                    .as_mut()
+                    .and_then(PartyRunState::complete_current_node_shared)
+                else {
+                    return;
+                };
+                self.finish_rest_action(progress);
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let deck_index = self
             .rest
             .as_ref()
@@ -5058,6 +8372,12 @@ impl App {
     }
 
     fn finish_rest_action(&mut self, progress: DungeonProgress) {
+        if self.multiplayer_enabled() {
+            self.party_rest.clear();
+            self.party_ready.clear();
+            self.rest = None;
+            self.sync_active_view_from_party_state();
+        }
         self.ui = UiState::default();
         self.pointer_pos = None;
         self.share_request = None;
@@ -5077,6 +8397,40 @@ impl App {
     }
 
     fn claim_event_choice(&mut self, choice_index: usize) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let Some(event_id) = self.event.as_ref().map(|state| state.event) else {
+                return;
+            };
+            let target_slot = self.party_control_slot_index();
+            let Some(resolution) = self.party_run.as_mut().and_then(|party_run| {
+                party_run.apply_event_choice(target_slot, event_id, choice_index)
+            }) else {
+                return;
+            };
+            if let Some(ready) = self.party_ready.get_mut(target_slot) {
+                *ready = true;
+            }
+            self.sync_active_view_from_party_state();
+            self.push_event_resolution_log(event_id, resolution);
+            if self.all_party_ready() {
+                let Some(progress) = self
+                    .party_run
+                    .as_mut()
+                    .and_then(PartyRunState::complete_current_node_shared)
+                else {
+                    return;
+                };
+                self.finish_event_action(progress);
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let Some(event_id) = self.event.as_ref().map(|state| state.event) else {
             return;
         };
@@ -5171,6 +8525,10 @@ impl App {
 
     fn finish_event_action(&mut self, progress: DungeonProgress) {
         self.event = None;
+        if self.multiplayer_enabled() {
+            self.party_ready.clear();
+            self.sync_active_view_from_party_state();
+        }
         self.ui = UiState::default();
         self.pointer_pos = None;
         self.share_request = None;
@@ -5190,6 +8548,63 @@ impl App {
     }
 
     fn claim_shop_offer(&mut self, index: usize) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            let Some(offer) = self
+                .party_shop
+                .get(slot)
+                .and_then(|shop| shop.as_ref())
+                .and_then(|shop| shop.offers.get(index).copied())
+            else {
+                return;
+            };
+            let can_afford = self
+                .party_run
+                .as_ref()
+                .is_some_and(|party_run| party_run.can_afford_shop_price(slot, offer.price));
+            if !can_afford {
+                return;
+            }
+            let purchased = self.party_run.as_mut().is_some_and(|party_run| {
+                party_run.apply_shop_purchase(slot, offer.card, offer.price)
+            });
+            if !purchased {
+                return;
+            }
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.sync_active_view_from_party_state();
+            self.push_log(format!(
+                "{} {} {}.",
+                self.tr("Bought", "Compraste"),
+                localized_card_name(offer.card, self.language),
+                match self.language {
+                    Language::English =>
+                        format!("for {}", credits_label(offer.price, self.language)),
+                    Language::Spanish =>
+                        format!("por {}", credits_label(offer.price, self.language)),
+                }
+            ));
+            if self.all_party_ready() {
+                let Some(progress) = self
+                    .party_run
+                    .as_mut()
+                    .and_then(PartyRunState::complete_current_node_shared)
+                else {
+                    return;
+                };
+                self.finish_shop_action(progress);
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let Some(offer) = self
             .shop
             .as_ref()
@@ -5224,6 +8639,31 @@ impl App {
     }
 
     fn leave_shop(&mut self) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.push_log(self.tr("Left shop.", "Saliste de la tienda."));
+            if self.all_party_ready() {
+                let Some(progress) = self
+                    .party_run
+                    .as_mut()
+                    .and_then(PartyRunState::complete_current_node_shared)
+                else {
+                    return;
+                };
+                self.finish_shop_action(progress);
+            } else {
+                self.refresh_run_save_snapshot();
+                self.dirty = true;
+            }
+            return;
+        }
+
         let Some(progress) = self
             .dungeon
             .as_mut()
@@ -5238,6 +8678,11 @@ impl App {
 
     fn finish_shop_action(&mut self, progress: DungeonProgress) {
         self.shop = None;
+        if self.multiplayer_enabled() {
+            self.party_shop.clear();
+            self.party_ready.clear();
+            self.sync_active_view_from_party_state();
+        }
         self.ui = UiState::default();
         self.pointer_pos = None;
         self.share_request = None;
@@ -5275,6 +8720,83 @@ impl App {
     }
 
     fn resolve_reward_choice(&mut self, selected_card: Option<CardId>) {
+        if self.multiplayer_enabled() {
+            if self.local_party_ready() {
+                return;
+            }
+            let slot = self.party_control_slot_index();
+            let Some(reward) = self
+                .party_reward_slots
+                .get(slot)
+                .and_then(|reward| reward.as_ref())
+            else {
+                return;
+            };
+            let reward_tier = reward.tier;
+            let followup = reward.followup;
+            if let Some(card) = selected_card {
+                if let Some(party_run) = &mut self.party_run {
+                    party_run.add_card(slot, card);
+                }
+                self.push_log(match self.language {
+                    Language::English => {
+                        format!(
+                            "Added {} to the deck.",
+                            localized_card_name(card, self.language)
+                        )
+                    }
+                    Language::Spanish => {
+                        format!(
+                            "Añadiste {} al mazo.",
+                            localized_card_name(card, self.language)
+                        )
+                    }
+                });
+            } else {
+                self.push_log(self.tr("Skipped card reward.", "Saltaste la recompensa de carta."));
+            }
+            if let Some(ready) = self.party_ready.get_mut(slot) {
+                *ready = true;
+            }
+            self.sync_active_view_from_party_state();
+            self.ui = UiState::default();
+            self.pointer_pos = None;
+            self.share_request = None;
+            self.event = None;
+            if self.all_party_ready() {
+                if followup.completed_run {
+                    let from_screen = self.screen;
+                    self.party_reward_slots.clear();
+                    self.party_ready.clear();
+                    self.reward = None;
+                    self.screen = AppScreen::Result(CombatOutcome::Victory);
+                    self.begin_screen_transition(from_screen, self.screen);
+                    self.refresh_run_save_snapshot();
+                } else if matches!(reward_tier, RewardTier::Boss) {
+                    let boss_level = self
+                        .party_run
+                        .as_ref()
+                        .map(|party_run| party_run.current_level().saturating_sub(1).max(1))
+                        .unwrap_or(1);
+                    self.party_reward_slots.clear();
+                    self.party_ready.clear();
+                    self.begin_boss_module_reward(boss_level);
+                } else {
+                    let from_screen = self.screen;
+                    self.party_reward_slots.clear();
+                    self.party_ready.clear();
+                    self.reward = None;
+                    self.screen = AppScreen::Map;
+                    self.begin_screen_transition(from_screen, AppScreen::Map);
+                    self.refresh_run_save_snapshot();
+                }
+            } else {
+                self.refresh_run_save_snapshot();
+            }
+            self.dirty = true;
+            return;
+        }
+
         let Some(reward) = self.reward.as_ref() else {
             return;
         };
@@ -5330,6 +8852,163 @@ impl App {
         self.dirty = true;
     }
 
+    fn multiplayer_combat_action_for_pointer_down(&self, x: f32, y: f32) -> Option<CombatAction> {
+        if !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return None;
+        }
+
+        let (lx, ly) = self.to_logical(x, y)?;
+        let target = self.hit_test(lx, ly)?;
+        self.multiplayer_combat_action_for_hit_target(target)
+    }
+
+    fn multiplayer_combat_action_for_key(&self, key_code: u32) -> Option<CombatAction> {
+        if !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_input_locked()
+        {
+            return None;
+        }
+
+        match key_code {
+            13 | 32 => Some(CombatAction::EndTurn),
+            49..=57 => {
+                let index = (key_code - 49) as usize;
+                let selected = self.ui.selected_card?;
+                if self.combat.card_requires_enemy(selected) {
+                    self.combat
+                        .enemy_is_alive(index)
+                        .then_some(CombatAction::PlayCard {
+                            hand_index: selected,
+                            target: Some(Actor::Enemy(index)),
+                        })
+                } else if selected == index
+                    && self.combat.card_targets_all_enemies(index)
+                    && index < self.combat.hand_len()
+                {
+                    Some(CombatAction::PlayCard {
+                        hand_index: index,
+                        target: None,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn multiplayer_combat_action_for_hit_target(&self, target: HitTarget) -> Option<CombatAction> {
+        match target {
+            HitTarget::Enemy(enemy_index) => {
+                let selected = self.ui.selected_card?;
+                if self.combat.card_requires_enemy(selected) {
+                    Some(CombatAction::PlayCard {
+                        hand_index: selected,
+                        target: Some(Actor::Enemy(enemy_index)),
+                    })
+                } else if self.combat.card_targets_all_enemies(selected) {
+                    Some(CombatAction::PlayCard {
+                        hand_index: selected,
+                        target: None,
+                    })
+                } else {
+                    None
+                }
+            }
+            HitTarget::Player => {
+                let selected = self.ui.selected_card?;
+                (!self.combat.card_requires_enemy(selected)
+                    && !self.combat.card_targets_all_enemies(selected))
+                .then_some(CombatAction::PlayCard {
+                    hand_index: selected,
+                    target: Some(Actor::Player),
+                })
+            }
+            HitTarget::Card(index) => (self.ui.selected_card == Some(index)
+                && self.combat.card_targets_all_enemies(index))
+            .then_some(CombatAction::PlayCard {
+                hand_index: index,
+                target: None,
+            }),
+            HitTarget::EndTurn => Some(CombatAction::EndTurn),
+            _ => None,
+        }
+    }
+
+    fn apply_remote_multiplayer_combat_action(
+        &mut self,
+        slot: usize,
+        action: CombatAction,
+    ) -> bool {
+        if !self.multiplayer_enabled()
+            || !matches!(self.screen, AppScreen::Combat)
+            || self.screen_transition.is_some()
+            || self.combat_feedback.playback_kind.is_some()
+            || self.combat_feedback.pending_outcome.is_some()
+            || self.combat_feedback.auto_playback_active
+            || self.combat_feedback.playback_pause_ms > 0.0
+            || !self.combat_feedback.active_stats.is_empty()
+            || !self.combat_feedback.stat_queue.is_empty()
+        {
+            return false;
+        }
+
+        let previous_view = self.current_multiplayer_combat_view_state();
+        let changed = match action {
+            CombatAction::PlayCard { hand_index, target } => {
+                self.party_combat.as_mut().is_some_and(|party_combat| {
+                    party_combat.play_card(
+                        slot,
+                        hand_index,
+                        target.and_then(|actor| actor.enemy_index()),
+                    )
+                })
+            }
+            CombatAction::EndTurn => self
+                .party_combat
+                .as_mut()
+                .is_some_and(|party_combat| party_combat.ready_hero(slot)),
+        };
+        if !changed {
+            return false;
+        }
+
+        self.sync_active_view_from_party_state();
+        let preferred_removed_index = match action {
+            CombatAction::PlayCard { hand_index, .. } if slot == self.active_view_slot_index() => {
+                Some(hand_index)
+            }
+            _ => None,
+        };
+        let playback_started = if let Some(previous) = previous_view.as_ref() {
+            self.apply_multiplayer_combat_view_state(previous, preferred_removed_index, false)
+        } else {
+            self.sync_combat_feedback_to_combat();
+            false
+        };
+        if let Some(outcome) = self
+            .party_combat
+            .as_ref()
+            .and_then(PartyCombatState::outcome)
+        {
+            if playback_started {
+                self.combat_feedback.pending_outcome = Some(outcome);
+            } else {
+                self.finalize_combat_outcome(outcome);
+            }
+        } else {
+            self.screen = AppScreen::Combat;
+            self.refresh_run_save_snapshot();
+        }
+        self.refresh_hover();
+        self.dirty = true;
+        true
+    }
+
     fn handle_combat_pointer(&mut self, x: f32, y: f32) {
         if self.combat_input_locked() {
             return;
@@ -5364,7 +9043,11 @@ impl App {
         };
 
         match target {
-            HitTarget::Menu => self.return_to_menu(),
+            HitTarget::Menu => {
+                if self.input_slot_override.is_none() && !self.local_multiplayer_guest() {
+                    self.return_to_menu();
+                }
+            }
             HitTarget::RunInfoPanel => {}
             HitTarget::EnemyInspectPanel => {}
             HitTarget::Card(index) => self.select_or_play_card(index),
@@ -5407,6 +9090,7 @@ impl App {
             HitTarget::EndBattle => self.debug_end_battle(),
             HitTarget::Start
             | HitTarget::Continue
+            | HitTarget::Multiplayer
             | HitTarget::DebugLevelDown
             | HitTarget::DebugLevelUp
             | HitTarget::DebugFillDeck
@@ -5480,6 +9164,130 @@ impl App {
 
     fn perform_action(&mut self, action: CombatAction) {
         if self.combat_input_locked() {
+            return;
+        }
+
+        if self.multiplayer_enabled() {
+            let slot = self.party_control_slot_index();
+            let previous_view = self.current_multiplayer_combat_view_state();
+            let previous_layout = self.layout();
+            let previous_hand_len = self.combat.hand_len();
+            let displayed_before_action = displayed_combat_stats(&self.combat);
+            let intents_before_action: Vec<_> = (0..self.combat.enemy_count())
+                .map(|enemy_index| self.current_displayed_intent(enemy_index))
+                .collect();
+            let end_turn_bursts: Vec<(Rect, CardId)> = if matches!(action, CombatAction::EndTurn) {
+                previous_layout
+                    .hand_rects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, rect)| {
+                        self.combat.hand_card(index).map(|card| (*rect, card))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let played_hand_index = match action {
+                CombatAction::PlayCard { hand_index, .. } => Some(hand_index),
+                CombatAction::EndTurn => None,
+            };
+            let played_card_rect = played_hand_index
+                .and_then(|hand_index| previous_layout.hand_rects.get(hand_index).copied());
+            let events = match action {
+                CombatAction::PlayCard { hand_index, target } => {
+                    self.party_combat.as_mut().and_then(|party_combat| {
+                        party_combat.play_card_with_events(
+                            slot,
+                            hand_index,
+                            target.and_then(|actor| actor.enemy_index()),
+                        )
+                    })
+                }
+                CombatAction::EndTurn => self
+                    .party_combat
+                    .as_mut()
+                    .and_then(|party_combat| party_combat.ready_hero_with_events(slot)),
+            };
+            let Some(events) = events else {
+                return;
+            };
+            if self.input_slot_override.is_some() {
+                self.input_slot_override = None;
+            }
+            self.sync_active_view_from_party_state();
+            let playback_kind = previous_view
+                .as_ref()
+                .map(|previous| self.multiplayer_combat_playback_kind(previous))
+                .unwrap_or(CombatPlaybackKind::PlayerAction);
+            let played_card = events.iter().find_map(|event| match event {
+                CombatEvent::CardPlayed { card } => Some(*card),
+                _ => None,
+            });
+            let defeated_enemy_indices: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    CombatEvent::ActorDefeated {
+                        actor: Actor::Enemy(enemy_index),
+                    } => Some(*enemy_index),
+                    _ => None,
+                })
+                .collect();
+            let events_empty = events.is_empty();
+
+            if events_empty {
+                self.sync_combat_feedback_to_combat();
+            } else {
+                self.begin_combat_playback(
+                    playback_kind,
+                    events,
+                    displayed_before_action,
+                    intents_before_action,
+                    self.combat.outcome(),
+                );
+            }
+
+            if let Some(rect) = played_card_rect {
+                if let Some(card) = played_card {
+                    self.spawn_card_pixel_burst(rect, card);
+                }
+            }
+            if matches!(action, CombatAction::EndTurn) {
+                for (rect, card) in end_turn_bursts {
+                    self.spawn_card_pixel_burst(rect, card);
+                }
+            }
+            if events_empty && !matches!(action, CombatAction::EndTurn) {
+                for enemy_index in defeated_enemy_indices {
+                    self.mark_enemy_defeat_vfx_started(enemy_index);
+                    if let Some(rect) = previous_layout.enemy_rect(enemy_index) {
+                        self.spawn_enemy_pixel_burst(rect);
+                    }
+                }
+            }
+
+            if matches!(
+                action,
+                CombatAction::PlayCard { .. } | CombatAction::EndTurn
+            ) || !self.combat.is_player_turn()
+            {
+                self.ui.selected_card = None;
+            } else if let Some(index) = self.ui.selected_card {
+                if index >= self.combat.hand_len() {
+                    self.ui.selected_card = None;
+                }
+            }
+
+            self.screen = AppScreen::Combat;
+            if matches!(action, CombatAction::EndTurn) || played_card.is_some() {
+                self.begin_layout_transition(previous_layout, previous_hand_len, played_hand_index);
+            }
+
+            if self.combat_feedback.pending_outcome.is_none() {
+                self.refresh_run_save_snapshot();
+            }
+            self.refresh_hover();
+            self.dirty = true;
             return;
         }
 
@@ -5625,6 +9433,111 @@ impl App {
     }
 
     fn finalize_combat_outcome(&mut self, outcome: CombatOutcome) {
+        if self.multiplayer_enabled() {
+            match outcome {
+                CombatOutcome::Victory => {
+                    let reward_context = self.party_run.as_ref().and_then(|party_run| {
+                        let tier = match party_run.current_room_kind()? {
+                            RoomKind::Combat => RewardTier::Combat,
+                            RoomKind::Elite => RewardTier::Elite,
+                            RoomKind::Boss => RewardTier::Boss,
+                            RoomKind::Start | RoomKind::Rest | RoomKind::Shop | RoomKind::Event => {
+                                return None;
+                            }
+                        };
+                        let seed = party_run.current_room_seed()?;
+                        Some((tier, seed))
+                    });
+                    let player_hps: Vec<_> = self
+                        .party_combat
+                        .as_ref()
+                        .map(|party_combat| {
+                            party_combat
+                                .heroes
+                                .iter()
+                                .map(|hero| hero.player.fighter.hp)
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    let victory_resolution = self
+                        .party_run
+                        .as_mut()
+                        .and_then(|party_run| party_run.resolve_combat_victory_all(&player_hps));
+                    let (progress, credits_gained) = match victory_resolution {
+                        Some((progress, credits_gained)) => (Some(progress), credits_gained),
+                        None => (None, 0),
+                    };
+                    let slot_count = self.party_slot_count();
+                    if let Some(party_run) = self.party_run.as_mut() {
+                        for slot in 0..slot_count {
+                            let _ = party_run.apply_post_victory_modules(slot);
+                        }
+                    }
+                    self.party_combat = None;
+                    if credits_gained > 0 {
+                        self.push_log(match self.language {
+                            Language::English => {
+                                format!(
+                                    "Each surviving hero gained {}.",
+                                    credits_label(credits_gained, self.language)
+                                )
+                            }
+                            Language::Spanish => {
+                                format!(
+                                    "Cada héroe sobreviviente ganó {}.",
+                                    credits_label(credits_gained, self.language)
+                                )
+                            }
+                        });
+                    }
+                    self.sync_active_view_from_party_state();
+                    if let Some((tier, seed)) = reward_context {
+                        if matches!(progress, Some(DungeonProgress::Continue)) {
+                            self.begin_reward(
+                                tier,
+                                RewardFollowup {
+                                    completed_run: false,
+                                },
+                                seed,
+                            );
+                        } else {
+                            let from_screen = self.screen;
+                            self.screen = AppScreen::Result(CombatOutcome::Victory);
+                            self.begin_screen_transition(from_screen, self.screen);
+                        }
+                    } else {
+                        let from_screen = self.screen;
+                        match progress {
+                            Some(DungeonProgress::Continue) => {
+                                self.screen = AppScreen::Map;
+                                self.begin_screen_transition(from_screen, AppScreen::Map);
+                            }
+                            Some(DungeonProgress::Completed) | None => {
+                                self.screen = AppScreen::Result(CombatOutcome::Victory);
+                                self.begin_screen_transition(from_screen, self.screen);
+                            }
+                        }
+                    }
+                }
+                CombatOutcome::Defeat => {
+                    if let (Some(party_run), Some(party_combat)) =
+                        (self.party_run.as_mut(), self.party_combat.as_ref())
+                    {
+                        for (slot, hero) in party_combat.heroes.iter().enumerate() {
+                            let _ = party_run.resolve_combat_defeat(slot, hero.player.fighter.hp);
+                        }
+                    }
+                    self.party_combat = None;
+                    self.sync_active_view_from_party_state();
+                    let from_screen = self.screen;
+                    self.screen = AppScreen::Result(CombatOutcome::Defeat);
+                    self.begin_screen_transition(from_screen, self.screen);
+                }
+            }
+            self.refresh_run_save_snapshot();
+            return;
+        }
+
         match outcome {
             CombatOutcome::Victory => {
                 let reward_context = self.dungeon.as_ref().and_then(|dungeon| {
@@ -6547,13 +10460,30 @@ impl App {
             hand_row_top - tile_gap
         };
         let player_y = hand_bottom + tile_gap;
+        let player_rect = Rect {
+            x: player_x,
+            y: player_y,
+            w: player_metrics.width,
+            h: player_metrics.height,
+        };
+        let remote_party_card_rects = self.remote_party_card_rects_for_player_panel(
+            player_rect,
+            player_metrics,
+            tile_gap,
+            tile_insets,
+            self.displayed_remote_party_slots().len(),
+        );
+        let remote_cards_bottom = remote_party_card_rects
+            .iter()
+            .map(|rect| rect.y + rect.h)
+            .fold(player_rect.y + player_rect.h, f32::max);
         let (hint_message, _, _) = combat_hint_tile(self, hand_count);
         let (hint_font_size, hint_pad_x, hint_pad_y) = hand_hint_metrics(tile_scale);
         let hint_w = text_width(&hint_message, hint_font_size) + hint_pad_x * 2.0;
         let hint_h = hint_font_size + hint_pad_y * 2.0;
         let hint_rect = Some(Rect {
             x: (logical_width - hint_w) * 0.5,
-            y: player_y + player_metrics.height + tile_gap,
+            y: remote_cards_bottom + tile_gap,
             w: hint_w,
             h: hint_h,
         });
@@ -6583,12 +10513,8 @@ impl App {
             enemy_indices: visible_enemy_indices,
             enemy_arrangement: enemy_arrangement.clone(),
             enemy_rects,
-            player_rect: Rect {
-                x: player_x,
-                y: player_y,
-                w: player_metrics.width,
-                h: player_metrics.height,
-            },
+            player_rect,
+            remote_party_card_rects,
             hand_arrangement: hand_arrangement.clone(),
             hand_rects,
             hint_rect,
@@ -6607,6 +10533,9 @@ impl App {
             rect.y += offset_y;
         }
         layout.player_rect.y += offset_y;
+        for rect in &mut layout.remote_party_card_rects {
+            rect.y += offset_y;
+        }
         for rect in &mut layout.hand_rects {
             rect.y += offset_y;
         }
@@ -6746,13 +10675,21 @@ impl App {
             hero.start_button_y,
         );
         let (restart_pad_x, restart_pad_y) = boot_button_tile_padding();
+        let multiplayer_button = centered_button_rect(
+            self.tr(BOOT_MULTIPLAYER_LABEL, "Multiplayer"),
+            START_BUTTON_FONT_SIZE,
+            restart_pad_x,
+            restart_pad_y,
+            center_x,
+            start_button.y + start_button.h + 18.0,
+        );
         let restart_button = centered_button_rect(
             self.tr(BOOT_RESTART_LABEL, "Reiniciar"),
             START_BUTTON_FONT_SIZE,
             restart_pad_x,
             restart_pad_y,
             center_x,
-            start_button.y + start_button.h + 18.0,
+            multiplayer_button.y + multiplayer_button.h + 18.0,
         );
         let settings_button = centered_button_rect(
             self.tr(BOOT_SETTINGS_LABEL, "Ajustes"),
@@ -6763,7 +10700,7 @@ impl App {
             if has_saved_run {
                 restart_button.y + restart_button.h + 18.0
             } else {
-                start_button.y + start_button.h + 18.0
+                multiplayer_button.y + multiplayer_button.h + 18.0
             },
         );
         let install_button = self.install_capability.button_visible().then(|| {
@@ -6804,6 +10741,7 @@ impl App {
 
         BootButtonsLayout {
             start_button,
+            multiplayer_button,
             restart_button,
             settings_button,
             install_button,
@@ -7994,6 +11932,9 @@ impl App {
                         HitTarget::Start
                     });
                 }
+                if buttons.multiplayer_button.contains(x, y) {
+                    return Some(HitTarget::Multiplayer);
+                }
                 if self.has_saved_run && buttons.restart_button.contains(x, y) {
                     return Some(HitTarget::Restart);
                 }
@@ -8180,7 +12121,7 @@ impl App {
                             return Some(HitTarget::Enemy(enemy_index));
                         }
                     }
-                    if layout.player_rect.contains(x, y) {
+                    if self.combat_player_target_rect(&layout).contains(x, y) {
                         return Some(HitTarget::Player);
                     }
                     return None;
@@ -8200,7 +12141,7 @@ impl App {
                             return Some(HitTarget::Enemy(enemy_index));
                         }
                     }
-                    if layout.player_rect.contains(x, y) {
+                    if self.combat_player_target_rect(&layout).contains(x, y) {
                         return Some(HitTarget::Player);
                     }
                     return None;
@@ -8220,7 +12161,7 @@ impl App {
                             return Some(HitTarget::Enemy(enemy_index));
                         }
                     }
-                    if layout.player_rect.contains(x, y) {
+                    if self.combat_player_target_rect(&layout).contains(x, y) {
                         return Some(HitTarget::Player);
                     }
                     return None;
@@ -8240,7 +12181,7 @@ impl App {
                             return Some(HitTarget::Enemy(enemy_index));
                         }
                     }
-                    if layout.player_rect.contains(x, y) {
+                    if self.combat_player_target_rect(&layout).contains(x, y) {
                         return Some(HitTarget::Player);
                     }
                     return None;
@@ -8271,7 +12212,7 @@ impl App {
                         return Some(HitTarget::Enemy(enemy_index));
                     }
                 }
-                if layout.player_rect.contains(x, y) {
+                if self.combat_player_target_rect(&layout).contains(x, y) {
                     return Some(HitTarget::Player);
                 }
                 None
@@ -8572,6 +12513,14 @@ impl App {
                 self.boot_time_ms,
             );
         }
+
+        render_primary_button(
+            scene,
+            buttons.multiplayer_button,
+            self.ui.hover == Some(HitTarget::Multiplayer),
+            self.tr(BOOT_MULTIPLAYER_LABEL, "Multiplayer"),
+            self.boot_time_ms,
+        );
 
         render_primary_button(
             scene,
@@ -9007,6 +12956,18 @@ impl App {
         }
 
         let action_button = self.opening_intro_action_button();
+        if self.multiplayer_run_active() && self.local_party_ready() && !self.all_party_ready() {
+            scene.text(
+                action_button.rect.x + action_button.rect.w * 0.5,
+                button_text_baseline(action_button.rect, 18.0),
+                18.0,
+                "center",
+                TERM_BLUE_SOFT,
+                "label",
+                self.tr("Waiting on players", "Esperando jugadores"),
+            );
+            return;
+        }
         let hovered = self.ui.hover == Some(HitTarget::Continue);
         let label_alpha = if hovered {
             1.0
@@ -9099,9 +13060,22 @@ impl App {
             );
             summary_y += summary_size + 6.0;
         }
+        let continue_button = self.level_intro_continue_button_rect();
+        if self.multiplayer_run_active() && self.local_party_ready() && !self.all_party_ready() {
+            scene.text(
+                continue_button.x + continue_button.w * 0.5,
+                button_text_baseline(continue_button, 18.0),
+                18.0,
+                "center",
+                TERM_BLUE_SOFT,
+                "label",
+                self.tr("Waiting on players", "Esperando jugadores"),
+            );
+            return;
+        }
         render_primary_button(
             scene,
-            self.level_intro_continue_button_rect(),
+            continue_button,
             self.ui.hover == Some(HitTarget::Continue),
             self.tr("Continue", "Continuar"),
             self.boot_time_ms,
@@ -9129,6 +13103,19 @@ impl App {
             "display",
             title,
         );
+
+        if self.multiplayer_run_active() && self.local_party_ready() && !self.all_party_ready() {
+            scene.text(
+                logical_width * 0.5,
+                layout.title_y + title_size + 44.0,
+                18.0,
+                "center",
+                TERM_BLUE_SOFT,
+                "label",
+                self.tr("Waiting on players", "Esperando jugadores"),
+            );
+            return;
+        }
 
         for (index, rect) in layout.card_rects.iter().enumerate() {
             let Some(module) = module_select.options.get(index).copied() else {
@@ -10111,12 +14098,15 @@ impl App {
             return;
         };
 
-        let menu_hovered = self.ui.hover == Some(HitTarget::Menu);
+        let menu_active = !self.local_multiplayer_guest();
+        let menu_hovered = menu_active && self.ui.hover == Some(HitTarget::Menu);
         render_ui_tile(
             scene,
             layout.menu_button,
             BUTTON_RADIUS,
-            if menu_hovered {
+            if !menu_active {
+                COLOR_GRAY_STROKE_DISABLED
+            } else if menu_hovered {
                 COLOR_GREEN_STROKE_STRONG
             } else {
                 COLOR_GREEN_STROKE_IDLE
@@ -10127,7 +14117,9 @@ impl App {
             button_text_baseline(layout.menu_button, 20.0),
             20.0,
             "center",
-            if menu_hovered {
+            if !menu_active {
+                TERM_GREEN_DIM
+            } else if menu_hovered {
                 TERM_GREEN_SOFT
             } else {
                 TERM_GREEN_TEXT
@@ -10573,7 +14565,7 @@ impl App {
 
     fn render_menu_button(&self, scene: &mut SceneBuilder, layout: &Layout) {
         let rect = layout.menu_button;
-        let active = !self.combat_input_locked();
+        let active = !self.combat_input_locked() && !self.local_multiplayer_guest();
         let hovered = active && self.ui.hover == Some(HitTarget::Menu);
         let font_size = combat_action_button_font_size(layout.low_hand_layout, layout.tile_scale);
         let stroke = if !active {
@@ -10746,17 +14738,29 @@ impl App {
 
     fn render_player_panel(&self, scene: &mut SceneBuilder, layout: &Layout) {
         let rect = layout.player_rect;
-        let center_x = rect.x + rect.w * 0.5;
-        let hovered = self.ui.hover == Some(HitTarget::Player);
-        let targeted = self.ui.selected_card.is_some_and(|index| {
-            !self.combat.card_requires_enemy(index) && !self.combat.card_targets_all_enemies(index)
-        });
         let metrics = player_panel_metrics(
             self,
             layout.low_hand_layout,
             layout.tile_scale,
             layout.tile_insets,
         );
+        self.render_local_player_panel(scene, rect, metrics);
+        if self.multiplayer_run_active() {
+            self.render_remote_party_cards(scene, layout);
+        }
+    }
+
+    fn render_local_player_panel(
+        &self,
+        scene: &mut SceneBuilder,
+        rect: Rect,
+        metrics: PlayerPanelMetrics,
+    ) {
+        let center_x = rect.x + rect.w * 0.5;
+        let hovered = self.ui.hover == Some(HitTarget::Player);
+        let targeted = self.ui.selected_card.is_some_and(|index| {
+            !self.combat.card_requires_enemy(index) && !self.combat.card_targets_all_enemies(index)
+        });
         let stroke = if targeted || hovered {
             COLOR_CYAN_STROKE_TARGET
         } else {
@@ -10836,6 +14840,153 @@ impl App {
                 y: meta_y,
                 size: metrics.meta_size,
             },
+        );
+    }
+
+    fn render_remote_party_cards(&self, scene: &mut SceneBuilder, layout: &Layout) {
+        let remote_slots = self.displayed_remote_party_slots();
+        if remote_slots.is_empty() || layout.remote_party_card_rects.is_empty() {
+            return;
+        }
+        for (slot_state, card_rect) in remote_slots
+            .iter()
+            .zip(layout.remote_party_card_rects.iter().copied())
+        {
+            let alive = !matches!(slot_state.life, crate::session::SlotLifeState::Dead);
+            let connected = slot_state.connected;
+            let stroke = if !alive || !connected {
+                COLOR_GRAY_STROKE_DISABLED
+            } else if slot_state.ready {
+                COLOR_CYAN_STROKE_IDLE
+            } else {
+                COLOR_GREEN_STROKE_PANEL
+            };
+            render_ui_tile(scene, card_rect, CARD_RADIUS, stroke);
+            if !connected {
+                self.render_disconnected_party_card_contents(
+                    scene,
+                    card_rect,
+                    slot_state.name.as_str(),
+                );
+            } else {
+                self.render_compact_party_card_contents(
+                    scene,
+                    card_rect,
+                    slot_state.name.as_str(),
+                    slot_state.hp,
+                    slot_state.block,
+                    if alive {
+                        TERM_GREEN_TEXT
+                    } else {
+                        TERM_GREEN_DIM
+                    },
+                );
+            }
+        }
+    }
+
+    fn render_disconnected_party_card_contents(
+        &self,
+        scene: &mut SceneBuilder,
+        rect: Rect,
+        raw_name: &str,
+    ) {
+        let metrics = card_box_metrics(rect.w);
+        let available_w = (rect.w - metrics.pad_x * 2.0).max(1.0);
+        let available_h = (rect.h - metrics.top_pad - metrics.bottom_pad).max(1.0);
+        let label = format!("{} discon.", compact_party_card_short_name(raw_name));
+        let mut font_size = (available_h / 1.28).clamp(11.0, 16.0);
+        for _ in 0..6 {
+            if text_width(&label, font_size) <= available_w {
+                break;
+            }
+            font_size = (font_size - 0.8).max(9.0);
+        }
+        let content_height = font_size + text_bottom_breathing_room(font_size);
+        let baseline_y =
+            rect.y + metrics.top_pad + (available_h - content_height).max(0.0) * 0.5 + font_size;
+        scene.text(
+            rect.x + rect.w * 0.5,
+            baseline_y,
+            font_size,
+            "center",
+            TERM_GREEN_DIM,
+            "label",
+            &label,
+        );
+    }
+
+    fn render_compact_party_card_contents(
+        &self,
+        scene: &mut SceneBuilder,
+        rect: Rect,
+        raw_name: &str,
+        hp: i32,
+        block: i32,
+        name_color: &'static str,
+    ) {
+        let metrics = card_box_metrics(rect.w);
+        let available_w = (rect.w - metrics.pad_x * 2.0).max(1.0);
+        let available_h = (rect.h - metrics.top_pad - metrics.bottom_pad).max(1.0);
+        let base_size = (available_h / 1.28).clamp(11.0, 16.0);
+        let name = compact_party_card_short_name(raw_name);
+        let mut font_size = base_size;
+        for _ in 0..6 {
+            let total_width =
+                compact_party_card_content_width(&name, hp.max(0), block.max(0), font_size);
+            if total_width <= available_w {
+                break;
+            }
+            font_size = (font_size - 0.8).max(9.0);
+        }
+        let content_height = font_size + text_bottom_breathing_room(font_size);
+        let baseline_y =
+            rect.y + metrics.top_pad + (available_h - content_height).max(0.0) * 0.5 + font_size;
+        let content_width =
+            compact_party_card_content_width(&name, hp.max(0), block.max(0), font_size);
+        let mut cursor = rect.x + metrics.pad_x + (available_w - content_width).max(0.0) * 0.5;
+        scene.text(
+            cursor, baseline_y, font_size, "left", name_color, "label", &name,
+        );
+        cursor += text_width(&name, font_size);
+        cursor += combat_inline_group_gap(font_size);
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            baseline_y,
+            font_size,
+            COMBAT_HEART_ICON_ASSET_PATH,
+            combat_stat_base_color(CombatStat::Hp),
+        );
+        let hp_text = hp.max(0).to_string();
+        scene.text(
+            cursor,
+            baseline_y,
+            font_size,
+            "left",
+            combat_stat_base_color(CombatStat::Hp),
+            "body",
+            &hp_text,
+        );
+        cursor += text_width(&hp_text, font_size);
+        cursor += combat_inline_group_gap(font_size);
+        render_combat_inline_icon(
+            scene,
+            &mut cursor,
+            baseline_y,
+            font_size,
+            COMBAT_SHIELD_ICON_ASSET_PATH,
+            combat_stat_base_color(CombatStat::Block),
+        );
+        let block_text = block.max(0).to_string();
+        scene.text(
+            cursor,
+            baseline_y,
+            font_size,
+            "left",
+            combat_stat_base_color(CombatStat::Block),
+            "body",
+            &block_text,
         );
     }
 
@@ -11153,6 +15304,10 @@ impl App {
             "label",
             self.tr("End Turn", "Fin del turno"),
         );
+    }
+
+    fn combat_player_target_rect(&self, layout: &Layout) -> Rect {
+        layout.player_rect
     }
 
     fn turn_banner_rect(&self, layout: &Layout, label: &str) -> Rect {
@@ -11807,6 +15962,51 @@ fn displayed_enemy_intents(combat: &CombatState, language: Language) -> Vec<Enem
         .collect()
 }
 
+fn encode_multiplayer_combat_action(action: Option<CombatAction>) -> u32 {
+    match action {
+        Some(CombatAction::EndTurn) => MULTIPLAYER_COMBAT_ACTION_END_TURN,
+        Some(CombatAction::PlayCard {
+            hand_index,
+            target: Some(Actor::Enemy(enemy_index)),
+        }) => {
+            MULTIPLAYER_COMBAT_ACTION_PLAY_ENEMY
+                | (((hand_index + 1) as u32) << 8)
+                | (((enemy_index + 1) as u32) << 16)
+        }
+        Some(CombatAction::PlayCard {
+            hand_index,
+            target: Some(Actor::Player),
+        }) => MULTIPLAYER_COMBAT_ACTION_PLAY_SELF | (((hand_index + 1) as u32) << 8),
+        Some(CombatAction::PlayCard {
+            hand_index,
+            target: None,
+        }) => MULTIPLAYER_COMBAT_ACTION_PLAY_ALL_ENEMIES | (((hand_index + 1) as u32) << 8),
+        None => MULTIPLAYER_COMBAT_ACTION_NONE,
+    }
+}
+
+fn decode_multiplayer_combat_action(code: u32) -> Option<CombatAction> {
+    let kind = code & 0xff;
+    let hand_index = (((code >> 8) & 0xff) as usize).checked_sub(1);
+    let enemy_index = (((code >> 16) & 0xff) as usize).checked_sub(1);
+    match kind {
+        MULTIPLAYER_COMBAT_ACTION_END_TURN => Some(CombatAction::EndTurn),
+        MULTIPLAYER_COMBAT_ACTION_PLAY_ALL_ENEMIES => Some(CombatAction::PlayCard {
+            hand_index: hand_index?,
+            target: None,
+        }),
+        MULTIPLAYER_COMBAT_ACTION_PLAY_ENEMY => Some(CombatAction::PlayCard {
+            hand_index: hand_index?,
+            target: Some(Actor::Enemy(enemy_index?)),
+        }),
+        MULTIPLAYER_COMBAT_ACTION_PLAY_SELF => Some(CombatAction::PlayCard {
+            hand_index: hand_index?,
+            target: Some(Actor::Player),
+        }),
+        _ => None,
+    }
+}
+
 fn stat_countdown_values(from: i32, to: i32) -> Vec<i32> {
     if from == to {
         return Vec::new();
@@ -12263,6 +16463,7 @@ fn combat_layout_bounds(layout: &Layout) -> Rect {
         .iter()
         .copied()
         .chain([layout.player_rect])
+        .chain(layout.remote_party_card_rects.iter().copied())
     {
         min_x = min_x.min(rect.x);
         min_y = min_y.min(rect.y);
@@ -13148,6 +17349,13 @@ fn hand_hint_metrics(tile_scale: f32) -> (f32, f32, f32) {
 }
 
 fn combat_hint_tile(app: &App, hand_count: usize) -> (String, &'static str, &'static str) {
+    if app.waiting_on_other_players() {
+        return (
+            String::from(app.tr("Waiting on players", "Esperando jugadores")),
+            TERM_CYAN_SOFT,
+            COLOR_CYAN_STROKE_IDLE,
+        );
+    }
     if app.combat_feedback.playback_kind == Some(CombatPlaybackKind::EnemyTurn) {
         return (
             String::from(app.tr("Resolving enemy turn...", "Resolviendo turno enemigo...")),
@@ -13586,6 +17794,29 @@ fn player_panel_metrics(
         width,
         height,
     }
+}
+
+fn compact_party_card_short_name(raw: &str) -> String {
+    let compact: String = raw
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .take(3)
+        .collect();
+    format!("{}.", if compact.is_empty() { "Pla" } else { &compact })
+}
+
+fn compact_party_card_content_width(name: &str, hp: i32, block: i32, font_size: f32) -> f32 {
+    let hp_text = hp.max(0).to_string();
+    let block_text = block.max(0).to_string();
+    text_width(name, font_size)
+        + combat_inline_group_gap(font_size)
+        + combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&hp_text, font_size)
+        + combat_inline_group_gap(font_size)
+        + combat_inline_icon_width(font_size)
+        + combat_inline_icon_text_gap(font_size)
+        + text_width(&block_text, font_size)
 }
 
 fn combat_inline_icon_height(font_size: f32) -> f32 {
@@ -14489,6 +18720,15 @@ mod tests {
     const TEST_BUILD_SHA: &str = "BUILD_SHA";
     type FrameTextEntry = (f32, f32, f32, String, String, String, String);
 
+    fn write_party_slot_name(app: &mut App, value: &str) -> usize {
+        let bytes = value.as_bytes();
+        let ptr = app.prepare_party_slot_name_buffer(bytes.len());
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        }
+        bytes.len()
+    }
+
     fn primary_enemy(combat: &CombatState) -> &EnemyState {
         combat
             .enemy(0)
@@ -14668,6 +18908,106 @@ mod tests {
         app
     }
 
+    fn active_multiplayer_combat_fixture() -> App {
+        let mut app = App::new();
+        assert!(app.load_e2e_fixture(E2E_FIXTURE_HOST_FIRST_CARD));
+        app
+    }
+
+    fn active_multiplayer_progression_combat_fixture() -> App {
+        let mut app = App::new();
+        app.set_party_size(2);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 2,
+                lane: 3,
+                kind: RoomKind::Rest,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        let other_dungeon = dungeon.clone();
+        let setup = dungeon.current_encounter_setup().unwrap();
+        let party_run = PartyRunState::from_dungeons(vec![dungeon.clone(), other_dungeon.clone()])
+            .expect("party run should build");
+        let setups = vec![setup.clone(), setup];
+        let decks = vec![dungeon.deck.clone(), other_dungeon.deck.clone()];
+        let modules = vec![dungeon.modules.clone(), other_dungeon.modules.clone()];
+
+        app.dungeon = Some(dungeon);
+        app.party_run = Some(party_run);
+        app.party_combat = PartyCombatState::new(TEST_RUN_SEED, &setups, &decks, &modules);
+        app.party_session.slots[1].claim = crate::session::SlotClaimKind::Remote;
+        app.party_session.slots[1].connected = true;
+        app.party_session.slots[1].name = "Player 2".to_string();
+        app.screen = AppScreen::Combat;
+        app.sync_active_view_from_party_state();
+        app.sync_combat_feedback_to_combat();
+        app.screen_transition = None;
+        app.refresh_run_save_snapshot();
+        app
+    }
+
+    fn guest_multiplayer_combat_fixture() -> App {
+        let host = active_multiplayer_combat_fixture();
+        let mut guest = restore_app_from_snapshot(&guest_snapshot_for_slot(
+            &host.serialize_current_run().unwrap(),
+            1,
+        ));
+        guest.screen_transition = None;
+        guest
+    }
+
+    fn guest_multiplayer_map_fixture() -> App {
+        let mut host = App::new();
+        host.set_party_size(2);
+        assert!(host.start_multiplayer_run_from_web());
+        skip_opening_intro(&mut host);
+        host.claim_module_select(0);
+        assert!(host.begin_remote_input_slot(1));
+        host.claim_module_select(0);
+        host.end_remote_input_slot();
+        host.screen_transition = None;
+
+        let mut guest = restore_app_from_snapshot(&guest_snapshot_for_slot(
+            &host.serialize_current_run().unwrap(),
+            1,
+        ));
+        guest.screen_transition = None;
+        guest
+    }
+
+    fn guest_snapshot_for_slot(snapshot: &str, local_slot: usize) -> String {
+        let mut envelope = parse_run_save(snapshot).unwrap();
+        envelope.party.local_slot = local_slot;
+        for (slot, slot_state) in envelope.party.slots.iter_mut().enumerate() {
+            slot_state.connected = true;
+            slot_state.claim = if slot == local_slot {
+                crate::session::SlotClaimKind::Local
+            } else {
+                crate::session::SlotClaimKind::Remote
+            };
+        }
+        serialize_envelope(&envelope).unwrap()
+    }
+
     fn combat_save_fixture() -> App {
         let mut app = active_combat_fixture();
         app.perform_action(CombatAction::EndTurn);
@@ -14784,6 +19124,59 @@ mod tests {
         app.dungeon = Some(dungeon);
         app.screen = AppScreen::Event;
         app.event = Some(EventState { event });
+        app
+    }
+
+    fn active_multiplayer_event_fixture(event: EventId) -> App {
+        let mut app = App::new();
+        app.set_party_size(2);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.player_hp = 20;
+        dungeon.player_max_hp = 20;
+        dungeon.credits = 0;
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Event,
+                next: vec![2],
+            },
+            crate::dungeon::DungeonNode {
+                id: 2,
+                depth: 2,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes = vec![2];
+        let mut other_dungeon = dungeon.clone();
+        other_dungeon.player_hp = 20;
+        other_dungeon.player_max_hp = 20;
+        other_dungeon.credits = 0;
+        let party_run =
+            PartyRunState::from_dungeons(vec![dungeon.clone(), other_dungeon]).expect("party run");
+
+        app.dungeon = Some(dungeon);
+        app.party_run = Some(party_run);
+        app.party_session.slots[1].claim = crate::session::SlotClaimKind::Remote;
+        app.party_session.slots[1].connected = true;
+        app.party_session.slots[1].name = "Player 2".to_string();
+        app.event = Some(EventState { event });
+        app.screen = AppScreen::Event;
+        app.reset_party_ready_for_alive_heroes();
+        app.sync_active_view_from_party_state();
+        app.screen_transition = None;
+        app.refresh_run_save_snapshot();
         app
     }
 
@@ -16547,28 +20940,6 @@ mod tests {
     }
 
     #[test]
-    fn restore_old_map_save_without_credits_defaults_to_zero() {
-        let mut app = App::new();
-        start_run_to_map(&mut app);
-        app.dungeon.as_mut().unwrap().credits = 27;
-        let snapshot = app.serialize_current_run().unwrap();
-        let mut value: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        value["active_state"]["dungeon"]
-            .as_object_mut()
-            .unwrap()
-            .remove("credits");
-        value["fallback_checkpoint"]["dungeon"]
-            .as_object_mut()
-            .unwrap()
-            .remove("credits");
-
-        let restored = restore_app_from_snapshot(&serde_json::to_string(&value).unwrap());
-
-        assert!(matches!(restored.screen, AppScreen::Map));
-        assert_eq!(restored.dungeon.as_ref().unwrap().credits, 0);
-    }
-
-    #[test]
     fn start_run_opens_opening_intro_before_module_select() {
         let mut app = App::new();
 
@@ -16584,6 +20955,186 @@ mod tests {
         assert!(app.dungeon.as_ref().unwrap().modules.is_empty());
         assert!(app.run_save_snapshot.is_none());
         assert!(!app.has_saved_run);
+    }
+
+    #[test]
+    fn boot_start_resets_previous_multiplayer_session_back_to_singleplayer() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.party_session.local_slot = 1;
+        app.party_session.captain_slot = 0;
+        app.party_session.slots[0].claim = crate::session::SlotClaimKind::Remote;
+        app.party_session.slots[0].connected = true;
+        app.party_session.slots[1].claim = crate::session::SlotClaimKind::Local;
+        app.party_session.slots[1].connected = true;
+
+        app.activate_boot_primary_action();
+
+        assert!(matches!(app.screen, AppScreen::OpeningIntro));
+        assert_eq!(app.party_session.configured_party_size, 1);
+        assert_eq!(app.party_session.local_slot, 0);
+        assert_eq!(app.party_session.captain_slot, 0);
+        assert_eq!(
+            app.party_session.slots[0].claim,
+            crate::session::SlotClaimKind::Local
+        );
+        assert!(app.party_session.slots[0].connected);
+        assert!(app.party_run.is_none());
+    }
+
+    #[test]
+    fn multiplayer_web_start_requires_at_least_two_players() {
+        let mut app = App::new();
+
+        assert!(!app.start_multiplayer_run_from_web());
+
+        app.set_party_size(2);
+        assert!(app.start_multiplayer_run_from_web());
+        assert!(app.multiplayer_run_active());
+    }
+
+    #[test]
+    fn multiplayer_web_resume_converts_singleplayer_map_save_to_party_run() {
+        let mut app = App::new();
+        start_run_to_map(&mut app);
+        let original_dungeon = app.dungeon.clone().expect("dungeon");
+
+        app.set_party_size(2);
+        assert!(app.resume_multiplayer_run_from_web());
+
+        assert!(app.multiplayer_run_active());
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert_eq!(app.party_run.as_ref().unwrap().party_size(), 2);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().active_dungeon(0),
+            Some(original_dungeon.clone())
+        );
+        assert_eq!(
+            app.party_run.as_ref().unwrap().active_dungeon(1),
+            Some(original_dungeon)
+        );
+    }
+
+    #[test]
+    fn multiplayer_web_resume_preserves_existing_party_slots() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        assert!(app.start_multiplayer_run_from_web());
+        skip_opening_intro(&mut app);
+        let first_slot_dungeon = app.party_run.as_ref().unwrap().active_dungeon(0).unwrap();
+        let second_slot_dungeon = app.party_run.as_ref().unwrap().active_dungeon(1).unwrap();
+
+        assert!(app.resume_multiplayer_run_from_web());
+
+        assert_eq!(app.party_run.as_ref().unwrap().party_size(), 2);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().active_dungeon(0),
+            Some(first_slot_dungeon)
+        );
+        assert_eq!(
+            app.party_run.as_ref().unwrap().active_dungeon(1),
+            Some(second_slot_dungeon)
+        );
+    }
+
+    #[test]
+    fn remote_multiplayer_map_menu_input_is_ignored() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        assert!(app.start_multiplayer_run_from_web());
+        skip_opening_intro(&mut app);
+        app.claim_module_select(0);
+        assert!(app.begin_remote_input_slot(1));
+        app.claim_module_select(0);
+        app.end_remote_input_slot();
+        app.screen_transition = None;
+        let menu_button = app.map_layout().unwrap().menu_button;
+
+        assert!(app.begin_remote_input_slot(1));
+        app.handle_map_pointer(
+            menu_button.x + menu_button.w * 0.5,
+            menu_button.y + menu_button.h * 0.5,
+        );
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.multiplayer_run_active());
+    }
+
+    #[test]
+    fn menu_button_hit_helper_detects_map_and_combat_menu_buttons() {
+        let mut app = App::new();
+        start_run_to_map(&mut app);
+        let map_menu = app.map_layout().unwrap().menu_button;
+
+        assert!(app.menu_button_hit_at_point(
+            map_menu.x + map_menu.w * 0.5,
+            map_menu.y + map_menu.h * 0.5,
+        ));
+
+        let combat = active_combat_fixture();
+        let combat_menu = combat.layout().menu_button;
+
+        assert!(combat.menu_button_hit_at_point(
+            combat_menu.x + combat_menu.w * 0.5,
+            combat_menu.y + combat_menu.h * 0.5,
+        ));
+    }
+
+    #[test]
+    fn guest_multiplayer_map_menu_button_is_disabled() {
+        let mut app = guest_multiplayer_map_fixture();
+        let menu_button = app.map_layout().unwrap().menu_button;
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let rect_entries = frame_rect_entries(&frame);
+        let menu_entry = find_frame_rect_entry(&rect_entries, menu_button);
+        assert_ui_tile_entry(menu_entry, COLOR_GRAY_STROKE_DISABLED, 1.0);
+
+        app.handle_map_pointer(
+            menu_button.x + menu_button.w * 0.5,
+            menu_button.y + menu_button.h * 0.5,
+        );
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.multiplayer_run_active());
+    }
+
+    #[test]
+    fn remote_multiplayer_combat_menu_input_is_ignored() {
+        let mut app = active_multiplayer_combat_fixture();
+        let menu_button = app.layout().menu_button;
+
+        assert!(app.begin_remote_input_slot(1));
+        app.handle_combat_pointer(
+            menu_button.x + menu_button.w * 0.5,
+            menu_button.y + menu_button.h * 0.5,
+        );
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Combat));
+        assert!(app.multiplayer_run_active());
+    }
+
+    #[test]
+    fn guest_multiplayer_combat_menu_button_is_disabled() {
+        let mut app = guest_multiplayer_combat_fixture();
+        let menu_button = app.layout().menu_button;
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let rect_entries = frame_rect_entries(&frame);
+        let menu_entry = find_frame_rect_entry(&rect_entries, menu_button);
+        assert_ui_tile_entry(menu_entry, COLOR_GRAY_STROKE_DISABLED, 1.0);
+
+        app.handle_combat_pointer(
+            menu_button.x + menu_button.w * 0.5,
+            menu_button.y + menu_button.h * 0.5,
+        );
+
+        assert!(matches!(app.screen, AppScreen::Combat));
+        assert!(app.multiplayer_run_active());
     }
 
     #[test]
@@ -16617,6 +21168,76 @@ mod tests {
         assert!(matches!(app.screen, AppScreen::ModuleSelect));
         assert!(app.run_save_snapshot.is_some());
         assert!(app.has_saved_run);
+    }
+
+    #[test]
+    fn multiplayer_opening_intro_serializes_authoritative_run_snapshot() {
+        let mut app = App::new();
+        app.set_party_size(2);
+
+        app.start_run();
+
+        assert!(matches!(app.screen, AppScreen::OpeningIntro));
+        assert!(app.module_select.is_none());
+        assert!(app.party_module_select_slots.is_empty());
+        assert!(app.run_save_snapshot.is_some());
+        assert!(app.has_saved_run);
+    }
+
+    #[test]
+    fn multiplayer_opening_intro_waits_for_other_players_before_module_select() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.start_run();
+        app.screen_transition = None;
+
+        assert!(app.activate_opening_intro_action());
+        assert!(matches!(app.screen, AppScreen::OpeningIntro));
+        assert!(app.local_party_ready());
+        assert!(!app.all_party_ready());
+        assert!(app.module_select.is_none());
+        assert!(app.party_module_select_slots.is_empty());
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|label|Waiting on players"));
+
+        assert!(app.begin_remote_input_slot(1));
+        assert!(app.activate_opening_intro_action());
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::ModuleSelect));
+        assert_eq!(app.party_ready, vec![false, false]);
+    }
+
+    #[test]
+    fn multiplayer_opening_intro_restore_preserves_local_progress() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.start_run();
+        app.screen_transition = None;
+        advance_time(&mut app, OPENING_INTRO_LINE_FADE_MS * 0.5);
+        let previous_elapsed = app.opening_intro.as_ref().unwrap().elapsed_ms;
+
+        let mut envelope = parse_run_save(&app.serialize_current_run().unwrap()).unwrap();
+        if let SavedRunState::Party { party_state } = &mut envelope.active_state {
+            party_state.ready[1] = true;
+        } else {
+            panic!("expected multiplayer party save");
+        }
+        if let SavedCheckpoint::Party { party_state } = &mut envelope.fallback_checkpoint {
+            party_state.ready[1] = true;
+        } else {
+            panic!("expected multiplayer party checkpoint");
+        }
+
+        let snapshot = serialize_envelope(&envelope).unwrap();
+        app.restore_buffer = snapshot.into_bytes();
+
+        assert!(app.apply_multiplayer_snapshot_from_buffer(app.restore_buffer.len()));
+        assert!(matches!(app.screen, AppScreen::OpeningIntro));
+        assert!((app.opening_intro.as_ref().unwrap().elapsed_ms - previous_elapsed).abs() < 0.01);
+        assert!(app.party_ready.get(1).copied().unwrap_or(false));
     }
 
     #[test]
@@ -16724,52 +21345,6 @@ mod tests {
         assert_eq!(
             restored.module_select.as_ref().unwrap().options,
             starter_module_choices()
-        );
-    }
-
-    #[test]
-    fn old_module_select_saves_default_to_starter_context() {
-        let app = active_module_select_fixture();
-        let mut value: serde_json::Value =
-            serde_json::from_str(&app.serialize_current_run().unwrap()).unwrap();
-        let module_select = value
-            .get_mut("active_state")
-            .and_then(|state| state.get_mut("module_select"))
-            .and_then(serde_json::Value::as_object_mut)
-            .unwrap();
-        module_select.remove("kind");
-        module_select.remove("boss_level");
-
-        let restored = restore_app_from_snapshot(&serde_json::to_string(&value).unwrap());
-
-        assert!(matches!(restored.screen, AppScreen::ModuleSelect));
-        assert_eq!(
-            restored.module_select.as_ref().unwrap().context,
-            ModuleSelectContext::Starter
-        );
-    }
-
-    #[test]
-    fn restore_old_map_save_without_modules_defaults_to_aegis_drive() {
-        let mut app = App::new();
-        start_run_to_map(&mut app);
-        let snapshot = app.serialize_current_run().unwrap();
-        let mut value: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
-        value["active_state"]["dungeon"]
-            .as_object_mut()
-            .unwrap()
-            .remove("modules");
-        value["fallback_checkpoint"]["dungeon"]
-            .as_object_mut()
-            .unwrap()
-            .remove("modules");
-
-        let restored = restore_app_from_snapshot(&serde_json::to_string(&value).unwrap());
-
-        assert!(matches!(restored.screen, AppScreen::Map));
-        assert_eq!(
-            restored.dungeon.as_ref().unwrap().modules,
-            vec![ModuleId::AegisDrive]
         );
     }
 
@@ -17438,6 +22013,45 @@ mod tests {
     }
 
     #[test]
+    fn multiplayer_event_choices_resolve_per_player_then_return_to_map() {
+        let mut app = active_multiplayer_event_fixture(EventId::SalvageCache);
+
+        app.claim_event_choice(0);
+
+        assert!(matches!(app.screen, AppScreen::Event));
+        assert!(app.local_party_ready());
+        assert!(!app.all_party_ready());
+        assert_eq!(app.party_run.as_ref().unwrap().hero(0).unwrap().credits, 16);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().hero(0).unwrap().player_hp,
+            20
+        );
+        assert_eq!(app.party_run.as_ref().unwrap().hero(1).unwrap().credits, 0);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().hero(1).unwrap().player_hp,
+            20
+        );
+
+        assert!(app.begin_remote_input_slot(1));
+        app.claim_event_choice(1);
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.event.is_none());
+        assert!(app.party_ready.is_empty());
+        assert_eq!(app.party_run.as_ref().unwrap().hero(0).unwrap().credits, 16);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().hero(0).unwrap().player_hp,
+            20
+        );
+        assert_eq!(app.party_run.as_ref().unwrap().hero(1).unwrap().credits, 28);
+        assert_eq!(
+            app.party_run.as_ref().unwrap().hero(1).unwrap().player_hp,
+            14
+        );
+    }
+
+    #[test]
     fn event_save_round_trip_keeps_event_state() {
         let mut app = active_event_fixture(EventId::ClinicPod);
         app.push_log("Event pending.");
@@ -17938,6 +22552,21 @@ mod tests {
     }
 
     #[test]
+    fn module_select_hit_test_returns_card_index_at_card_center() {
+        let app = active_module_select_fixture();
+        let layout = app.module_select_layout().unwrap();
+        let target = layout.card_rects[1];
+
+        assert_eq!(
+            app.module_select_card_index_at_point(
+                target.x + target.w * 0.5,
+                target.y + target.h * 0.5,
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn run_info_modules_render_in_fixed_order() {
         let mut app = App::new();
         start_run_to_map(&mut app);
@@ -18363,6 +22992,36 @@ mod tests {
     }
 
     #[test]
+    fn reward_helper_methods_match_reward_hit_targets() {
+        let mut app = App::new();
+        app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
+        app.screen = AppScreen::Reward;
+        app.reward = Some(RewardState {
+            tier: RewardTier::Combat,
+            options: vec![CardId::QuickStrike, CardId::BarrierField, CardId::SignalTap],
+            followup: RewardFollowup {
+                completed_run: false,
+            },
+            seed: TEST_RUN_SEED,
+        });
+        let layout = app.reward_layout().unwrap();
+        let card_rect = layout.card_rects[0];
+        let skip_rect = layout.skip_button;
+
+        assert_eq!(
+            app.reward_card_index_at_point(
+                card_rect.x + card_rect.w * 0.5,
+                card_rect.y + card_rect.h * 0.5,
+            ),
+            0
+        );
+        assert!(app.reward_skip_hit_at_point(
+            skip_rect.x + skip_rect.w * 0.5,
+            skip_rect.y + skip_rect.h * 0.5,
+        ));
+    }
+
+    #[test]
     fn reward_skip_button_returns_to_map_without_adding_a_card() {
         let mut app = App::new();
         let dungeon = DungeonRun::new(TEST_RUN_SEED);
@@ -18429,6 +23088,235 @@ mod tests {
         assert_eq!(restored.dungeon, app.dungeon);
         assert_eq!(restored.combat, app.combat);
         assert_eq!(restored.log, app.log);
+    }
+
+    #[test]
+    fn party_snapshot_tracks_local_name_and_combat_summary() {
+        let mut app = combat_save_fixture();
+        app.set_player_name("John");
+
+        let snapshot = app.current_party_session_snapshot();
+        let local = &snapshot.slots[snapshot.local_slot];
+
+        assert_eq!(snapshot.screen, "combat");
+        assert_eq!(local.name, "John");
+        assert!(local.in_run);
+        assert!(local.in_combat);
+        assert_eq!(local.hp, app.combat.player.fighter.hp);
+        assert_eq!(local.max_hp, app.combat.player.fighter.max_hp);
+        assert_eq!(local.block, app.combat.player.fighter.block);
+    }
+
+    #[test]
+    fn combat_save_round_trip_preserves_party_metadata() {
+        let mut app = combat_save_fixture();
+        app.set_party_size(4);
+        app.party_session.slots[1].claim = crate::session::SlotClaimKind::Remote;
+        app.party_session.slots[1].connected = true;
+        app.party_session.slots[1].name = "Mia".to_string();
+        app.party_session.slots[1].ready = true;
+        let snapshot = app.serialize_current_run().unwrap();
+
+        let restored = restore_app_from_snapshot(&snapshot);
+        let session = restored.current_party_session_snapshot();
+
+        assert_eq!(session.configured_party_size, 4);
+        assert_eq!(
+            session.slots[1].claim,
+            crate::session::SlotClaimKind::Remote
+        );
+        assert!(session.slots[1].connected);
+        assert_eq!(session.slots[1].name, "Mia");
+        assert!(session.slots[1].ready);
+    }
+
+    #[test]
+    fn sync_remote_party_slot_from_buffer_updates_snapshot_and_save() {
+        let mut app = combat_save_fixture();
+        app.set_party_size(3);
+        let len = write_party_slot_name(&mut app, "Mia");
+
+        assert!(app.sync_remote_party_slot_from_buffer(
+            1, true, true, true, true, true, 19, 31, 4, len,
+        ));
+
+        let session = app.current_party_session_snapshot();
+        let slot = &session.slots[1];
+        assert_eq!(slot.claim, crate::session::SlotClaimKind::Remote);
+        assert_eq!(slot.name, "Mia");
+        assert!(slot.connected);
+        assert!(slot.ready);
+        assert_eq!(slot.hp, 19);
+        assert!(
+            app.run_save_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.contains("\"party\""))
+        );
+    }
+
+    #[test]
+    fn disconnect_remote_party_slot_marks_claim_unready_but_keeps_name() {
+        let mut app = combat_save_fixture();
+        app.set_party_size(3);
+        let len = write_party_slot_name(&mut app, "Mia");
+        app.sync_remote_party_slot_from_buffer(1, true, true, false, false, true, 0, 0, 0, len);
+
+        assert!(app.disconnect_remote_party_slot(1));
+
+        let session = app.current_party_session_snapshot();
+        let slot = &session.slots[1];
+        assert_eq!(slot.claim, crate::session::SlotClaimKind::Remote);
+        assert_eq!(slot.name, "Mia");
+        assert!(!slot.connected);
+        assert!(!slot.ready);
+    }
+
+    #[test]
+    fn disconnect_remote_party_slot_unblocks_waiting_combat_without_damaging_guest() {
+        let mut app = active_multiplayer_combat_fixture();
+        let remote_hp = app.party_combat.as_ref().unwrap().heroes[1]
+            .player
+            .fighter
+            .hp;
+
+        app.perform_action(CombatAction::EndTurn);
+        assert!(app.waiting_on_other_players());
+
+        assert!(app.disconnect_remote_party_slot(1));
+
+        let party_combat = app.party_combat.as_ref().unwrap();
+        assert!(party_combat.hero_is_inactive(1));
+        assert_eq!(party_combat.heroes[1].player.fighter.hp, remote_hp);
+        assert!(party_combat.heroes[1].ready);
+        assert!(!app.waiting_on_other_players());
+    }
+
+    #[test]
+    fn sync_remote_party_slot_reactivates_disconnected_combat_slot() {
+        let mut app = active_multiplayer_combat_fixture();
+
+        assert!(app.disconnect_remote_party_slot(1));
+        assert!(app.party_combat.as_ref().unwrap().hero_is_inactive(1));
+
+        let len = write_party_slot_name(&mut app, "Player 2");
+        assert!(
+            app.sync_remote_party_slot_from_buffer(
+                1, true, false, true, true, true, 32, 32, 0, len,
+            )
+        );
+
+        assert!(!app.party_combat.as_ref().unwrap().hero_is_inactive(1));
+    }
+
+    #[test]
+    fn disconnected_remote_party_slot_does_not_block_party_ready_barriers() {
+        let mut app = active_multiplayer_progression_combat_fixture();
+        app.party_combat = None;
+        app.screen = AppScreen::Map;
+
+        assert!(app.disconnect_remote_party_slot(1));
+        app.reset_party_ready_for_alive_heroes();
+
+        assert_eq!(app.party_ready, vec![false, true]);
+    }
+
+    #[test]
+    fn multiplayer_restore_uses_saved_local_slot_for_module_select_view() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.start_run();
+        skip_opening_intro(&mut app);
+        app.party_session.slots[1].claim = crate::session::SlotClaimKind::Remote;
+        app.party_session.slots[1].connected = true;
+        app.party_session.slots[1].name = "Mia".to_string();
+        app.party_module_select_slots[0] = Some(ModuleSelectState {
+            options: vec![ModuleId::Nanoforge],
+            seed: TEST_RUN_SEED,
+            context: ModuleSelectContext::Starter,
+        });
+        app.party_module_select_slots[1] = Some(ModuleSelectState {
+            options: vec![ModuleId::CapacitorBank, ModuleId::PrismScope],
+            seed: TEST_RUN_SEED,
+            context: ModuleSelectContext::Starter,
+        });
+        app.module_select = app.party_module_select_slots[0].clone();
+
+        let mut envelope = parse_run_save(&app.serialize_current_run().unwrap()).unwrap();
+        envelope.party.local_slot = 1;
+        envelope.party.slots[0].claim = crate::session::SlotClaimKind::Remote;
+        envelope.party.slots[0].connected = true;
+        envelope.party.slots[1].claim = crate::session::SlotClaimKind::Local;
+        envelope.party.slots[1].connected = true;
+
+        let restored = restore_app_from_snapshot(&serialize_envelope(&envelope).unwrap());
+
+        assert_eq!(restored.local_slot_index(), 1);
+        assert!(matches!(restored.screen, AppScreen::ModuleSelect));
+        assert_eq!(
+            restored
+                .module_select
+                .as_ref()
+                .expect("module select should exist for guest")
+                .options,
+            vec![ModuleId::CapacitorBank, ModuleId::PrismScope]
+        );
+        let snapshot = restored.current_party_session_snapshot();
+        assert_eq!(snapshot.local_slot, 1);
+        assert_eq!(
+            snapshot.slots[0].claim,
+            crate::session::SlotClaimKind::Remote
+        );
+    }
+
+    #[test]
+    fn multiplayer_module_select_advances_when_last_player_claims() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.start_run();
+        skip_opening_intro(&mut app);
+        app.screen_transition = None;
+
+        assert!(app.activate_module_select_card(0));
+        assert!(matches!(app.screen, AppScreen::ModuleSelect));
+        assert!(app.local_party_ready());
+        assert!(!app.all_party_ready());
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|label|Waiting on players"));
+
+        assert!(app.begin_remote_input_slot(1));
+        assert!(app.activate_module_select_card(0));
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.party_ready.is_empty());
+    }
+
+    #[test]
+    fn multiplayer_level_intro_waits_for_other_players_before_map() {
+        let mut app = App::new();
+        app.set_party_size(2);
+        app.start_run();
+        skip_opening_intro(&mut app);
+        app.begin_level_intro();
+        app.screen_transition = None;
+
+        assert!(app.activate_level_intro_action());
+        assert!(matches!(app.screen, AppScreen::LevelIntro));
+        assert!(app.local_party_ready());
+        assert!(!app.all_party_ready());
+
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|label|Waiting on players"));
+
+        assert!(app.begin_remote_input_slot(1));
+        assert!(app.activate_level_intro_action());
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.party_ready.is_empty());
     }
 
     #[test]
@@ -19066,6 +23954,747 @@ mod tests {
     }
 
     #[test]
+    fn e2e_host_first_card_fixture_loads_expected_multiplayer_combat_state() {
+        let mut app = App::new();
+
+        assert!(app.load_e2e_fixture(E2E_FIXTURE_HOST_FIRST_CARD));
+
+        assert!(matches!(app.screen, AppScreen::Combat));
+        assert!(app.multiplayer_run_active());
+        assert_eq!(app.party_session.configured_party_size, 2);
+        assert_eq!(app.combat.player.energy, 3);
+        assert_eq!(
+            app.combat.deck.hand,
+            vec![CardId::FlareSlash, CardId::GuardStep]
+        );
+        assert_eq!(app.combat.deck.draw_pile, vec![CardId::ZeroPoint]);
+        assert_eq!(app.party_session.slots[1].name, "Player 2");
+        assert_eq!(
+            combat_hint_tile(&app, app.combat.hand_len()).0,
+            "Tap card or end turn"
+        );
+    }
+
+    #[test]
+    fn e2e_multiplayer_map_fixture_loads_a_shared_map_state() {
+        let mut app = App::new();
+
+        assert!(app.load_e2e_fixture(E2E_FIXTURE_MULTIPLAYER_MAP));
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.multiplayer_run_active());
+        assert_eq!(app.party_session.configured_party_size, 2);
+        assert_eq!(app.party_session.slots[1].name, "Player 2");
+        assert!(app.reward.is_none());
+        assert!(app.party_reward_slots.is_empty());
+        assert!(app.party_ready.is_empty());
+        assert!(app.dungeon.is_some());
+    }
+
+    #[test]
+    fn e2e_multiplayer_reward_barrier_fixture_loads_a_shared_reward_state() {
+        let mut app = App::new();
+
+        assert!(app.load_e2e_fixture(E2E_FIXTURE_MULTIPLAYER_REWARD_BARRIER));
+
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert!(app.multiplayer_run_active());
+        assert_eq!(app.party_session.configured_party_size, 2);
+        assert_eq!(app.party_session.slots[1].name, "Player 2");
+        assert!(app.reward.is_some());
+        assert_eq!(app.party_reward_slots.len(), 2);
+        assert!(app.party_reward_slots.iter().all(Option::is_some));
+        assert_eq!(app.party_ready, vec![false, false]);
+        assert!(app.dungeon.is_some());
+    }
+
+    #[test]
+    fn multiplayer_end_turn_shows_waiting_on_players_immediately() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.perform_action(CombatAction::EndTurn);
+
+        assert!(app.waiting_on_other_players());
+        assert_eq!(
+            combat_hint_tile(&app, app.combat.hand_len()).0,
+            "Waiting on players"
+        );
+    }
+
+    #[test]
+    fn multiplayer_end_turn_button_action_code_applies_on_first_try() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.rebuild_frame();
+        let end_turn_button = app.layout().end_turn_button;
+        let generation_before = app.run_save_generation;
+        let action_code = app.handle_local_multiplayer_combat_pointer_down(
+            end_turn_button.x + end_turn_button.w * 0.5,
+            end_turn_button.y + end_turn_button.h * 0.5,
+        );
+
+        assert_eq!(
+            action_code,
+            encode_multiplayer_combat_action(Some(CombatAction::EndTurn))
+        );
+        assert!(app.waiting_on_other_players());
+        assert!(app.pending_local_multiplayer_combat_action.is_some());
+        assert_eq!(app.run_save_generation, generation_before);
+        assert_eq!(
+            combat_hint_tile(&app, app.combat.hand_len()).0,
+            "Waiting on players"
+        );
+        app.rebuild_frame();
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|label|Waiting on players"));
+        assert!(frame.contains("|label|End Turn"));
+    }
+
+    #[test]
+    fn multiplayer_guest_end_turn_survives_unacknowledged_snapshot() {
+        let host = active_multiplayer_combat_fixture();
+        let initial_snapshot = guest_snapshot_for_slot(&host.serialize_current_run().unwrap(), 1);
+        let mut guest = guest_multiplayer_combat_fixture();
+        guest.rebuild_frame();
+        let end_turn_button = guest.layout().end_turn_button;
+
+        let action_code = guest.handle_local_multiplayer_combat_pointer_down(
+            end_turn_button.x + end_turn_button.w * 0.5,
+            end_turn_button.y + end_turn_button.h * 0.5,
+        );
+
+        assert_eq!(
+            action_code,
+            encode_multiplayer_combat_action(Some(CombatAction::EndTurn))
+        );
+        assert!(guest.waiting_on_other_players());
+        assert!(guest.pending_local_multiplayer_combat_action.is_some());
+
+        guest.restore_buffer = initial_snapshot.into_bytes();
+        assert!(guest.apply_multiplayer_snapshot_from_buffer(guest.restore_buffer.len()));
+        assert!(guest.waiting_on_other_players());
+        assert!(guest.pending_local_multiplayer_combat_action.is_none());
+    }
+
+    #[test]
+    fn multiplayer_guest_end_turn_starts_local_layout_transition() {
+        let mut guest = guest_multiplayer_combat_fixture();
+        guest.rebuild_frame();
+        let end_turn_button = guest.layout().end_turn_button;
+
+        let action_code = guest.handle_local_multiplayer_combat_pointer_down(
+            end_turn_button.x + end_turn_button.w * 0.5,
+            end_turn_button.y + end_turn_button.h * 0.5,
+        );
+
+        assert_eq!(
+            action_code,
+            encode_multiplayer_combat_action(Some(CombatAction::EndTurn))
+        );
+        assert!(guest.waiting_on_other_players());
+        assert!(guest.layout_transition.is_some());
+        assert!(!guest.pixel_shards.is_empty());
+    }
+
+    #[test]
+    fn clearing_pending_local_multiplayer_combat_action_unlocks_guest_preview() {
+        let mut guest = guest_multiplayer_combat_fixture();
+        guest.combat.deck.hand = vec![CardId::FlareSlash];
+        guest.combat.player.energy = 3;
+        if let Some(party_combat) = guest.party_combat.as_mut() {
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash];
+            party_combat.heroes[0].player.energy = 3;
+        }
+        guest.sync_combat_feedback_to_combat();
+        guest.rebuild_frame();
+        let layout = guest.layout();
+        let card_rect = layout.hand_rects[0];
+        let enemy_rect = primary_enemy_rect(&layout);
+
+        assert_eq!(
+            guest.handle_local_multiplayer_combat_pointer_down(
+                card_rect.x + card_rect.w * 0.5,
+                card_rect.y + card_rect.h * 0.5,
+            ),
+            MULTIPLAYER_COMBAT_ACTION_NONE
+        );
+        assert_eq!(
+            guest.handle_local_multiplayer_combat_pointer_down(
+                enemy_rect.x + enemy_rect.w * 0.5,
+                enemy_rect.y + enemy_rect.h * 0.5,
+            ),
+            encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(Actor::Enemy(0)),
+            }))
+        );
+        assert!(guest.combat_input_locked());
+        assert!(guest.pending_local_multiplayer_combat_action.is_some());
+
+        guest.clear_local_multiplayer_pending_combat_action();
+
+        assert!(!guest.combat_input_locked());
+        assert!(guest.pending_local_multiplayer_combat_action.is_none());
+    }
+
+    #[test]
+    fn multiplayer_local_guest_pointer_selects_card_before_committing_play() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.combat.deck.hand = vec![CardId::FlareSlash];
+        app.combat.player.energy = 3;
+        if let Some(party_combat) = app.party_combat.as_mut() {
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash];
+            party_combat.heroes[0].player.energy = 3;
+        }
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+        let layout = app.layout();
+        let card_rect = layout.hand_rects[0];
+        let enemy_rect = primary_enemy_rect(&layout);
+
+        assert_eq!(
+            app.handle_local_multiplayer_combat_pointer_down(
+                card_rect.x + card_rect.w * 0.5,
+                card_rect.y + card_rect.h * 0.5,
+            ),
+            MULTIPLAYER_COMBAT_ACTION_NONE
+        );
+        assert_eq!(app.ui.selected_card, Some(0));
+        assert!(
+            combat_hint_tile(&app, app.combat.hand_len())
+                .0
+                .starts_with("Tap enemy")
+        );
+        let enemy_hp_before = app.combat.enemies[0].fighter.hp;
+        let generation_before = app.run_save_generation;
+
+        assert_eq!(
+            app.handle_local_multiplayer_combat_pointer_down(
+                enemy_rect.x + enemy_rect.w * 0.5,
+                enemy_rect.y + enemy_rect.h * 0.5,
+            ),
+            encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(Actor::Enemy(0)),
+            }))
+        );
+        assert_eq!(app.ui.selected_card, None);
+        assert!(app.pending_local_multiplayer_combat_action.is_some());
+        assert!(app.combat_input_locked());
+        assert_eq!(app.combat.enemies[0].fighter.hp, enemy_hp_before);
+        assert_eq!(app.run_save_generation, generation_before);
+    }
+
+    #[test]
+    fn multiplayer_host_play_card_starts_layout_playback_and_unlocks() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.combat.player.energy = 3;
+        app.combat.deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.draw_pile = vec![CardId::ZeroPoint];
+        app.combat.deck.discard_pile.clear();
+        primary_enemy_mut(&mut app.combat).fighter.hp = 14;
+        primary_enemy_mut(&mut app.combat).fighter.block = 0;
+        if let Some(party_combat) = app.party_combat.as_mut() {
+            party_combat.heroes[0].player.energy = 3;
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+            party_combat.heroes[0].deck.draw_pile = vec![CardId::ZeroPoint];
+            party_combat.heroes[0].deck.discard_pile.clear();
+            party_combat.enemies[0].fighter.hp = 14;
+            party_combat.enemies[0].fighter.block = 0;
+        }
+        app.sync_combat_feedback_to_combat();
+
+        app.perform_action(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(Actor::Enemy(0)),
+        });
+
+        assert_eq!(
+            app.combat_feedback.playback_kind,
+            Some(CombatPlaybackKind::PlayerAction)
+        );
+        assert!(app.combat_feedback.auto_playback_active);
+        assert!(!app.combat_feedback.playback_queue.is_empty());
+        assert_eq!(
+            combat_hint_tile(&app, app.combat.hand_len()).0,
+            "Resolving action..."
+        );
+        assert!(app.layout_transition.is_some());
+
+        advance_until(&mut app, |app| !app.combat_input_locked());
+    }
+
+    #[test]
+    fn multiplayer_host_pointer_play_card_unlocks_after_playback() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.combat.player.energy = 3;
+        app.combat.deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+        app.combat.deck.draw_pile = vec![CardId::ZeroPoint];
+        app.combat.deck.discard_pile.clear();
+        primary_enemy_mut(&mut app.combat).fighter.hp = 14;
+        primary_enemy_mut(&mut app.combat).fighter.block = 0;
+        if let Some(party_combat) = app.party_combat.as_mut() {
+            party_combat.heroes[0].player.energy = 3;
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+            party_combat.heroes[0].deck.draw_pile = vec![CardId::ZeroPoint];
+            party_combat.heroes[0].deck.discard_pile.clear();
+            party_combat.enemies[0].fighter.hp = 14;
+            party_combat.enemies[0].fighter.block = 0;
+        }
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+        let layout = app.layout();
+        let card_rect = layout.hand_rects[0];
+        let enemy_rect = primary_enemy_rect(&layout);
+
+        app.pointer_down(
+            card_rect.x + card_rect.w * 0.5,
+            card_rect.y + card_rect.h * 0.5,
+        );
+        assert_eq!(app.ui.selected_card, Some(0));
+        app.pointer_down(
+            enemy_rect.x + enemy_rect.w * 0.5,
+            enemy_rect.y + enemy_rect.h * 0.5,
+        );
+
+        assert_eq!(
+            app.combat_feedback.playback_kind,
+            Some(CombatPlaybackKind::PlayerAction)
+        );
+        advance_until(&mut app, |app| !app.combat_input_locked());
+    }
+
+    #[test]
+    fn multiplayer_guest_snapshot_restore_starts_hand_layout_transition() {
+        let mut host = active_multiplayer_combat_fixture();
+        let mut guest = guest_multiplayer_combat_fixture();
+        if let Some(party_combat) = host.party_combat.as_mut() {
+            party_combat.heroes[1].player.energy = 3;
+            party_combat.heroes[1].deck.hand = vec![CardId::FlareSlash, CardId::GuardStep];
+            party_combat.heroes[1].deck.draw_pile = vec![CardId::ZeroPoint];
+            party_combat.heroes[1].deck.discard_pile.clear();
+            party_combat.enemies[0].fighter.hp = 14;
+            party_combat.enemies[0].fighter.block = 0;
+        }
+        host.sync_active_view_from_party_state();
+        host.sync_combat_feedback_to_combat();
+
+        let refreshed_guest_snapshot =
+            guest_snapshot_for_slot(&host.serialize_current_run().unwrap(), 1);
+        guest.restore_buffer = refreshed_guest_snapshot.into_bytes();
+        assert!(guest.apply_multiplayer_snapshot_from_buffer(guest.restore_buffer.len()));
+        guest.layout_transition = None;
+
+        assert!(host.apply_multiplayer_combat_action_code(
+            1,
+            encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(Actor::Enemy(0)),
+            })),
+        ));
+
+        let authoritative_snapshot =
+            guest_snapshot_for_slot(&host.serialize_current_run().unwrap(), 1);
+        guest.restore_buffer = authoritative_snapshot.into_bytes();
+        assert!(guest.apply_multiplayer_snapshot_from_buffer(guest.restore_buffer.len()));
+
+        assert_eq!(
+            guest.combat_feedback.playback_kind,
+            Some(CombatPlaybackKind::PlayerAction)
+        );
+        assert!(guest.layout_transition.is_some());
+    }
+
+    #[test]
+    fn multiplayer_guest_snapshot_acknowledges_play_card_when_hand_matches() {
+        let mut host = active_multiplayer_combat_fixture();
+        if let Some(party_combat) = host.party_combat.as_mut() {
+            party_combat.heroes[1].player.energy = 3;
+            party_combat.heroes[1].deck.hand = vec![CardId::SignalTap];
+            party_combat.heroes[1].deck.draw_pile = vec![CardId::SignalTap];
+            party_combat.heroes[1].deck.discard_pile.clear();
+            party_combat.enemies[0].fighter.hp = 14;
+            party_combat.enemies[0].fighter.block = 0;
+        }
+
+        let mut guest = restore_app_from_snapshot(&guest_snapshot_for_slot(
+            &host.serialize_current_run().unwrap(),
+            1,
+        ));
+        guest.screen_transition = None;
+
+        let action_code = encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+            hand_index: 0,
+            target: Some(Actor::Enemy(0)),
+        }));
+        assert!(guest.apply_local_multiplayer_combat_action_code(action_code));
+        assert!(guest.pending_local_multiplayer_combat_action.is_some());
+        assert_eq!(guest.combat.deck.hand, vec![CardId::SignalTap]);
+
+        assert!(host.apply_multiplayer_combat_action_code(1, action_code));
+        let authoritative_snapshot =
+            guest_snapshot_for_slot(&host.serialize_current_run().unwrap(), 1);
+        guest.restore_buffer = authoritative_snapshot.into_bytes();
+        assert!(guest.apply_multiplayer_snapshot_from_buffer(guest.restore_buffer.len()));
+
+        assert_eq!(guest.combat.deck.hand, vec![CardId::SignalTap]);
+        assert_eq!(guest.combat.deck.discard_pile, vec![CardId::SignalTap]);
+        assert!(guest.pending_local_multiplayer_combat_action.is_none());
+        advance_until(&mut guest, |guest| !guest.combat_input_locked());
+    }
+
+    #[test]
+    fn multiplayer_remote_combat_action_does_not_change_host_card_selection_hint() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.combat.deck.hand = vec![CardId::FlareSlash];
+        app.combat.player.energy = 3;
+        if let Some(party_combat) = app.party_combat.as_mut() {
+            party_combat.heroes[0].deck.hand = vec![CardId::FlareSlash];
+            party_combat.heroes[0].player.energy = 3;
+        }
+        app.sync_combat_feedback_to_combat();
+
+        app.select_or_play_card(0);
+
+        assert!(app.apply_multiplayer_combat_action_code(
+            1,
+            encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(Actor::Enemy(0)),
+            })),
+        ));
+
+        assert_eq!(app.ui.selected_card, Some(0));
+        assert_ne!(
+            combat_hint_tile(&app, app.combat.hand_len()).0,
+            "Tap enemy (1 energy)"
+        );
+        assert!(
+            matches!(
+                combat_hint_tile(&app, app.combat.hand_len()).0.as_str(),
+                "Resolving action..." | "Waiting on players"
+            ),
+            "remote committed action should keep host selection but only move the host into a shared playback/wait state"
+        );
+    }
+
+    #[test]
+    fn multiplayer_remote_cards_render_without_brackets_and_with_stat_icons() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("Pla."));
+        assert!(!frame.contains("[Pla."));
+
+        let icons = frame_tinted_image_entries(&frame);
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_HEART_ICON_ASSET_PATH)
+                .count(),
+            3
+        );
+        assert_eq!(
+            icons
+                .iter()
+                .filter(|entry| entry.src == COMBAT_SHIELD_ICON_ASSET_PATH)
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn multiplayer_disconnected_remote_card_shows_short_disconnected_label() {
+        let mut app = active_multiplayer_combat_fixture();
+
+        assert!(app.disconnect_remote_party_slot(1));
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(
+            frame_text_entries(&frame)
+                .iter()
+                .any(|(_, _, _, _, _, font, text)| font == "label" && text == "Pla. discon.")
+        );
+        assert!(
+            !frame_text_entries(&frame)
+                .iter()
+                .any(|(_, _, _, _, _, font, text)| font == "label" && text == "Pla.")
+        );
+    }
+
+    #[test]
+    fn multiplayer_remote_cards_stay_between_local_panel_and_hint_box() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.rebuild_frame();
+
+        let layout = app.layout();
+        let hint_rect = layout.hint_rect.expect("combat hint should exist");
+        assert!(!layout.remote_party_card_rects.is_empty());
+        assert!(layout.remote_party_card_rects.iter().all(|rect| {
+            rect.y >= layout.player_rect.y + layout.player_rect.h - 0.01
+                && rect.y + rect.h <= hint_rect.y + 0.01
+        }));
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let name_entry = frame_text_entries(&frame)
+            .into_iter()
+            .find(|(_, _, _, _, _, font, text)| font == "label" && text == "Pla.")
+            .expect("remote player card should render the short name");
+        let remote_rect = layout.remote_party_card_rects[0];
+        assert!(name_entry.0 >= remote_rect.x - 0.01);
+        assert!(name_entry.0 <= remote_rect.x + remote_rect.w + 0.01);
+        assert!(name_entry.1 >= remote_rect.y - 0.01);
+        assert!(name_entry.1 <= remote_rect.y + remote_rect.h + 0.01);
+    }
+
+    #[test]
+    fn multiplayer_remote_cards_use_card_padding_for_compact_contents() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.rebuild_frame();
+
+        let layout = app.layout();
+        let remote_rect = layout.remote_party_card_rects[0];
+        let metrics = card_box_metrics(remote_rect.w);
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        let mut content_left = f32::INFINITY;
+        let mut content_right = f32::NEG_INFINITY;
+        let mut content_top = f32::INFINITY;
+        let mut content_bottom = f32::NEG_INFINITY;
+
+        for (x, y, size, align, _, _, text) in frame_text_entries(&frame) {
+            if align != "left" || !remote_rect.contains(x, y) {
+                continue;
+            }
+            content_left = content_left.min(x);
+            content_right = content_right.max(x + text_width(&text, size));
+            content_top = content_top.min(y - size);
+            content_bottom = content_bottom.max(y + text_bottom_breathing_room(size));
+        }
+        for entry in frame_tinted_image_entries(&frame) {
+            if !rect_contains_rect(remote_rect, entry.rect) {
+                continue;
+            }
+            content_left = content_left.min(entry.rect.x);
+            content_right = content_right.max(entry.rect.x + entry.rect.w);
+            content_top = content_top.min(entry.rect.y);
+            content_bottom = content_bottom.max(entry.rect.y + entry.rect.h);
+        }
+
+        assert!(content_left.is_finite());
+        assert!(content_right.is_finite());
+        assert!(content_top.is_finite());
+        assert!(content_bottom.is_finite());
+        assert!(content_left >= remote_rect.x + metrics.pad_x - 0.01);
+        assert!(content_right <= remote_rect.x + remote_rect.w - metrics.pad_x + 0.01);
+        assert!(content_top >= remote_rect.y + metrics.top_pad - 0.01);
+        assert!(content_bottom <= remote_rect.y + remote_rect.h - metrics.bottom_pad + 0.01);
+    }
+
+    #[test]
+    fn multiplayer_local_player_panel_metrics_match_singleplayer() {
+        let singleplayer = active_combat_fixture();
+        let multiplayer = active_multiplayer_combat_fixture();
+        let tile_insets = tile_insets_for_card_width(CARD_WIDTH);
+        let single_metrics = player_panel_metrics(&singleplayer, false, 1.0, tile_insets);
+        let multiplayer_metrics = player_panel_metrics(&multiplayer, false, 1.0, tile_insets);
+
+        assert!((single_metrics.label_size - multiplayer_metrics.label_size).abs() < 0.01);
+        assert!((single_metrics.stats_size - multiplayer_metrics.stats_size).abs() < 0.01);
+        assert!((single_metrics.meta_size - multiplayer_metrics.meta_size).abs() < 0.01);
+        assert!((single_metrics.status_size - multiplayer_metrics.status_size).abs() < 0.01);
+        assert!(
+            (single_metrics.status_row_height - multiplayer_metrics.status_row_height).abs() < 0.01
+        );
+        assert!((single_metrics.width - multiplayer_metrics.width).abs() < 0.01);
+        assert!((single_metrics.height - multiplayer_metrics.height).abs() < 0.01);
+    }
+
+    #[test]
+    fn multiplayer_first_combat_victory_flows_to_reward_then_map() {
+        let mut app = active_multiplayer_progression_combat_fixture();
+        app.debug_mode = true;
+
+        app.debug_end_battle();
+
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert!(app.reward.is_some());
+        assert_eq!(app.party_reward_slots.len(), 2);
+
+        app.claim_reward(0);
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert!(app.local_party_ready());
+        assert!(!app.all_party_ready());
+
+        assert!(app.begin_remote_input_slot(1));
+        app.claim_reward(0);
+        app.end_remote_input_slot();
+
+        assert!(matches!(app.screen, AppScreen::Map));
+        assert!(app.reward.is_none());
+        assert!(app.party_reward_slots.is_empty());
+        assert!(app.party_ready.is_empty());
+    }
+
+    #[test]
+    fn multiplayer_host_reward_pointer_claims_card_during_transition() {
+        let mut app = active_multiplayer_progression_combat_fixture();
+        app.debug_mode = true;
+        let initial_deck_len = app.dungeon.as_ref().unwrap().deck.len();
+
+        app.debug_end_battle();
+
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert!(app.screen_transition.is_some());
+        let layout = app.reward_layout().unwrap();
+        let card_rect = layout.card_rects[0];
+
+        app.pointer_down(
+            card_rect.x + card_rect.w * 0.5,
+            card_rect.y + card_rect.h * 0.5,
+        );
+
+        assert!(app.local_party_ready());
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert_eq!(
+            app.dungeon.as_ref().unwrap().deck.len(),
+            initial_deck_len + 1
+        );
+    }
+
+    #[test]
+    fn multiplayer_reward_helper_claims_card_during_transition() {
+        let mut app = active_multiplayer_progression_combat_fixture();
+        app.debug_mode = true;
+        let initial_deck_len = app.dungeon.as_ref().unwrap().deck.len();
+
+        app.debug_end_battle();
+
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert!(app.screen_transition.is_some());
+        assert!(app.activate_reward_card(0));
+
+        assert!(app.local_party_ready());
+        assert!(matches!(app.screen, AppScreen::Reward));
+        assert_eq!(
+            app.dungeon.as_ref().unwrap().deck.len(),
+            initial_deck_len + 1
+        );
+    }
+
+    #[test]
+    fn multiplayer_host_event_pointer_claims_choice_during_transition() {
+        let mut app = active_multiplayer_event_fixture(EventId::SalvageCache);
+        app.screen_transition = Some(ScreenTransition {
+            from_screen: AppScreen::Map,
+            to_screen: AppScreen::Event,
+            style: ScreenTransitionStyle::Motion,
+            from_boot_has_saved_run: false,
+            to_boot_has_saved_run: false,
+            ttl_ms: 180.0,
+            total_ms: 180.0,
+        });
+        let layout = app.event_layout().unwrap();
+        let choice_rect = layout.choice_rects[0];
+
+        app.pointer_down(
+            choice_rect.x + choice_rect.w * 0.5,
+            choice_rect.y + choice_rect.h * 0.5,
+        );
+
+        assert!(app.local_party_ready());
+        assert!(matches!(app.screen, AppScreen::Event));
+        assert_eq!(app.party_run.as_ref().unwrap().hero(0).unwrap().credits, 16);
+    }
+
+    #[test]
+    fn multiplayer_event_helper_claims_choice_during_transition() {
+        let mut app = active_multiplayer_event_fixture(EventId::SalvageCache);
+        app.screen_transition = Some(ScreenTransition {
+            from_screen: AppScreen::Map,
+            to_screen: AppScreen::Event,
+            style: ScreenTransitionStyle::Motion,
+            from_boot_has_saved_run: false,
+            to_boot_has_saved_run: false,
+            ttl_ms: 180.0,
+            total_ms: 180.0,
+        });
+
+        assert!(app.activate_event_choice(0));
+        assert!(app.local_party_ready());
+        assert!(matches!(app.screen, AppScreen::Event));
+        assert_eq!(app.party_run.as_ref().unwrap().hero(0).unwrap().credits, 16);
+    }
+
+    #[test]
+    fn multiplayer_begin_encounter_scales_enemy_hp_by_party_size() {
+        let mut app = App::new();
+        app.set_party_size(3);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        dungeon.available_nodes.clear();
+        let setup = dungeon.current_encounter_setup().unwrap();
+        let party_run =
+            PartyRunState::from_dungeons(vec![dungeon.clone(), dungeon.clone(), dungeon.clone()])
+                .expect("party run should build");
+        app.dungeon = Some(dungeon);
+        app.party_run = Some(party_run);
+        app.screen = AppScreen::Map;
+
+        app.begin_encounter(setup.clone());
+
+        let enemy = &app.party_combat.as_ref().unwrap().enemies[0];
+        assert_eq!(enemy.fighter.max_hp, setup.enemies[0].max_hp * 3);
+        assert_eq!(enemy.fighter.hp, setup.enemies[0].hp * 3);
+    }
+
+    #[test]
+    fn multiplayer_combat_action_code_only_commits_after_targeting_choice() {
+        let mut app = active_multiplayer_combat_fixture();
+        app.combat.deck.hand = vec![CardId::FlareSlash];
+        app.sync_combat_feedback_to_combat();
+        app.rebuild_frame();
+        let layout = app.layout();
+        let hand_rect = layout.hand_rects[0];
+        let enemy_rect = primary_enemy_rect(&layout);
+
+        assert_eq!(
+            app.multiplayer_combat_action_code_at_point(
+                hand_rect.x + hand_rect.w * 0.5,
+                hand_rect.y + hand_rect.h * 0.5,
+            ),
+            MULTIPLAYER_COMBAT_ACTION_NONE
+        );
+
+        app.select_or_play_card(0);
+        assert_eq!(
+            app.multiplayer_combat_action_code_at_point(
+                enemy_rect.x + enemy_rect.w * 0.5,
+                enemy_rect.y + enemy_rect.h * 0.5,
+            ),
+            encode_multiplayer_combat_action(Some(CombatAction::PlayCard {
+                hand_index: 0,
+                target: Some(Actor::Enemy(0)),
+            }))
+        );
+    }
+
+    #[test]
     fn player_block_card_playback_counts_shield_up_in_defend_purple() {
         let mut app = active_combat_fixture();
         app.combat.player.energy = 3;
@@ -19563,8 +25192,8 @@ mod tests {
     fn player_name_trims_whitespace_and_limits_length() {
         let mut app = App::new();
 
-        app.set_player_name(" \t1234\n5678\u{00a0}9012345 \r");
-        assert_eq!(app.player_name.as_deref(), Some("123456789012"));
+        app.set_player_name(" \tFAKE\nTEST\u{00a0}NAMEZ \r");
+        assert_eq!(app.player_name.as_deref(), Some("FAKETESTNAME"));
 
         app.set_player_name("\t\n\u{00a0}  \r");
         assert_eq!(app.player_name, None);
@@ -20581,14 +26210,39 @@ mod tests {
     fn start_run_clears_boot_request_flags() {
         let mut app = App::new();
         app.resume_request_pending = true;
+        app.multiplayer_request_pending = true;
         app.install_request_pending = true;
         app.update_request_pending = true;
 
         app.start_run();
 
         assert!(!app.resume_request_pending);
+        assert!(!app.multiplayer_request_pending);
         assert!(!app.install_request_pending);
         assert!(!app.update_request_pending);
+    }
+
+    #[test]
+    fn boot_multiplayer_button_appears_below_start() {
+        let app = App::new();
+        let buttons = app.boot_buttons_layout(false);
+
+        assert!(buttons.multiplayer_button.y >= buttons.start_button.y + buttons.start_button.h);
+        assert!(
+            buttons.settings_button.y
+                >= buttons.multiplayer_button.y + buttons.multiplayer_button.h
+        );
+    }
+
+    #[test]
+    fn boot_multiplayer_button_queues_multiplayer_request() {
+        let mut app = App::new();
+        let button = app.boot_buttons_layout(false).multiplayer_button;
+
+        app.handle_boot_pointer(button.x + button.w * 0.5, button.y + button.h * 0.5);
+
+        assert!(app.multiplayer_request_pending);
+        assert!(!app.resume_request_pending);
     }
 
     #[test]

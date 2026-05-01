@@ -593,6 +593,10 @@ impl DungeonRun {
         self.player_hp = player_hp.max(0);
     }
 
+    pub(crate) fn complete_current_room_shared(&mut self) -> Option<DungeonProgress> {
+        self.complete_current_node()
+    }
+
     fn lose_hp_preserving_one(&mut self, amount: i32) -> i32 {
         if amount <= 0 {
             return 0;
