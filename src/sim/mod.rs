@@ -376,19 +376,23 @@ fn simulate_party_encounter(party: &mut PartyRunState) -> SimulationAdvance {
     let seed = combat_seed_for_dungeon(&seed_dungeon);
     let slot_count = party.party_size();
     let enemy_hp_multiplier = slot_count.max(1) as i32;
-    let setups: Vec<_> = (0..slot_count)
-        .map(|slot| {
-            let mut slot_setup = party
-                .current_encounter_setup(slot)
-                .or_else(|| party.current_encounter_setup(0))
-                .expect("party encounter setup");
-            for enemy in &mut slot_setup.enemies {
-                enemy.hp = enemy.hp.saturating_mul(enemy_hp_multiplier);
-                enemy.max_hp = enemy.max_hp.saturating_mul(enemy_hp_multiplier);
-            }
-            slot_setup
-        })
-        .collect();
+    let mut setups = Vec::with_capacity(slot_count);
+    for slot in 0..slot_count {
+        let Some(mut slot_setup) = party
+            .current_encounter_setup(slot)
+            .or_else(|| party.current_encounter_setup(0))
+        else {
+            return SimulationAdvance::Abort(
+                "Party encounter setup was unavailable.",
+                Some(room_kind),
+            );
+        };
+        for enemy in &mut slot_setup.enemies {
+            enemy.hp = enemy.hp.saturating_mul(enemy_hp_multiplier);
+            enemy.max_hp = enemy.max_hp.saturating_mul(enemy_hp_multiplier);
+        }
+        setups.push(slot_setup);
+    }
     let decks: Vec<_> = (0..slot_count)
         .map(|slot| {
             party
@@ -1019,8 +1023,8 @@ impl RunRecord {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunOutcome, SimulationConfig, autoplay_combat_action_to_action, run_simulations,
-        simulate_party_run,
+        RunOutcome, SimulationAdvance, SimulationConfig, autoplay_combat_action_to_action,
+        run_simulations, simulate_party_encounter, simulate_party_run,
     };
     use crate::autoplay::{
         RestChoice, RewardChoice, choose_combat_action, expected_enemy_threat, pick_event_choice,
@@ -1032,6 +1036,7 @@ mod tests {
     };
     use crate::content::{CardId, EnemyProfileId, EventId, ModuleId, RewardTier};
     use crate::dungeon::{DungeonNode, DungeonRun, RoomKind};
+    use crate::party::PartyRunState;
 
     const TEST_SEED: u64 = 0xA57A_7001;
 
@@ -1148,6 +1153,22 @@ mod tests {
 
         assert_eq!(stats.runs, 10);
         assert_eq!(stats.wins + stats.losses + stats.aborts, stats.runs);
+    }
+
+    #[test]
+    fn party_encounter_missing_setup_aborts_instead_of_panicking() {
+        let mut party = PartyRunState::new(TEST_SEED, 2);
+        party.shared.current_node = None;
+
+        let advance = simulate_party_encounter(&mut party);
+
+        assert!(matches!(
+            advance,
+            SimulationAdvance::Abort(
+                "Party encounter setup was unavailable.",
+                Some(RoomKind::Combat)
+            )
+        ));
     }
 
     #[test]

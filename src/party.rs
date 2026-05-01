@@ -204,6 +204,9 @@ impl PartyRunState {
 
     pub(crate) fn apply_rest_heal(&mut self, slot: usize) -> Option<i32> {
         let mut dungeon = self.active_dungeon(slot)?;
+        if !matches!(dungeon.current_room_kind(), Some(RoomKind::Rest)) {
+            return None;
+        }
         let healed = dungeon.rest_heal_amount();
         dungeon.player_hp += healed;
         self.update_hero_from_dungeon(slot, &dungeon);
@@ -480,6 +483,14 @@ impl PartyCombatState {
         let phase = first.phase;
         let turn = first.turn;
         let rng_state = first.rng_state();
+        if views.iter().skip(1).any(|combat| {
+            combat.enemies != enemies
+                || combat.phase != phase
+                || combat.turn != turn
+                || combat.rng_state() != rng_state
+        }) {
+            return None;
+        }
         let heroes: Vec<_> = views
             .into_iter()
             .zip(ready)
@@ -762,7 +773,7 @@ impl PartyCombatState {
             self.phase = TurnPhase::Ended(CombatOutcome::Victory);
             return events;
         }
-        self.turn = self.turn.wrapping_add(1);
+        let next_turn = self.turn.wrapping_add(1);
         self.phase = TurnPhase::PlayerTurn;
         for slot in 0..self.heroes.len() {
             if !self.hero_is_active(slot) {
@@ -784,6 +795,7 @@ impl PartyCombatState {
                 hero.ready = false;
             }
         }
+        self.turn = next_turn;
         self.check_outcome();
         events
     }
@@ -801,7 +813,6 @@ impl PartyCombatState {
         }
         self.enemies = combat.enemies.clone();
         self.rng_state = combat.rng_state();
-        self.turn = combat.turn;
     }
 
     fn all_active_heroes_dead(&self) -> bool {
@@ -835,7 +846,7 @@ impl PartyCombatState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::combat::{EncounterEnemySetup, EncounterSetup};
+    use crate::combat::{Actor, CombatEvent, CombatState, EncounterEnemySetup, EncounterSetup};
     use crate::content::{CardId, EnemyProfileId, ModuleId};
 
     const TEST_SEED: u64 = 0x51A7_C0DE;
@@ -889,6 +900,42 @@ mod tests {
     }
 
     #[test]
+    fn from_views_rejects_mismatched_shared_combat_state() {
+        let (base, _) = CombatState::new_with_setup(TEST_SEED, setup_with_enemy());
+        let ready = vec![false, false];
+        let mut mismatched_enemies = base.clone();
+        mismatched_enemies.enemies[0].fighter.hp -= 1;
+        assert!(
+            PartyCombatState::from_views(vec![base.clone(), mismatched_enemies], ready.clone())
+                .is_none()
+        );
+
+        let mut mismatched_phase = base.clone();
+        mismatched_phase.phase = TurnPhase::EnemyTurn;
+        assert!(
+            PartyCombatState::from_views(vec![base.clone(), mismatched_phase], ready.clone())
+                .is_none()
+        );
+
+        let mut mismatched_turn = base.clone();
+        mismatched_turn.turn += 1;
+        assert!(
+            PartyCombatState::from_views(vec![base.clone(), mismatched_turn], ready.clone())
+                .is_none()
+        );
+
+        let mismatched_rng = CombatState::from_persisted_parts(
+            base.player.clone(),
+            base.enemies.clone(),
+            base.deck.clone(),
+            base.phase,
+            base.turn,
+            base.rng_state().wrapping_add(1),
+        );
+        assert!(PartyCombatState::from_views(vec![base, mismatched_rng], ready).is_none());
+    }
+
+    #[test]
     fn rest_upgrade_only_applies_in_rest_room() {
         let mut party = PartyRunState::new(TEST_SEED, 1);
         let deck_index = party
@@ -905,6 +952,28 @@ mod tests {
         }
 
         assert!(party.apply_rest_upgrade(0, deck_index).is_some());
+    }
+
+    #[test]
+    fn rest_heal_only_applies_in_rest_room() {
+        let mut party = PartyRunState::new(TEST_SEED, 1);
+        party.shared.current_node = Some(0);
+        if let Some(node) = party.shared.nodes.get_mut(0) {
+            node.kind = RoomKind::Combat;
+        }
+        if let Some(hero) = party.hero_mut(0) {
+            hero.player_hp = 20;
+        }
+
+        assert_eq!(party.apply_rest_heal(0), None);
+        assert_eq!(party.hero(0).unwrap().player_hp, 20);
+
+        if let Some(node) = party.shared.nodes.get_mut(0) {
+            node.kind = RoomKind::Rest;
+        }
+
+        assert_eq!(party.apply_rest_heal(0), Some(6));
+        assert_eq!(party.hero(0).unwrap().player_hp, 26);
     }
 
     #[test]
@@ -986,15 +1055,32 @@ mod tests {
         )
         .unwrap();
         let starting_hp = combat.heroes[0].player.fighter.hp;
+        let starting_turn = combat.turn;
 
         assert!(combat.ready_hero(0));
-        assert!(combat.ready_hero(1));
+        let events = combat
+            .ready_hero_with_events(1)
+            .expect("second ready resolves the enemy round");
 
         assert_eq!(combat.heroes[0].player.fighter.hp, starting_hp - 5);
         assert_eq!(combat.heroes[1].player.fighter.hp, starting_hp - 5);
         assert_eq!(
             combat.heroes[0].player.fighter.hp,
             combat.heroes[1].player.fighter.hp
+        );
+        assert_eq!(combat.turn, starting_turn + 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(
+                    event,
+                    CombatEvent::TurnStarted {
+                        actor: Actor::Player,
+                        turn,
+                    } if *turn == starting_turn + 1
+                ))
+                .count(),
+            1
         );
     }
 

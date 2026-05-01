@@ -379,6 +379,7 @@ impl CombatState {
     pub(crate) fn apply_enemy_end_turn_only(&mut self) -> Vec<CombatEvent> {
         self.process_commands([
             CombatCommand::ApplyEndOfTurn(Actor::Enemy(0)),
+            CombatCommand::EndTurn(Actor::Enemy(0)),
             CombatCommand::CheckOutcome,
         ])
     }
@@ -2165,6 +2166,18 @@ mod tests {
         state.player.fighter.hp = 40;
         state.player.fighter.max_hp = 40;
         state
+    }
+
+    #[test]
+    fn enemy_end_turn_only_emits_turn_ended() {
+        let mut state = blank_state();
+        state.phase = TurnPhase::EnemyTurn;
+
+        let events = state.apply_enemy_end_turn_only();
+
+        assert!(events.contains(&CombatEvent::TurnEnded {
+            actor: Actor::Enemy(0),
+        }));
     }
 
     #[test]

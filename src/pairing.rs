@@ -10,6 +10,8 @@ const PAIR_TRANSPORT_PREFIX: &str = "MZQ1";
 const PAIR_CODEC_PLAIN: char = 'P';
 const PAIR_CODEC_COMPRESSED: char = 'Z';
 const MAX_PAIRING_SIZE: usize = 64 * 1024;
+const MAX_TRANSPORT_PARTS: usize = 2048;
+const MAX_TRANSPORT_CHUNK_LEN: usize = 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +180,12 @@ impl PairingBridge {
 
     fn submit_transport_text(&mut self, raw: &str) -> Result<TransportSubmitResult, String> {
         if let Some(frame) = parse_transport_frame(raw)? {
+            if frame.count == 0 || frame.count > MAX_TRANSPORT_PARTS {
+                return Err("QR frame count out of range.".to_string());
+            }
+            if frame.chunk.chars().count() > MAX_TRANSPORT_CHUNK_LEN {
+                return Err("QR chunk length out of range.".to_string());
+            }
             let assembly = self
                 .assembly
                 .take()
@@ -246,6 +254,12 @@ fn pair_prefix_metadata(prefix: &str) -> Option<(&'static str, &'static str, u8)
         PAIR_PREFIX_ANSWER_V1 => Some(("mazocarta_answer", "answer", 1)),
         _ => None,
     }
+}
+
+fn has_forbidden_invitation_id_char(invitation_id: &str) -> bool {
+    invitation_id
+        .chars()
+        .any(|ch| ch == ':' || ch.is_control() || ch.is_whitespace())
 }
 
 fn normalize_pair_payload_text(raw: &str) -> &str {
@@ -343,6 +357,9 @@ pub(crate) fn encode_pair_payload_from_json(raw_json: &str) -> Result<String, St
     if invitation_id.is_empty() || payload.description.sdp.is_empty() {
         return Err("Invalid pairing payload.".to_string());
     }
+    if has_forbidden_invitation_id_char(&invitation_id) {
+        return Err("Invalid invitation id.".to_string());
+    }
     encode_pair_payload_v1(&payload.kind, &invitation_id, &payload.description.sdp)
 }
 
@@ -431,10 +448,13 @@ fn build_transport_frames(raw_code: &str, chunk_chars: usize) -> Result<Vec<Stri
     let (kind, _, _) =
         pair_prefix_metadata(prefix).ok_or_else(|| "Unrecognized pairing payload.".to_string())?;
     let frame_kind = if kind == "mazocarta_offer" { 'O' } else { 'R' };
-    let chunk_chars = chunk_chars.max(1);
+    let chunk_chars = chunk_chars.clamp(1, MAX_TRANSPORT_CHUNK_LEN);
     let chars: Vec<char> = raw_code.chars().collect();
     let mut frames = Vec::new();
     let total = chars.len().div_ceil(chunk_chars);
+    if total > MAX_TRANSPORT_PARTS {
+        return Err("Pairing payload has too many QR frames.".to_string());
+    }
     for index in 0..total {
         let start = index * chunk_chars;
         let end = ((index + 1) * chunk_chars).min(chars.len());
@@ -496,7 +516,10 @@ fn parse_transport_frame(raw: &str) -> Result<Option<TransportFrame>, String> {
         || !matches!(kind, 'O' | 'R')
         || index == 0
         || count == 0
+        || count > MAX_TRANSPORT_PARTS
         || index > count
+        || chunk_len == 0
+        || chunk_len > MAX_TRANSPORT_CHUNK_LEN
     {
         return Err("Malformed QR transport frame.".to_string());
     }
@@ -571,6 +594,26 @@ a=max-message-size:262144\r\n"
         assert_eq!(payload["invitationId"], "ABCD1234");
         assert_eq!(payload["description"]["type"], "offer");
         assert_eq!(payload["description"]["sdp"], sample_offer_sdp());
+    }
+
+    #[test]
+    fn pairing_payload_rejects_forbidden_invitation_id_characters() {
+        for invitation_id in ["BAD:ID", "BAD ID", "BAD\nID", "BAD\tID"] {
+            let raw = serde_json::json!({
+                "kind": "mazocarta_offer",
+                "invitationId": invitation_id,
+                "description": {
+                    "type": "offer",
+                    "sdp": sample_offer_sdp(),
+                }
+            })
+            .to_string();
+
+            assert_eq!(
+                encode_pair_payload_from_json(&raw).expect_err("invalid invitation id"),
+                "Invalid invitation id."
+            );
+        }
     }
 
     #[test]
@@ -736,6 +779,16 @@ a=max-message-size:262144\r\n"
             .expect("parse")
             .expect("frame");
         assert_eq!(frame.chunk, raw_code);
+    }
+
+    #[test]
+    fn transport_frames_reject_untrusted_sizes() {
+        let oversized_count = format!("MZQ1:ABCD1234:D:O:1:{}:1:X", MAX_TRANSPORT_PARTS + 1);
+        assert!(parse_transport_frame(&oversized_count).is_err());
+
+        let oversized_chunk = format!("MZQ1:ABCD1234:D:O:1:1:{}:X", MAX_TRANSPORT_CHUNK_LEN + 1);
+        assert!(parse_transport_frame(&oversized_chunk).is_err());
+        assert!(parse_transport_frame("MZQ1:ABCD1234:D:O:1:1:0:").is_err());
     }
 
     #[test]
