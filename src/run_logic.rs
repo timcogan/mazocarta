@@ -116,7 +116,7 @@ mod tests {
             ModuleId::SalvageLedger,
             ModuleId::RecoveryMatrix,
         ];
-        dungeon.player_hp = 20;
+        dungeon.player_hp = 18;
         dungeon.player_max_hp = 32;
         dungeon.credits = 9;
 
@@ -127,7 +127,7 @@ mod tests {
             PostVictoryModuleEffects {
                 nanoforge_healed: 4,
                 salvage_applied: true,
-                recovery_healed: 8,
+                recovery_healed: 10,
             }
         );
         assert_eq!(dungeon.player_hp, 32);

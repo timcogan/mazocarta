@@ -11653,12 +11653,8 @@ impl App {
         } else {
             String::from(self.tr("HP Full", "HP al máximo"))
         };
-        let heal_font_size = fit_text_size(
-            self.tr("Recover 20 HP", "Recupera 20 HP"),
-            26.0,
-            (logical_width - 48.0).max(120.0),
-        )
-        .max(18.0);
+        let heal_font_size =
+            fit_text_size(&heal_label, 26.0, (logical_width - 48.0).max(120.0)).max(18.0);
         let heal_insets = tile_insets_for_card_width(220.0);
         let heal_w = (text_width(&heal_label, heal_font_size) + button_pad_x * 2.0)
             .clamp(110.0, (logical_width - gap * 2.0).max(110.0));
@@ -18708,6 +18704,7 @@ fn decode_scene_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::DEFAULT_PLAYER_HP;
     use crate::content::{
         CardArchetype, CardDef, CardTarget, CardTraits, EnemyProfileId, ModuleDef, RewardTier,
         enemy_sprite_def, localized_enemy_name, module_def,
@@ -21854,7 +21851,7 @@ mod tests {
 
     #[test]
     fn rest_pagination_keyboard_navigation_updates_visible_selection() {
-        let mut app = active_rest_fixture(dense_rest_test_deck(), 64);
+        let mut app = active_rest_fixture(dense_rest_test_deck(), DEFAULT_PLAYER_HP);
         app.resize(320.0, 568.0);
 
         app.key_down(39);
@@ -24773,7 +24770,7 @@ mod tests {
         assert!(banner_frame.contains("|label|Enemy Turn"));
 
         advance_until(&mut app, |app| {
-            app.combat_feedback.displayed.player.hp < 32
+            app.combat_feedback.displayed.player.hp < app.combat.player.fighter.max_hp
                 && String::from_utf8(app.frame.clone())
                     .is_ok_and(|frame| frame.contains(&format!("|left|{}|body|", TERM_PINK_SOFT)))
         });
@@ -26694,7 +26691,7 @@ mod tests {
 
         assert_eq!(summary.total_levels, 3);
         assert_eq!(summary.player_hp, 27);
-        assert_eq!(summary.player_max_hp, 64);
+        assert_eq!(summary.player_max_hp, DEFAULT_PLAYER_HP);
         assert_eq!(summary.deck_count, app.dungeon.as_ref().unwrap().deck.len());
         assert_eq!(
             summary.act_names,
@@ -26781,7 +26778,7 @@ mod tests {
         assert_eq!(summary.failure_room, Some(RoomKind::Elite));
         assert_eq!(summary.failure_enemy, expected_enemy);
         assert_eq!(summary.player_hp, 0);
-        assert_eq!(summary.player_max_hp, 64);
+        assert_eq!(summary.player_max_hp, DEFAULT_PLAYER_HP);
         assert_eq!(
             defeat_by_text(&summary, Language::English),
             format!("by {}", expected_enemy.unwrap())

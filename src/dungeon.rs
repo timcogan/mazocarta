@@ -338,7 +338,6 @@ impl DungeonRun {
             .map(|node| node.kind)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn rest_heal_cap() -> i32 {
         REST_HEAL
     }

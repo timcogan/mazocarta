@@ -3483,6 +3483,38 @@ mod tests {
     }
 
     #[test]
+    fn localized_enemy_intents_match_english() {
+        let profiles = [
+            EnemyProfileId::ScoutDrone,
+            EnemyProfileId::NeedlerDrone,
+            EnemyProfileId::RampartDrone,
+            EnemyProfileId::SpineSentry,
+            EnemyProfileId::PentaCore,
+            EnemyProfileId::VoltMantis,
+            EnemyProfileId::ShardWeaver,
+            EnemyProfileId::PrismArray,
+            EnemyProfileId::GlassBishop,
+            EnemyProfileId::HexarchCore,
+            EnemyProfileId::NullRaider,
+            EnemyProfileId::RiftStalker,
+            EnemyProfileId::SiegeSpider,
+            EnemyProfileId::RiftBastion,
+            EnemyProfileId::HeptarchCore,
+        ];
+
+        for profile in profiles {
+            for index in 0..3 {
+                let english = enemy_intent(profile, index);
+                let mut localized = localized_enemy_intent(profile, index, Language::Spanish);
+                localized.name = english.name;
+                localized.summary = english.summary;
+
+                assert_eq!(localized, english, "{profile:?} intent {index}");
+            }
+        }
+    }
+
+    #[test]
     fn enemy_profiles_expose_distinct_names_and_intents() {
         let act_one = enemy_intent(EnemyProfileId::PentaCore, 0);
         let act_three = enemy_intent(EnemyProfileId::HeptarchCore, 0);
