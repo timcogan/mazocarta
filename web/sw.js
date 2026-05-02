@@ -30,10 +30,12 @@ const OPTIONAL_PRECACHE_URLS = [
   new URL("./icons/combat/energy.png", self.location.href).toString(),
   new URL("./icons/combat/deck.png", self.location.href).toString(),
   new URL("./icons/combat/arrow.png", self.location.href).toString(),
-  new URL("./manifest.webmanifest?v=2", self.location.href).toString(),
-  new URL("./apple-touch-icon.png?v=2", self.location.href).toString(),
-  new URL("./icons/icon-192.png?v=2", self.location.href).toString(),
-  new URL("./icons/icon-512.png?v=2", self.location.href).toString(),
+  new URL("./manifest.webmanifest?v=3", self.location.href).toString(),
+  new URL("./apple-touch-icon.png?v=3", self.location.href).toString(),
+  new URL("./icons/icon-any-192.png?v=3", self.location.href).toString(),
+  new URL("./icons/icon-any-512.png?v=3", self.location.href).toString(),
+  new URL("./icons/icon-maskable-192.png?v=3", self.location.href).toString(),
+  new URL("./icons/icon-maskable-512.png?v=3", self.location.href).toString(),
 ];
 
 self.addEventListener("install", (event) => {

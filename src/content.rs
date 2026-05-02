@@ -173,7 +173,7 @@ pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
         ModuleId::Nanoforge => ModuleDef {
             id,
             name: "Nanoforge",
-            description: "After each victory, recover 2 HP.",
+            description: "After each victory, recover 4 HP.",
         },
         ModuleId::CapacitorBank => ModuleDef {
             id,
@@ -203,7 +203,7 @@ pub(crate) fn module_def(id: ModuleId) -> ModuleDef {
         ModuleId::RecoveryMatrix => ModuleDef {
             id,
             name: "Recovery Matrix",
-            description: "After each victory, recover 5 HP.",
+            description: "After each victory, recover 10 HP.",
         },
     }
 }
@@ -298,7 +298,7 @@ pub(crate) fn event_choice_effect(
             _ => 24,
         })),
         (EventId::SalvageCache, 1) => Some(EventChoiceEffect::LoseHpGainCredits {
-            lose_hp: 6,
+            lose_hp: 12,
             gain_credits: match level {
                 1 => 28,
                 2 => 34,
@@ -307,21 +307,21 @@ pub(crate) fn event_choice_effect(
         }),
         (EventId::RelayTerminal, 0) => Some(EventChoiceEffect::AddCard(CardId::CoverPulse)),
         (EventId::RelayTerminal, 1) => Some(EventChoiceEffect::LoseHpAddCard {
-            lose_hp: 4,
+            lose_hp: 8,
             card: CardId::TacticalBurst,
         }),
         (EventId::ClinicPod, 0) => Some(EventChoiceEffect::Heal(match level {
-            1 => 8,
-            2 => 10,
-            _ => 12,
+            1 => 16,
+            2 => 20,
+            _ => 24,
         })),
         (EventId::ClinicPod, 1) => Some(EventChoiceEffect::LoseHpGainMaxHp {
-            lose_hp: 5,
-            gain_max_hp: 4,
+            lose_hp: 10,
+            gain_max_hp: 8,
         }),
         (EventId::ExchangeConsole, 0) => Some(EventChoiceEffect::GainCredits(22)),
         (EventId::ExchangeConsole, 1) => Some(EventChoiceEffect::LoseHpGainCredits {
-            lose_hp: 5,
+            lose_hp: 10,
             gain_credits: 36,
         }),
         (EventId::PrototypeRack, 0) => Some(EventChoiceEffect::AddCard(match level {
@@ -330,17 +330,17 @@ pub(crate) fn event_choice_effect(
             _ => CardId::FortressMatrix,
         })),
         (EventId::PrototypeRack, 1) => Some(EventChoiceEffect::LoseHpAddCard {
-            lose_hp: 5,
+            lose_hp: 10,
             card: match level {
                 1 => CardId::TacticalBurst,
                 2 => CardId::VectorLock,
                 _ => CardId::ZeroPoint,
             },
         }),
-        (EventId::CoolingVault, 0) => Some(EventChoiceEffect::Heal(12)),
+        (EventId::CoolingVault, 0) => Some(EventChoiceEffect::Heal(24)),
         (EventId::CoolingVault, 1) => Some(EventChoiceEffect::LoseHpGainMaxHp {
-            lose_hp: 6,
-            gain_max_hp: 5,
+            lose_hp: 12,
+            gain_max_hp: 10,
         }),
         _ => None,
     }
@@ -424,7 +424,7 @@ pub(crate) fn localized_module_description(id: ModuleId, language: Language) -> 
             "Al comienzo de cada combate, ganas Enfoque +1.",
         ),
         ModuleId::Nanoforge => {
-            localized_text(language, english, "Tras cada victoria, recupera 2 HP.")
+            localized_text(language, english, "Tras cada victoria, recupera 4 HP.")
         }
         ModuleId::CapacitorBank => {
             localized_text(language, english, "Comienzas cada combate con Impulso +1.")
@@ -450,7 +450,7 @@ pub(crate) fn localized_module_description(id: ModuleId, language: Language) -> 
             "Al comienzo de cada combate, aplica Enfoque -1 a todos los enemigos.",
         ),
         ModuleId::RecoveryMatrix => {
-            localized_text(language, english, "Tras cada victoria, recupera 5 HP.")
+            localized_text(language, english, "Tras cada victoria, recupera 10 HP.")
         }
     }
 }
@@ -671,20 +671,20 @@ pub(crate) fn localized_enemy_intent(
 
     let mut intent = enemy_intent(profile, index);
     let translated = match (profile, index % 3) {
-        (EnemyProfileId::ScoutDrone, 0) => ("Aguja de Choque", "Inflige 5 de daño."),
-        (EnemyProfileId::ScoutDrone, 1) => ("Fuego Cruzado", "Inflige 3 de daño dos veces."),
+        (EnemyProfileId::ScoutDrone, 0) => ("Aguja de Choque", "Inflige 9 de daño."),
+        (EnemyProfileId::ScoutDrone, 1) => ("Fuego Cruzado", "Inflige 5 de daño dos veces."),
         (EnemyProfileId::ScoutDrone, _) => {
             ("Ciclo de Refuerzo", "Gana 4 de Escudo. Gana Enfoque +1.")
         }
         (EnemyProfileId::NeedlerDrone, 0) => {
-            ("Toque de Aguijón", "Inflige 4 de daño. Aplica Sangrado 1.")
+            ("Toque de Aguijón", "Inflige 7 de daño. Aplica Sangrado 1.")
         }
-        (EnemyProfileId::NeedlerDrone, 1) => ("Picadura Múltiple", "Inflige 2 de daño tres veces."),
+        (EnemyProfileId::NeedlerDrone, 1) => ("Picadura Múltiple", "Inflige 4 de daño tres veces."),
         (EnemyProfileId::NeedlerDrone, _) => ("Estabilizar", "Gana 4 de Escudo."),
-        (EnemyProfileId::RampartDrone, 0) => ("Placa de Choque", "Inflige 8 de daño."),
+        (EnemyProfileId::RampartDrone, 0) => ("Placa de Choque", "Inflige 14 de daño."),
         (EnemyProfileId::RampartDrone, 1) => (
             "Mordaza de Presión",
-            "Inflige 5 de daño. Aplica Enfoque -1.",
+            "Inflige 9 de daño. Aplica Enfoque -1.",
         ),
         (EnemyProfileId::RampartDrone, _) => (
             "Muro Reforzado",
@@ -692,75 +692,75 @@ pub(crate) fn localized_enemy_intent(
         ),
         (EnemyProfileId::SpineSentry, 0) => (
             "Bastidor de Púas",
-            "Inflige 4 de daño dos veces. Aplica Sangrado 1.",
+            "Inflige 7 de daño dos veces. Aplica Sangrado 1.",
         ),
         (EnemyProfileId::SpineSentry, 1) => (
             "Fijación de Blanco",
-            "Inflige 7 de daño. Aplica Impulso -1.",
+            "Inflige 12 de daño. Aplica Impulso -1.",
         ),
         (EnemyProfileId::SpineSentry, _) => ("Blindaje de Púas", "Gana 9 de Escudo."),
         (EnemyProfileId::PentaCore, 0) => (
             "Prisma de Fijación",
-            "Inflige 7 de daño. Aplica Impulso -1.",
+            "Inflige 12 de daño. Aplica Impulso -1.",
         ),
         (EnemyProfileId::PentaCore, 1) => (
             "Baluarte Penta",
             "Gana 10 de Escudo. El siguiente golpe aplica Sangrado 2.",
         ),
-        (EnemyProfileId::PentaCore, _) => ("Trama Fragmentada", "Inflige 4 de daño tres veces."),
-        (EnemyProfileId::VoltMantis, 0) => ("Corte de Arco", "Inflige 8 de daño."),
-        (EnemyProfileId::VoltMantis, 1) => ("Látigo de Arco", "Inflige 4 de daño dos veces."),
+        (EnemyProfileId::PentaCore, _) => ("Trama Fragmentada", "Inflige 7 de daño tres veces."),
+        (EnemyProfileId::VoltMantis, 0) => ("Corte de Arco", "Inflige 14 de daño."),
+        (EnemyProfileId::VoltMantis, 1) => ("Látigo de Arco", "Inflige 7 de daño dos veces."),
         (EnemyProfileId::VoltMantis, _) => {
             ("Caparazón de Impulso", "Gana 7 de Escudo. Gana Impulso +1.")
         }
         (EnemyProfileId::ShardWeaver, 0) => {
-            ("Corte de Vidrio", "Inflige 6 de daño. Aplica Impulso -1.")
+            ("Corte de Vidrio", "Inflige 11 de daño. Aplica Impulso -1.")
         }
         (EnemyProfileId::ShardWeaver, 1) => (
             "Andanada Reflejada",
-            "Inflige 3 de daño dos veces. Gana 4 de Escudo.",
+            "Inflige 5 de daño dos veces. Gana 4 de Escudo.",
         ),
         (EnemyProfileId::ShardWeaver, _) => ("Reenfocar", "Gana 8 de Escudo. Aplica Ritmo -1."),
         (EnemyProfileId::PrismArray, 0) => {
-            ("Mordida Prisma", "Inflige 7 de daño. Aplica Impulso -1.")
+            ("Mordida Prisma", "Inflige 12 de daño. Aplica Impulso -1.")
         }
-        (EnemyProfileId::PrismArray, 1) => ("Salva Iónica", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::PrismArray, 1) => ("Salva Iónica", "Inflige 9 de daño dos veces."),
         (EnemyProfileId::PrismArray, _) => ("Guardia Prismática", "Gana 10 de Escudo."),
         (EnemyProfileId::GlassBishop, 0) => {
-            ("Rayo Astillado", "Inflige 8 de daño. Aplica Impulso -1.")
+            ("Rayo Astillado", "Inflige 14 de daño. Aplica Impulso -1.")
         }
         (EnemyProfileId::GlassBishop, 1) => (
             "Halo Partido",
-            "Inflige 5 de daño dos veces. Gana 4 de Escudo.",
+            "Inflige 9 de daño dos veces. Gana 4 de Escudo.",
         ),
         (EnemyProfileId::GlassBishop, _) => {
             ("Barrera Facetada", "Gana 10 de Escudo. Aplica Sangrado 1.")
         }
         (EnemyProfileId::HexarchCore, 0) => ("Coraza Hex", "Gana 12 de Escudo. Aplica Enfoque -2."),
-        (EnemyProfileId::HexarchCore, 1) => ("Ruptor Hex", "Inflige 15 de daño."),
-        (EnemyProfileId::HexarchCore, _) => ("Andanada Hex", "Inflige 5 de daño tres veces."),
-        (EnemyProfileId::NullRaider, 0) => ("Disparo Null", "Inflige 10 de daño."),
-        (EnemyProfileId::NullRaider, 1) => ("Ráfaga en Cadena", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::HexarchCore, 1) => ("Ruptor Hex", "Inflige 26 de daño."),
+        (EnemyProfileId::HexarchCore, _) => ("Andanada Hex", "Inflige 9 de daño tres veces."),
+        (EnemyProfileId::NullRaider, 0) => ("Disparo Null", "Inflige 18 de daño."),
+        (EnemyProfileId::NullRaider, 1) => ("Ráfaga en Cadena", "Inflige 9 de daño dos veces."),
         (EnemyProfileId::NullRaider, _) => ("Guardia Null", "Gana 9 de Escudo."),
         (EnemyProfileId::RiftStalker, 0) => (
             "Garra de la Grieta",
-            "Inflige 9 de daño. Aplica Sangrado 1.",
+            "Inflige 16 de daño. Aplica Sangrado 1.",
         ),
-        (EnemyProfileId::RiftStalker, 1) => ("Salva Desgarradora", "Inflige 5 de daño dos veces."),
+        (EnemyProfileId::RiftStalker, 1) => ("Salva Desgarradora", "Inflige 9 de daño dos veces."),
         (EnemyProfileId::RiftStalker, _) => {
             ("Ancla de Fijación", "Gana 10 de Escudo. Aplica Enfoque -1.")
         }
-        (EnemyProfileId::SiegeSpider, 0) => ("Martillo Baluarte", "Inflige 11 de daño."),
+        (EnemyProfileId::SiegeSpider, 0) => ("Martillo Baluarte", "Inflige 19 de daño."),
         (EnemyProfileId::SiegeSpider, 1) => {
-            ("Andanada de Fijación", "Inflige 6 de daño dos veces.")
+            ("Andanada de Fijación", "Inflige 11 de daño dos veces.")
         }
         (EnemyProfileId::SiegeSpider, _) => {
             ("Sello Baluarte", "Gana 12 de Escudo. Aplica Enfoque -1.")
         }
-        (EnemyProfileId::RiftBastion, 0) => ("Martillo Gravitatorio", "Inflige 12 de daño."),
+        (EnemyProfileId::RiftBastion, 0) => ("Martillo Gravitatorio", "Inflige 21 de daño."),
         (EnemyProfileId::RiftBastion, 1) => (
             "Malla de Colapso",
-            "Inflige 6 de daño dos veces. Aplica Impulso -1.",
+            "Inflige 11 de daño dos veces. Aplica Impulso -1.",
         ),
         (EnemyProfileId::RiftBastion, _) => (
             "Campo de Anclaje",
@@ -772,9 +772,9 @@ pub(crate) fn localized_enemy_intent(
         ),
         (EnemyProfileId::HeptarchCore, 1) => (
             "Colapso de Matriz",
-            "Inflige 8 de daño dos veces. Aplica Impulso -1.",
+            "Inflige 14 de daño dos veces. Aplica Impulso -1.",
         ),
-        (EnemyProfileId::HeptarchCore, _) => ("Quebracoronas", "Inflige 20 de daño."),
+        (EnemyProfileId::HeptarchCore, _) => ("Quebracoronas", "Inflige 35 de daño."),
     };
     intent.name = translated.0;
     intent.summary = translated.1;
@@ -2430,8 +2430,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
     match (profile, index % 3) {
         (EnemyProfileId::ScoutDrone, 0) => intent_def(
             "Shock Needle",
-            "Deal 5 damage.",
-            5,
+            "Deal 9 damage.",
+            9,
             1,
             0,
             0,
@@ -2445,8 +2445,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::ScoutDrone, 1) => intent_def(
             "Crossfire",
-            "Deal 3 damage twice.",
-            3,
+            "Deal 5 damage twice.",
+            5,
             2,
             0,
             0,
@@ -2475,8 +2475,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::NeedlerDrone, 0) => intent_def(
             "Needle Tap",
-            "Deal 4 damage. Apply Bleed 1.",
-            4,
+            "Deal 7 damage. Apply Bleed 1.",
+            7,
             1,
             0,
             0,
@@ -2490,8 +2490,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::NeedlerDrone, 1) => intent_def(
             "Split Sting",
-            "Deal 2 damage three times.",
-            2,
+            "Deal 4 damage three times.",
+            4,
             3,
             0,
             0,
@@ -2520,8 +2520,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RampartDrone, 0) => intent_def(
             "Ram Plate",
-            "Deal 8 damage.",
-            8,
+            "Deal 14 damage.",
+            14,
             1,
             0,
             0,
@@ -2535,8 +2535,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RampartDrone, 1) => intent_def(
             "Pressure Clamp",
-            "Deal 5 damage. Apply Focus -1.",
-            5,
+            "Deal 9 damage. Apply Focus -1.",
+            9,
             1,
             0,
             0,
@@ -2565,8 +2565,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::SpineSentry, 0) => intent_def(
             "Spine Rack",
-            "Deal 4 damage twice. Apply Bleed 1.",
-            4,
+            "Deal 7 damage twice. Apply Bleed 1.",
+            7,
             2,
             0,
             0,
@@ -2580,8 +2580,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::SpineSentry, 1) => intent_def(
             "Target Lock",
-            "Deal 7 damage. Apply Momentum -1.",
-            7,
+            "Deal 12 damage. Apply Momentum -1.",
+            12,
             1,
             0,
             0,
@@ -2610,8 +2610,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::PentaCore, 0) => intent_def(
             "Target Prism",
-            "Deal 7 damage. Apply Momentum -1.",
-            7,
+            "Deal 12 damage. Apply Momentum -1.",
+            12,
             1,
             0,
             0,
@@ -2640,8 +2640,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::PentaCore, _) => intent_def(
             "Split Lattice",
-            "Deal 4 damage three times.",
-            4,
+            "Deal 7 damage three times.",
+            7,
             3,
             0,
             0,
@@ -2653,13 +2653,25 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
             0,
             0,
         ),
-        (EnemyProfileId::VoltMantis, 0) => {
-            intent_def("Arc Cut", "Deal 8 damage.", 8, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-        }
+        (EnemyProfileId::VoltMantis, 0) => intent_def(
+            "Arc Cut",
+            "Deal 14 damage.",
+            14,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
         (EnemyProfileId::VoltMantis, 1) => intent_def(
             "Arc Lash",
-            "Deal 4 damage twice.",
-            4,
+            "Deal 7 damage twice.",
+            7,
             2,
             0,
             0,
@@ -2688,8 +2700,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::ShardWeaver, 0) => intent_def(
             "Glass Cut",
-            "Deal 6 damage. Apply Momentum -1.",
-            6,
+            "Deal 11 damage. Apply Momentum -1.",
+            11,
             1,
             0,
             0,
@@ -2703,8 +2715,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::ShardWeaver, 1) => intent_def(
             "Mirror Volley",
-            "Deal 3 damage twice. Gain 4 Shield.",
-            3,
+            "Deal 5 damage twice. Gain 4 Shield.",
+            5,
             2,
             4,
             0,
@@ -2733,8 +2745,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::PrismArray, 0) => intent_def(
             "Prism Bite",
-            "Deal 7 damage. Apply Momentum -1.",
-            7,
+            "Deal 12 damage. Apply Momentum -1.",
+            12,
             1,
             0,
             0,
@@ -2748,8 +2760,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::PrismArray, 1) => intent_def(
             "Ion Salvo",
-            "Deal 5 damage twice.",
-            5,
+            "Deal 9 damage twice.",
+            9,
             2,
             0,
             0,
@@ -2778,8 +2790,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::GlassBishop, 0) => intent_def(
             "Shatter Beam",
-            "Deal 8 damage. Apply Momentum -1.",
-            8,
+            "Deal 14 damage. Apply Momentum -1.",
+            14,
             1,
             0,
             0,
@@ -2793,8 +2805,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::GlassBishop, 1) => intent_def(
             "Split Halo",
-            "Deal 5 damage twice. Gain 4 Shield.",
-            5,
+            "Deal 9 damage twice. Gain 4 Shield.",
+            9,
             2,
             4,
             0,
@@ -2838,8 +2850,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::HexarchCore, 1) => intent_def(
             "Hex Breaker",
-            "Deal 15 damage.",
-            15,
+            "Deal 26 damage.",
+            26,
             1,
             0,
             0,
@@ -2853,8 +2865,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::HexarchCore, _) => intent_def(
             "Hex Volley",
-            "Deal 5 damage three times.",
-            5,
+            "Deal 9 damage three times.",
+            9,
             3,
             0,
             0,
@@ -2868,8 +2880,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::NullRaider, 0) => intent_def(
             "Null Shot",
-            "Deal 10 damage.",
-            10,
+            "Deal 18 damage.",
+            18,
             1,
             0,
             0,
@@ -2883,8 +2895,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::NullRaider, 1) => intent_def(
             "Chain Burst",
-            "Deal 5 damage twice.",
-            5,
+            "Deal 9 damage twice.",
+            9,
             2,
             0,
             0,
@@ -2913,8 +2925,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RiftStalker, 0) => intent_def(
             "Rift Claw",
-            "Deal 9 damage. Apply Bleed 1.",
-            9,
+            "Deal 16 damage. Apply Bleed 1.",
+            16,
             1,
             0,
             0,
@@ -2928,8 +2940,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RiftStalker, 1) => intent_def(
             "Rend Salvo",
-            "Deal 5 damage twice.",
-            5,
+            "Deal 9 damage twice.",
+            9,
             2,
             0,
             0,
@@ -2958,8 +2970,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::SiegeSpider, 0) => intent_def(
             "Bulwark Hammer",
-            "Deal 11 damage.",
-            11,
+            "Deal 19 damage.",
+            19,
             1,
             0,
             0,
@@ -2973,8 +2985,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::SiegeSpider, 1) => intent_def(
             "Lock Volley",
-            "Deal 6 damage twice.",
-            6,
+            "Deal 11 damage twice.",
+            11,
             2,
             0,
             0,
@@ -3003,8 +3015,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RiftBastion, 0) => intent_def(
             "Grav Hammer",
-            "Deal 12 damage.",
-            12,
+            "Deal 21 damage.",
+            21,
             1,
             0,
             0,
@@ -3018,8 +3030,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::RiftBastion, 1) => intent_def(
             "Collapse Grid",
-            "Deal 6 damage twice. Apply Momentum -1.",
-            6,
+            "Deal 11 damage twice. Apply Momentum -1.",
+            11,
             2,
             0,
             0,
@@ -3063,8 +3075,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::HeptarchCore, 1) => intent_def(
             "Array Collapse",
-            "Deal 8 damage twice. Apply Momentum -1.",
-            8,
+            "Deal 14 damage twice. Apply Momentum -1.",
+            14,
             2,
             0,
             0,
@@ -3078,8 +3090,8 @@ pub(crate) fn enemy_intent(profile: EnemyProfileId, index: usize) -> EnemyIntent
         ),
         (EnemyProfileId::HeptarchCore, _) => intent_def(
             "Crown Breaker",
-            "Deal 20 damage.",
-            20,
+            "Deal 35 damage.",
+            35,
             1,
             0,
             0,
@@ -3101,6 +3113,23 @@ mod tests {
     const TEST_PRIMARY_SEED: u64 = 0x0BAD_5EED;
     const TEST_ALT_SEED: u64 = 0xDEAD_BEEF;
     const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
+    const TEST_ENEMY_PROFILES: &[EnemyProfileId] = &[
+        EnemyProfileId::ScoutDrone,
+        EnemyProfileId::NeedlerDrone,
+        EnemyProfileId::RampartDrone,
+        EnemyProfileId::SpineSentry,
+        EnemyProfileId::PentaCore,
+        EnemyProfileId::VoltMantis,
+        EnemyProfileId::ShardWeaver,
+        EnemyProfileId::PrismArray,
+        EnemyProfileId::GlassBishop,
+        EnemyProfileId::HexarchCore,
+        EnemyProfileId::NullRaider,
+        EnemyProfileId::RiftStalker,
+        EnemyProfileId::SiegeSpider,
+        EnemyProfileId::RiftBastion,
+        EnemyProfileId::HeptarchCore,
+    ];
 
     #[test]
     fn event_order_is_deterministic_and_non_repeating_within_each_level() {
@@ -3146,7 +3175,7 @@ mod tests {
         assert_eq!(
             event_choice_effect(EventId::PrototypeRack, 1, 3),
             Some(EventChoiceEffect::LoseHpAddCard {
-                lose_hp: 5,
+                lose_hp: 10,
                 card: CardId::ZeroPoint,
             })
         );
@@ -3161,7 +3190,7 @@ mod tests {
         assert_eq!(
             event_choice_effect(EventId::RelayTerminal, 1, 3),
             Some(EventChoiceEffect::LoseHpAddCard {
-                lose_hp: 4,
+                lose_hp: 8,
                 card: CardId::TacticalBurst,
             })
         );
@@ -3172,19 +3201,19 @@ mod tests {
         assert_eq!(
             event_choice_effect(EventId::ExchangeConsole, 1, 1),
             Some(EventChoiceEffect::LoseHpGainCredits {
-                lose_hp: 5,
+                lose_hp: 10,
                 gain_credits: 36,
             })
         );
         assert_eq!(
             event_choice_effect(EventId::CoolingVault, 0, 3),
-            Some(EventChoiceEffect::Heal(12))
+            Some(EventChoiceEffect::Heal(24))
         );
         assert_eq!(
             event_choice_effect(EventId::CoolingVault, 1, 2),
             Some(EventChoiceEffect::LoseHpGainMaxHp {
-                lose_hp: 6,
-                gain_max_hp: 5,
+                lose_hp: 12,
+                gain_max_hp: 10,
             })
         );
     }
@@ -3221,7 +3250,7 @@ mod tests {
         );
         assert_eq!(
             localized_event_choice_body(EventId::RelayTerminal, 1, 2, Language::Spanish),
-            Some("Pierde 4 HP. Añade Impulso Táctico a tu mazo.".to_string())
+            Some("Pierde 8 HP. Añade Impulso Táctico a tu mazo.".to_string())
         );
         assert_eq!(
             localized_event_choice_body(EventId::ExchangeConsole, 0, 2, Language::English),
@@ -3396,27 +3425,27 @@ mod tests {
         assert_eq!(mark.cost, 0);
         assert_eq!(
             mark.description,
-            "Apply Momentum -1. If target has Bleed, gain 4 Shield."
+            "Apply Momentum -1. If target has Bleed, gain 6 Shield."
         );
         assert_eq!(brace.target, CardTarget::SelfOnly);
         assert_eq!(
             brace.description,
-            "Gain 6 Shield. If you already have Shield, draw 1."
+            "Gain 10 Shield. If you already have Shield, draw 1."
         );
         assert_eq!(
             fault.description,
-            "Deal 5 damage. If target Focus < 0, gain Focus +1."
+            "Deal 7 damage. If target Focus < 0, gain Focus +1."
         );
         assert_eq!(sever.cost, 2);
         assert_eq!(sever.target, CardTarget::Enemy);
         assert_eq!(
             lockbreaker.description,
-            "Deal 6 damage. If target Focus < 0, apply Focus -1 and gain 6 Shield."
+            "Deal 8 damage. If target Focus < 0, apply Focus -1 and gain 10 Shield."
         );
         assert_eq!(counter.target, CardTarget::Enemy);
         assert_eq!(
             counter.description,
-            "Deal 6 damage. If target Focus < 0, gain 1 Energy."
+            "Deal 8 damage. If target Focus < 0, gain 1 Energy."
         );
         assert_eq!(terminal.cost, 2);
         assert_eq!(terminal.target, CardTarget::Enemy);
@@ -3438,15 +3467,15 @@ mod tests {
         );
         assert_eq!(
             localized_card_def(CardId::BraceCircuit, Language::Spanish).description,
-            "Gana 6 de Escudo. Si ya tienes Escudo, roba 1."
+            "Gana 10 de Escudo. Si ya tienes Escudo, roba 1."
         );
         assert_eq!(
             localized_card_def(CardId::CounterLatticePlus, Language::Spanish).description,
-            "Inflige 8 de daño. Si el objetivo tiene Enfoque < 0, gana 1 de Energía."
+            "Inflige 11 de daño. Si el objetivo tiene Enfoque < 0, gana 1 de Energía."
         );
         assert_eq!(
             localized_card_def(CardId::TerminalLoopPlus, Language::English).description,
-            "Deal 15 damage. If target has Bleed, draw 1. If target Momentum < 0, gain Focus +2."
+            "Deal 20 damage. If target has Bleed, draw 1. If target Momentum < 0, gain Focus +2."
         );
     }
 
@@ -3460,14 +3489,28 @@ mod tests {
         assert_eq!(scout_brace.self_focus, 1);
         assert_eq!(scout_brace.summary, "Gain 4 Shield. Gain Focus +1.");
 
-        assert_eq!(rampart_clamp.damage, 5);
+        assert_eq!(rampart_clamp.damage, 9);
         assert_eq!(rampart_clamp.target_focus, -1);
         assert_eq!(rampart_clamp.target_rhythm, 0);
-        assert_eq!(rampart_clamp.summary, "Deal 5 damage. Apply Focus -1.");
+        assert_eq!(rampart_clamp.summary, "Deal 9 damage. Apply Focus -1.");
 
         assert_eq!(shard_refocus.gain_block, 8);
         assert_eq!(shard_refocus.target_rhythm, -1);
         assert_eq!(shard_refocus.summary, "Gain 8 Shield. Apply Rhythm -1.");
+    }
+
+    #[test]
+    fn localized_enemy_intents_match_english() {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
+            for index in 0..3 {
+                let english = enemy_intent(profile, index);
+                let mut localized = localized_enemy_intent(profile, index, Language::Spanish);
+                localized.name = english.name;
+                localized.summary = english.summary;
+
+                assert_eq!(localized, english, "{profile:?} intent {index}");
+            }
+        }
     }
 
     #[test]
@@ -3497,57 +3540,40 @@ mod tests {
         let hept_close = enemy_intent(EnemyProfileId::HeptarchCore, 2);
 
         assert_eq!(penta_open.name, "Target Prism");
-        assert_eq!(penta_open.damage, 7);
+        assert_eq!(penta_open.damage, 12);
         assert_eq!(penta_open.target_momentum, -1);
         assert_eq!(penta_mid.name, "Penta Bulwark");
         assert_eq!(penta_mid.gain_block, 10);
         assert_eq!(penta_mid.prime_bleed, 2);
         assert_eq!(penta_close.name, "Split Lattice");
-        assert_eq!(penta_close.damage, 4);
+        assert_eq!(penta_close.damage, 7);
         assert_eq!(penta_close.hits, 3);
 
         assert_eq!(hex_open.name, "Hex Shell");
         assert_eq!(hex_open.gain_block, 12);
         assert_eq!(hex_open.target_focus, -2);
         assert_eq!(hex_mid.name, "Hex Breaker");
-        assert_eq!(hex_mid.damage, 15);
+        assert_eq!(hex_mid.damage, 26);
         assert_eq!(hex_close.name, "Hex Volley");
-        assert_eq!(hex_close.damage, 5);
+        assert_eq!(hex_close.damage, 9);
         assert_eq!(hex_close.hits, 3);
 
         assert_eq!(hept_open.name, "Singularity Shell");
         assert_eq!(hept_open.gain_block, 16);
         assert_eq!(hept_open.prime_bleed, 3);
         assert_eq!(hept_mid.name, "Array Collapse");
-        assert_eq!(hept_mid.damage, 8);
+        assert_eq!(hept_mid.damage, 14);
         assert_eq!(hept_mid.hits, 2);
         assert_eq!(hept_mid.target_momentum, -1);
         assert_eq!(hept_close.name, "Crown Breaker");
-        assert_eq!(hept_close.damage, 20);
+        assert_eq!(hept_close.damage, 35);
     }
 
     #[test]
     fn enemy_sprite_layer_codes_are_unique() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
         let mut codes = Vec::new();
 
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             codes.extend(sprite.layers.iter().map(|layer| layer.code));
         }
@@ -3570,25 +3596,7 @@ mod tests {
 
     #[test]
     fn enemy_sprites_are_multilayer_packed_and_resolvable() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             assert!(sprite.layers.len() >= 2);
 
@@ -3602,25 +3610,7 @@ mod tests {
     }
     #[test]
     fn enemy_sprites_fill_at_least_one_canvas_axis() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             let bounds = enemy_sprite_bounds(profile);
             let mut min_x = sprite.width as i32;
@@ -3658,25 +3648,7 @@ mod tests {
 
     #[test]
     fn enemy_sprite_codes_share_their_profile_union_bounds() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let expected = enemy_sprite_bounds(profile);
             for layer in enemy_sprite_def(profile).layers {
                 assert_eq!(enemy_sprite_bounds_by_code(layer.code), Some(expected));

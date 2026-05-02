@@ -347,6 +347,51 @@ test("host and guest can pair and start a LAN session by code", async ({ browser
   }
 });
 
+test("pending multiplayer connection failures show a same-network retry hint", async ({
+  browser,
+}) => {
+  const hostContext = await browser.newContext();
+  const guestContext = await browser.newContext();
+  const hostPage = await hostContext.newPage();
+  const guestPage = await guestContext.newPage();
+  try {
+    await Promise.all([openE2EPage(hostPage), openE2EPage(guestPage)]);
+
+    await hostPage.evaluate(() => window.__MAZOCARTA_E2E__.openHostRoom());
+    await expect
+      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.failPendingConnection()))
+      .toBe(true);
+    await expect
+      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomError()))
+      .toContain("same Wi-Fi or LAN");
+    await expect
+      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+      .toBeGreaterThan(0);
+
+    const hostOffer = await hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode());
+    await guestPage.evaluate(() => window.__MAZOCARTA_E2E__.openGuestRoom());
+    await guestPage.evaluate((code) => window.__MAZOCARTA_E2E__.applyPairCode(code), hostOffer);
+    await expect
+      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
+      .toBe("guest-confirm");
+    await expect
+      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.failPendingConnection()))
+      .toBe(true);
+    await expect
+      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
+      .toBe("guest-scan");
+    await expect
+      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomError()))
+      .toContain("same Wi-Fi or LAN");
+  } finally {
+    await hostContext.close();
+    await guestContext.close();
+  }
+});
+
 test("active host returns directly to the run from the multiplayer button", async ({ browser }) => {
   const session = await pairAndStartLanSession(browser);
   try {

@@ -10,7 +10,6 @@ use crate::dungeon::{DungeonNode, DungeonRun, RoomKind};
 use crate::party::PartyRunState;
 
 const SHOP_PURCHASE_THRESHOLD: i32 = 30;
-const REST_HEAL_CAP: i32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RestChoice {
@@ -482,7 +481,7 @@ fn should_heal_at_rest(dungeon: &DungeonRun) -> bool {
     let worthless_upgrade_threshold = if zero_cost_upgrade { 0 } else { 4 };
 
     hp < 72
-        || dungeon.rest_heal_amount() >= REST_HEAL_CAP
+        || dungeon.rest_heal_amount() >= DungeonRun::rest_heal_cap()
         || (hp < if zero_cost_upgrade { 74 } else { 82 } && upgrade_gain < weak_upgrade_threshold)
         || upgrade_gain <= worthless_upgrade_threshold
 }
@@ -1170,29 +1169,44 @@ fn card_burst_value(card: CardId) -> i32 {
 
 fn card_block_value(card: CardId) -> i32 {
     match card {
-        CardId::GuardStep => 5,
-        CardId::GuardStepPlus => 8,
-        CardId::Slipstream => 2,
-        CardId::SlipstreamPlus => 4,
-        CardId::Reinforce => 8,
-        CardId::ReinforcePlus => 11,
-        CardId::CoverPulse => 6,
-        CardId::CoverPulsePlus => 8,
-        CardId::BarrierField => 10,
-        CardId::BarrierFieldPlus => 13,
-        CardId::AnchorLoop => 14,
-        CardId::AnchorLoopPlus => 17,
-        CardId::OverwatchGrid => 18,
-        CardId::OverwatchGridPlus => 22,
-        CardId::CapacitiveShell => 5,
-        CardId::CapacitiveShellPlus => 8,
-        CardId::ReservoirGuard => 10,
-        CardId::ReservoirGuardPlus => 13,
-        CardId::PatchBay => 6,
-        CardId::PatchBayPlus => 8,
-        CardId::EmergencyPlating => 12,
-        CardId::EmergencyPlatingPlus => 16,
-        CardId::Patch => 5,
+        CardId::GuardStep => 8,
+        CardId::GuardStepPlus => 12,
+        CardId::Slipstream => 3,
+        CardId::SlipstreamPlus => 6,
+        CardId::SignalTapPlus => 5,
+        CardId::Reinforce => 13,
+        CardId::ReinforcePlus => 18,
+        CardId::CoverPulse => 10,
+        CardId::CoverPulsePlus => 13,
+        CardId::BarrierField => 16,
+        CardId::BarrierFieldPlus => 21,
+        CardId::VectorLock => 8,
+        CardId::VectorLockPlus => 10,
+        CardId::AnchorLoop => 22,
+        CardId::AnchorLoopPlus => 27,
+        CardId::FortressMatrix => 26,
+        CardId::FortressMatrixPlus => 32,
+        CardId::OverwatchGrid => 29,
+        CardId::OverwatchGridPlus => 35,
+        CardId::MarkPulse => 6,
+        CardId::MarkPulsePlus => 10,
+        CardId::BraceCircuit => 10,
+        CardId::BraceCircuitPlus => 13,
+        CardId::Lockbreaker => 10,
+        CardId::LockbreakerPlus => 13,
+        CardId::CapacitiveShell => 8,
+        CardId::CapacitiveShellPlus => 13,
+        CardId::ReservoirGuard => 16,
+        CardId::ReservoirGuardPlus => 21,
+        CardId::PatchBay => 10,
+        CardId::PatchBayPlus => 13,
+        CardId::ShrapnelVeil => 6,
+        CardId::ShrapnelVeilPlus => 10,
+        CardId::SuppressionNet => 13,
+        CardId::SuppressionNetPlus => 18,
+        CardId::EmergencyPlating => 19,
+        CardId::EmergencyPlatingPlus => 26,
+        CardId::Patch => 8,
         _ => 0,
     }
 }
@@ -1455,6 +1469,32 @@ pub(crate) fn choose_boss_module_reward(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_block_values_include_shield_granting_cards() {
+        let cases = [
+            (CardId::SignalTapPlus, 5),
+            (CardId::VectorLock, 8),
+            (CardId::VectorLockPlus, 10),
+            (CardId::FortressMatrix, 26),
+            (CardId::FortressMatrixPlus, 32),
+            (CardId::MarkPulse, 6),
+            (CardId::MarkPulsePlus, 10),
+            (CardId::BraceCircuit, 10),
+            (CardId::BraceCircuitPlus, 13),
+            (CardId::Lockbreaker, 10),
+            (CardId::LockbreakerPlus, 13),
+            (CardId::ShrapnelVeil, 6),
+            (CardId::ShrapnelVeilPlus, 10),
+            (CardId::SuppressionNet, 13),
+            (CardId::SuppressionNetPlus, 18),
+        ];
+
+        for (card, block) in cases {
+            assert_eq!(card_block_value(card), block, "{card:?}");
+            assert!(is_defensive_card(card), "{card:?}");
+        }
+    }
 
     #[test]
     fn defensive_fallback_respects_score_threshold() {

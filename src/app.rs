@@ -11653,12 +11653,8 @@ impl App {
         } else {
             String::from(self.tr("HP Full", "HP al máximo"))
         };
-        let heal_font_size = fit_text_size(
-            self.tr("Recover 10 HP", "Recupera 10 HP"),
-            26.0,
-            (logical_width - 48.0).max(120.0),
-        )
-        .max(18.0);
+        let heal_font_size =
+            fit_text_size(&heal_label, 26.0, (logical_width - 48.0).max(120.0)).max(18.0);
         let heal_insets = tile_insets_for_card_width(220.0);
         let heal_w = (text_width(&heal_label, heal_font_size) + button_pad_x * 2.0)
             .clamp(110.0, (logical_width - gap * 2.0).max(110.0));
@@ -18708,6 +18704,7 @@ fn decode_scene_text(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::DEFAULT_PLAYER_HP;
     use crate::content::{
         CardArchetype, CardDef, CardTarget, CardTraits, EnemyProfileId, ModuleDef, RewardTier,
         enemy_sprite_def, localized_enemy_name, module_def,
@@ -19557,7 +19554,7 @@ mod tests {
         let entries = frame_text_entries(&frame);
 
         assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
-            font == "body" && text == "6" && color == TERM_GREEN
+            font == "body" && text == "8" && color == TERM_GREEN
         }));
         assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
             font == "body" && text == "Momentum" && color == TERM_CYAN
@@ -19566,7 +19563,7 @@ mod tests {
             font == "body" && text.starts_with("-2") && color == TERM_CYAN
         }));
         assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
-            font == "body" && text == "5" && color == TERM_BLUE_SOFT
+            font == "body" && text == "8" && color == TERM_BLUE_SOFT
         }));
         assert!(entries.iter().any(|(_, _, _, _, color, font, text)| {
             font == "display" && text == "1" && color == TERM_CYAN
@@ -19647,7 +19644,7 @@ mod tests {
 
         assert_eq!(
             app.combat_card_description(CardId::GuardStep),
-            "Gain 7 Shield."
+            "Gain 11 Shield."
         );
     }
 
@@ -20051,7 +20048,7 @@ mod tests {
             "Deal",
             TERM_GREEN_TEXT
         ));
-        assert!(panel_has_text_with_color(&entries, panel, "5", TERM_GREEN));
+        assert!(panel_has_text_with_color(&entries, panel, "9", TERM_GREEN));
         assert!(panel_has_text_with_color(
             &entries, panel, "damage.", TERM_GREEN,
         ));
@@ -20063,11 +20060,11 @@ mod tests {
         set_primary_enemy_intent(&mut app, EnemyProfileId::ScoutDrone, 0);
         app.sync_combat_feedback_to_combat();
 
-        assert_eq!(app.enemy_signal_summary(0), "Deal 5 damage.");
+        assert_eq!(app.enemy_signal_summary(0), "Deal 9 damage.");
 
         app.set_language(Language::Spanish);
 
-        assert_eq!(app.enemy_signal_summary(0), "Inflige 5 de daño.");
+        assert_eq!(app.enemy_signal_summary(0), "Inflige 9 de daño.");
         assert_eq!(
             app.combat_feedback.displayed_intents[0].name,
             "Aguja de Choque"
@@ -20084,10 +20081,10 @@ mod tests {
         app.perform_action(CombatAction::EndTurn);
 
         advance_until(&mut app, |app| {
-            app.enemy_signal_summary(0) == "Inflige 3 de daño dos veces."
+            app.enemy_signal_summary(0) == "Inflige 5 de daño dos veces."
         });
 
-        assert_eq!(app.enemy_signal_summary(0), "Inflige 3 de daño dos veces.");
+        assert_eq!(app.enemy_signal_summary(0), "Inflige 5 de daño dos veces.");
         assert!(!app.enemy_signal_summary(0).contains("Deal"));
         assert!(
             app.log
@@ -20844,7 +20841,7 @@ mod tests {
         let long = ModuleDef {
             id: ModuleId::AegisDrive,
             name: "Reactive Synchronization Lattice",
-            description: "Start each combat with 5 Shield. After each victory, recover 2 HP and gain 4 additional Credits.",
+            description: "Start each combat with 5 Shield. After each victory, recover 4 HP and gain 4 additional Credits.",
         };
         let metrics = module_box_metrics(card_w);
 
@@ -21854,7 +21851,7 @@ mod tests {
 
     #[test]
     fn rest_pagination_keyboard_navigation_updates_visible_selection() {
-        let mut app = active_rest_fixture(dense_rest_test_deck(), 32);
+        let mut app = active_rest_fixture(dense_rest_test_deck(), DEFAULT_PLAYER_HP);
         app.resize(320.0, 568.0);
 
         app.key_down(39);
@@ -22047,7 +22044,7 @@ mod tests {
         assert_eq!(app.party_run.as_ref().unwrap().hero(1).unwrap().credits, 28);
         assert_eq!(
             app.party_run.as_ref().unwrap().hero(1).unwrap().player_hp,
-            14
+            8
         );
     }
 
@@ -22500,7 +22497,7 @@ mod tests {
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains("|label|Run Info"));
         assert!(frame.contains(&format!("|center|{}|body|Level 1", TERM_GREEN_TEXT)));
-        assert!(frame.contains(&format!("|center|{}|body|HP 32/32", TERM_GREEN_TEXT)));
+        assert!(frame.contains(&format!("|center|{}|body|HP 64/64", TERM_GREEN_TEXT)));
         assert!(frame.contains(&format!("|center|{}|body|27 Credits", TERM_GREEN_TEXT)));
         assert!(frame.contains(&format!("|center|{}|body|12 Card Deck", TERM_GREEN_TEXT)));
         assert!(!frame.contains("|label|Modules"));
@@ -23593,11 +23590,11 @@ mod tests {
 
         app.debug_end_battle();
 
-        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 22);
+        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 24);
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Nanoforge restores 2 HP.")
+                .any(|line| line == "Nanoforge restores 4 HP.")
         );
     }
 
@@ -23669,11 +23666,11 @@ mod tests {
 
         app.debug_end_battle();
 
-        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 25);
+        assert_eq!(app.dungeon.as_ref().unwrap().player_hp, 30);
         assert!(
             app.log
                 .iter()
-                .any(|line| line == "Recovery Matrix restores 5 HP.")
+                .any(|line| line == "Recovery Matrix restores 10 HP.")
         );
     }
 
@@ -24773,10 +24770,13 @@ mod tests {
         assert!(banner_frame.contains("|label|Enemy Turn"));
 
         advance_until(&mut app, |app| {
-            app.combat_feedback.displayed.player.hp == 31
+            app.combat_feedback.displayed.player.hp < app.combat.player.fighter.max_hp
+                && String::from_utf8(app.frame.clone())
+                    .is_ok_and(|frame| frame.contains(&format!("|left|{}|body|", TERM_PINK_SOFT)))
         });
+        let displayed_hp = app.combat_feedback.displayed.player.hp;
         let hp_frame = String::from_utf8(app.frame.clone()).unwrap();
-        assert!(hp_frame.contains(&format!("|left|{}|body|31", TERM_PINK_SOFT)));
+        assert!(hp_frame.contains(&format!("|left|{}|body|{}", TERM_PINK_SOFT, displayed_hp)));
     }
 
     #[test]
@@ -25366,7 +25366,7 @@ mod tests {
         assert!(panel_has_text_with_color(
             &entries,
             player_panel,
-            "32",
+            "64",
             TERM_GREEN
         ));
         assert!(panel_has_text_with_color(
@@ -25992,9 +25992,7 @@ mod tests {
         )));
 
         advance_until(&mut app, |app| {
-            !app.combat_feedback.auto_playback_active
-                && app.combat_feedback.outcome_hold_ms > 0.0
-                && !app.pixel_shards.is_empty()
+            !app.combat_feedback.auto_playback_active && app.combat_feedback.outcome_hold_ms > 0.0
         });
         assert!(matches!(app.screen, AppScreen::Combat));
         assert_eq!(
@@ -26693,7 +26691,7 @@ mod tests {
 
         assert_eq!(summary.total_levels, 3);
         assert_eq!(summary.player_hp, 27);
-        assert_eq!(summary.player_max_hp, 32);
+        assert_eq!(summary.player_max_hp, DEFAULT_PLAYER_HP);
         assert_eq!(summary.deck_count, app.dungeon.as_ref().unwrap().deck.len());
         assert_eq!(
             summary.act_names,
@@ -26716,7 +26714,7 @@ mod tests {
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
         assert!(frame.contains(&format!(
-            "|center|#c9ffd7|body|32 max HP    {expected_deck_count} card deck"
+            "|center|#c9ffd7|body|64 max HP    {expected_deck_count} card deck"
         )));
         assert!(!frame.contains("Max HP 40"));
         assert!(!frame.contains("Deck "));
@@ -26780,7 +26778,7 @@ mod tests {
         assert_eq!(summary.failure_room, Some(RoomKind::Elite));
         assert_eq!(summary.failure_enemy, expected_enemy);
         assert_eq!(summary.player_hp, 0);
-        assert_eq!(summary.player_max_hp, 32);
+        assert_eq!(summary.player_max_hp, DEFAULT_PLAYER_HP);
         assert_eq!(
             defeat_by_text(&summary, Language::English),
             format!("by {}", expected_enemy.unwrap())
@@ -26838,7 +26836,7 @@ mod tests {
         assert!(frame.contains("|center|#c9ffd7|body|4 fights cleared"));
         assert!(frame.contains("|center|#c9ffd7|body|1 elite cleared"));
         assert!(frame.contains("|center|#c9ffd7|body|1 boss cleared"));
-        assert!(frame.contains("|center|#c9ffd7|body|32 max HP"));
+        assert!(frame.contains("|center|#c9ffd7|body|64 max HP"));
         assert!(frame.contains(&format!(
             "|center|#c9ffd7|body|{expected_deck_count} Card Deck"
         )));
@@ -26901,7 +26899,7 @@ mod tests {
         let share = app.share_request.as_ref().unwrap();
         assert!(share.contains(r#""kind":"final_victory_card""#));
         assert!(share.contains(r#""title":"Mazocarta""#));
-        assert!(share.contains(r#""max_hp":32"#));
+        assert!(share.contains(r#""max_hp":64"#));
         assert!(share.contains(&format!(r#""deck_size":{expected_deck_count}"#)));
         assert!(share.contains(&format!(r#""seed":"{}""#, display_seed(TEST_RUN_SEED))));
         assert!(share.contains(&format!(r#""version":"{}""#, GAME_VERSION)));

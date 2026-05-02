@@ -14,7 +14,7 @@ pub(crate) fn combat_seed_for_dungeon(dungeon: &DungeonRun) -> u64 {
 
 pub(crate) fn apply_post_victory_modules(dungeon: &mut DungeonRun) -> PostVictoryModuleEffects {
     let nanoforge_healed = if dungeon.has_module(ModuleId::Nanoforge) {
-        dungeon.recover_hp(2)
+        dungeon.recover_hp(4)
     } else {
         0
     };
@@ -23,7 +23,7 @@ pub(crate) fn apply_post_victory_modules(dungeon: &mut DungeonRun) -> PostVictor
         dungeon.credits = dungeon.credits.saturating_add(4);
     }
     let recovery_healed = if dungeon.has_module(ModuleId::RecoveryMatrix) {
-        dungeon.recover_hp(5)
+        dungeon.recover_hp(10)
     } else {
         0
     };
@@ -116,7 +116,7 @@ mod tests {
             ModuleId::SalvageLedger,
             ModuleId::RecoveryMatrix,
         ];
-        dungeon.player_hp = 20;
+        dungeon.player_hp = 18;
         dungeon.player_max_hp = 32;
         dungeon.credits = 9;
 
@@ -125,12 +125,12 @@ mod tests {
         assert_eq!(
             effects,
             PostVictoryModuleEffects {
-                nanoforge_healed: 2,
+                nanoforge_healed: 4,
                 salvage_applied: true,
-                recovery_healed: 5,
+                recovery_healed: 10,
             }
         );
-        assert_eq!(dungeon.player_hp, 27);
+        assert_eq!(dungeon.player_hp, 32);
         assert_eq!(dungeon.credits, 13);
     }
 }

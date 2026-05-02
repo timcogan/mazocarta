@@ -13,7 +13,7 @@ use crate::rng::XorShift64;
 use std::collections::{BTreeMap, BTreeSet};
 
 const START_HP: i32 = DEFAULT_PLAYER_HP;
-const REST_HEAL: i32 = 6;
+const REST_HEAL: i32 = 12;
 const DUNGEON_LEVEL_COUNT: usize = 3;
 const MAP_COLUMNS: usize = 7;
 const MAP_REGULAR_DEPTHS: usize = 9;
@@ -150,14 +150,14 @@ fn level_profile(level: usize) -> LevelProfile {
             rest_roll: 340,
             force_elite_min_depth: 4,
             force_rest_min_depth: 5,
-            combat_hp_base: 28,
-            combat_hp_per_depth: 4,
+            combat_hp_base: 51,
+            combat_hp_per_depth: 7,
             combat_block: 0,
             combat_intent_shift: 0,
-            elite_hp_base: 44,
-            elite_hp_per_depth: 5,
+            elite_hp_base: 81,
+            elite_hp_per_depth: 9,
             elite_block: 3,
-            boss_hp: 72,
+            boss_hp: 133,
             boss_block: 6,
         },
         2 => LevelProfile {
@@ -179,14 +179,14 @@ fn level_profile(level: usize) -> LevelProfile {
             rest_roll: 255,
             force_elite_min_depth: 4,
             force_rest_min_depth: 5,
-            combat_hp_base: 34,
-            combat_hp_per_depth: 5,
+            combat_hp_base: 63,
+            combat_hp_per_depth: 9,
             combat_block: 1,
             combat_intent_shift: 1,
-            elite_hp_base: 52,
-            elite_hp_per_depth: 6,
+            elite_hp_base: 96,
+            elite_hp_per_depth: 11,
             elite_block: 5,
-            boss_hp: 88,
+            boss_hp: 162,
             boss_block: 10,
         },
         _ => LevelProfile {
@@ -208,14 +208,14 @@ fn level_profile(level: usize) -> LevelProfile {
             rest_roll: 180,
             force_elite_min_depth: 3,
             force_rest_min_depth: 5,
-            combat_hp_base: 42,
-            combat_hp_per_depth: 6,
+            combat_hp_base: 77,
+            combat_hp_per_depth: 11,
             combat_block: 2,
             combat_intent_shift: 2,
-            elite_hp_base: 64,
-            elite_hp_per_depth: 7,
+            elite_hp_base: 118,
+            elite_hp_per_depth: 13,
             elite_block: 7,
-            boss_hp: 108,
+            boss_hp: 199,
             boss_block: 12,
         },
     }
@@ -338,7 +338,6 @@ impl DungeonRun {
             .map(|node| node.kind)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn rest_heal_cap() -> i32 {
         REST_HEAL
     }
@@ -1465,12 +1464,12 @@ mod tests {
     }
 
     #[test]
-    fn new_runs_start_with_thirty_two_hp() {
+    fn new_runs_start_with_sixty_four_hp() {
         let run = DungeonRun::new(TEST_RUN_SEED);
 
         assert_eq!(run.player_hp, START_HP);
         assert_eq!(run.player_max_hp, START_HP);
-        assert_eq!(START_HP, 32);
+        assert_eq!(START_HP, 64);
     }
 
     #[test]
@@ -1481,14 +1480,14 @@ mod tests {
     }
 
     #[test]
-    fn rest_heal_remains_proportional_to_the_lower_starting_hp() {
+    fn rest_heal_clamps_to_cap_and_missing_hp() {
         let mut run = DungeonRun::new(TEST_RUN_SEED);
         run.player_hp = 20;
 
-        assert_eq!(run.rest_heal_amount(), 6);
+        assert_eq!(run.rest_heal_amount(), 12);
 
-        run.player_hp = 29;
-        assert_eq!(run.rest_heal_amount(), 3);
+        run.player_hp = 59;
+        assert_eq!(run.rest_heal_amount(), 5);
     }
 
     #[test]
@@ -1954,10 +1953,10 @@ mod tests {
     #[test]
     fn recover_hp_clamps_to_the_maximum() {
         let mut run = DungeonRun::new(TEST_RUN_SEED);
-        run.player_hp = 30;
+        run.player_hp = 62;
 
         assert_eq!(run.recover_hp(3), 2);
-        assert_eq!(run.player_hp, 32);
+        assert_eq!(run.player_hp, 64);
     }
 
     #[test]
@@ -2334,11 +2333,11 @@ mod tests {
         assert!(level_two_combat.enemies[0].hp < level_three_combat.enemies[0].hp);
         assert!(level_one_elite.enemies[0].block < level_two_elite.enemies[0].block);
         assert!(level_two_elite.enemies[0].block < level_three_elite.enemies[0].block);
-        assert_eq!(level_one_boss.enemies[0].hp, 72);
+        assert_eq!(level_one_boss.enemies[0].hp, 133);
         assert_eq!(level_one_boss.enemies[0].block, 6);
-        assert_eq!(level_two_boss.enemies[0].hp, 88);
+        assert_eq!(level_two_boss.enemies[0].hp, 162);
         assert_eq!(level_two_boss.enemies[0].block, 10);
-        assert_eq!(level_three_boss.enemies[0].hp, 108);
+        assert_eq!(level_three_boss.enemies[0].hp, 199);
         assert_eq!(level_three_boss.enemies[0].block, 12);
     }
 
