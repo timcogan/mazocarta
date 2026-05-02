@@ -3113,6 +3113,23 @@ mod tests {
     const TEST_PRIMARY_SEED: u64 = 0x0BAD_5EED;
     const TEST_ALT_SEED: u64 = 0xDEAD_BEEF;
     const TEST_BOSS_REWARD_SEED: u64 = 0xBAAD_F00D;
+    const TEST_ENEMY_PROFILES: &[EnemyProfileId] = &[
+        EnemyProfileId::ScoutDrone,
+        EnemyProfileId::NeedlerDrone,
+        EnemyProfileId::RampartDrone,
+        EnemyProfileId::SpineSentry,
+        EnemyProfileId::PentaCore,
+        EnemyProfileId::VoltMantis,
+        EnemyProfileId::ShardWeaver,
+        EnemyProfileId::PrismArray,
+        EnemyProfileId::GlassBishop,
+        EnemyProfileId::HexarchCore,
+        EnemyProfileId::NullRaider,
+        EnemyProfileId::RiftStalker,
+        EnemyProfileId::SiegeSpider,
+        EnemyProfileId::RiftBastion,
+        EnemyProfileId::HeptarchCore,
+    ];
 
     #[test]
     fn event_order_is_deterministic_and_non_repeating_within_each_level() {
@@ -3484,25 +3501,7 @@ mod tests {
 
     #[test]
     fn localized_enemy_intents_match_english() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             for index in 0..3 {
                 let english = enemy_intent(profile, index);
                 let mut localized = localized_enemy_intent(profile, index, Language::Spanish);
@@ -3572,26 +3571,9 @@ mod tests {
 
     #[test]
     fn enemy_sprite_layer_codes_are_unique() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
         let mut codes = Vec::new();
 
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             codes.extend(sprite.layers.iter().map(|layer| layer.code));
         }
@@ -3614,25 +3596,7 @@ mod tests {
 
     #[test]
     fn enemy_sprites_are_multilayer_packed_and_resolvable() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             assert!(sprite.layers.len() >= 2);
 
@@ -3646,25 +3610,7 @@ mod tests {
     }
     #[test]
     fn enemy_sprites_fill_at_least_one_canvas_axis() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let sprite = enemy_sprite_def(profile);
             let bounds = enemy_sprite_bounds(profile);
             let mut min_x = sprite.width as i32;
@@ -3702,25 +3648,7 @@ mod tests {
 
     #[test]
     fn enemy_sprite_codes_share_their_profile_union_bounds() {
-        let profiles = [
-            EnemyProfileId::ScoutDrone,
-            EnemyProfileId::NeedlerDrone,
-            EnemyProfileId::RampartDrone,
-            EnemyProfileId::SpineSentry,
-            EnemyProfileId::PentaCore,
-            EnemyProfileId::VoltMantis,
-            EnemyProfileId::ShardWeaver,
-            EnemyProfileId::PrismArray,
-            EnemyProfileId::GlassBishop,
-            EnemyProfileId::HexarchCore,
-            EnemyProfileId::NullRaider,
-            EnemyProfileId::RiftStalker,
-            EnemyProfileId::SiegeSpider,
-            EnemyProfileId::RiftBastion,
-            EnemyProfileId::HeptarchCore,
-        ];
-
-        for profile in profiles {
+        for profile in TEST_ENEMY_PROFILES.iter().copied() {
             let expected = enemy_sprite_bounds(profile);
             for layer in enemy_sprite_def(profile).layers {
                 assert_eq!(enemy_sprite_bounds_by_code(layer.code), Some(expected));
