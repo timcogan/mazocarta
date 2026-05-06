@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::combat::{CombatOutcome, EncounterEnemySetup, EncounterSetup, TurnPhase};
@@ -19,6 +19,11 @@ pub(crate) struct RunSaveEnvelope {
     pub(crate) save_format_version: u32,
     pub(crate) game_version: String,
     pub(crate) party: PartySessionSnapshot,
+    // MIGRATION(save v4): `challenge` is absent from v4 saves written before
+    // Daily Challenge existed. Fallback: restore those saves as normal
+    // non-daily runs. Remove when minimum supported save format > 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) challenge: Option<SavedRunChallenge>,
     pub(crate) active_state: SavedRunState,
     pub(crate) fallback_checkpoint: SavedCheckpoint,
     pub(crate) log: Vec<String>,
@@ -27,6 +32,7 @@ pub(crate) struct RunSaveEnvelope {
 impl RunSaveEnvelope {
     pub(crate) fn new(
         party: PartySessionSnapshot,
+        challenge: Option<SavedRunChallenge>,
         active_state: SavedRunState,
         fallback_checkpoint: SavedCheckpoint,
         log: Vec<String>,
@@ -35,10 +41,114 @@ impl RunSaveEnvelope {
             save_format_version: SAVE_FORMAT_VERSION,
             game_version: CURRENT_GAME_VERSION.to_string(),
             party,
+            challenge,
             active_state,
             fallback_checkpoint,
             log,
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SavedRunChallenge {
+    pub(crate) kind: ChallengeKind,
+    pub(crate) date: SavedChallengeDate,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ChallengeKind {
+    Daily,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SavedChallengeDate {
+    year: u16,
+    month: u8,
+    day: u8,
+}
+
+impl SavedChallengeDate {
+    pub(crate) fn from_ymd(year: u32, month: u32, day: u32) -> Option<Self> {
+        if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {
+            return None;
+        }
+        let max_day = saved_days_in_month(year, month);
+        if day == 0 || day > max_day {
+            return None;
+        }
+        Some(Self {
+            year: year as u16,
+            month: month as u8,
+            day: day as u8,
+        })
+    }
+
+    pub(crate) fn year(self) -> u32 {
+        self.year as u32
+    }
+
+    pub(crate) fn month(self) -> u32 {
+        self.month as u32
+    }
+
+    pub(crate) fn day(self) -> u32 {
+        self.day as u32
+    }
+
+    pub(crate) fn iso_label(self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+
+    fn parse_iso(raw: &str) -> Option<Self> {
+        let bytes = raw.as_bytes();
+        if bytes.len() != 10
+            || bytes[4] != b'-'
+            || bytes[7] != b'-'
+            || !bytes[..4].iter().all(|byte| byte.is_ascii_digit())
+            || !bytes[5..7].iter().all(|byte| byte.is_ascii_digit())
+            || !bytes[8..].iter().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let year = raw[0..4].parse::<u32>().ok()?;
+        let month = raw[5..7].parse::<u32>().ok()?;
+        let day = raw[8..10].parse::<u32>().ok()?;
+        Self::from_ymd(year, month, day)
+    }
+}
+
+impl Serialize for SavedChallengeDate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.iso_label())
+    }
+}
+
+impl<'de> Deserialize<'de> for SavedChallengeDate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Self::parse_iso(&raw)
+            .ok_or_else(|| serde::de::Error::custom("expected challenge date as YYYY-MM-DD"))
+    }
+}
+
+fn saved_is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn saved_days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if saved_is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
     }
 }
 
@@ -482,4 +592,39 @@ pub(crate) fn resolve_encounter_setup(setup: &SavedEncounterSetup) -> Option<Enc
             })
             .collect::<Option<Vec<_>>>()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_run_challenge_uses_typed_wire_values() {
+        let challenge = SavedRunChallenge {
+            kind: ChallengeKind::Daily,
+            date: SavedChallengeDate::from_ymd(2099, 12, 31).unwrap(),
+        };
+
+        let raw = serde_json::to_string(&challenge).unwrap();
+        let restored: SavedRunChallenge = serde_json::from_str(&raw).unwrap();
+
+        assert_eq!(raw, r#"{"kind":"daily","date":"2099-12-31"}"#);
+        assert_eq!(restored, challenge);
+    }
+
+    #[test]
+    fn saved_run_challenge_rejects_unknown_kind_and_invalid_date() {
+        assert!(
+            serde_json::from_str::<SavedRunChallenge>(r#"{"kind":"weekly","date":"2099-12-31"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<SavedRunChallenge>(r#"{"kind":"daily","date":"2100-02-29"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<SavedRunChallenge>(r#"{"kind":"daily","date":"2099-2-3"}"#)
+                .is_err()
+        );
+    }
 }

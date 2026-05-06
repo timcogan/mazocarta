@@ -89,6 +89,9 @@ let serviceWorkerRegistration = null;
 let waitingServiceWorker = null;
 let reloadOnNextControllerChange = false;
 let lastBootScreenVisible = null;
+let lastDailyChallengeGeneration = 0;
+let lastDailyChallengeDateStamp = null;
+let dailyChallengeDateTimer = null;
 let e2eSupport = null;
 let e2eSupportPromise = Promise.resolve(null);
 let playerNameInputVisible = false;
@@ -146,6 +149,7 @@ const STORAGE_NAMESPACE = APP_CHANNEL === "preview" ? "mazocarta.preview" : "maz
 const ACTIVE_RUN_STORAGE_KEY = `${STORAGE_NAMESPACE}.active_run`;
 const LANGUAGE_STORAGE_KEY = `${STORAGE_NAMESPACE}.language`;
 const BACKGROUND_MODE_STORAGE_KEY = `${STORAGE_NAMESPACE}.background_mode`;
+const DAILY_CHALLENGE_STORAGE_KEY = `${STORAGE_NAMESPACE}.daily_challenge`;
 const PLAYER_NAME_STORAGE_KEY = `${STORAGE_NAMESPACE}.player_name`;
 
 function isStandaloneMode() {
@@ -1337,6 +1341,51 @@ function writeStoredBackgroundMode(code) {
   }
 }
 
+function readStoredDailyChallengeEnabled() {
+  try {
+    return window.localStorage.getItem(DAILY_CHALLENGE_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeStoredDailyChallengeEnabled(enabled) {
+  try {
+    window.localStorage.setItem(DAILY_CHALLENGE_STORAGE_KEY, enabled ? "1" : "0");
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  }
+}
+
+function currentLocalDailyChallengeDate() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = date.getMonth() + 1;
+  const day = date.getDate();
+  return {
+    year,
+    month,
+    day,
+    stamp: `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`,
+  };
+}
+
+function syncDailyChallengeDate() {
+  if (!wasm || typeof wasm.app_set_daily_challenge_date !== "function") {
+    return false;
+  }
+
+  const localDate = currentLocalDailyChallengeDate();
+  if (localDate.stamp === lastDailyChallengeDateStamp) {
+    return false;
+  }
+  lastDailyChallengeDateStamp = localDate.stamp;
+  wasm.app_set_daily_challenge_date(localDate.year, localDate.month, localDate.day);
+  return true;
+}
+
 function readStoredPlayerName() {
   try {
     return window.localStorage.getItem(PLAYER_NAME_STORAGE_KEY) ?? "";
@@ -2404,6 +2453,23 @@ function syncStoredBackgroundMode() {
   return writeStoredBackgroundMode(wasm.app_background_mode_code());
 }
 
+function syncStoredDailyChallengeEnabled() {
+  if (
+    !wasm ||
+    typeof wasm.app_daily_challenge_generation !== "function" ||
+    typeof wasm.app_daily_challenge_enabled !== "function"
+  ) {
+    return false;
+  }
+
+  const generation = wasm.app_daily_challenge_generation();
+  if (generation === lastDailyChallengeGeneration) {
+    return false;
+  }
+  lastDailyChallengeGeneration = generation;
+  return writeStoredDailyChallengeEnabled(!!wasm.app_daily_challenge_enabled());
+}
+
 function syncStoredPlayerName() {
   if (!wasm || typeof wasm.app_player_name_generation !== "function") {
     return false;
@@ -2690,8 +2756,10 @@ async function flushMultiplayerRequest() {
 async function flushHostEffects(options = { allowPrivilegedAction: false }) {
   const installHandled = await flushInstallRequest(options);
   const updateHandled = await flushUpdateRequest(options);
+  syncDailyChallengeDate();
   syncStoredLanguage();
   syncStoredBackgroundMode();
+  syncStoredDailyChallengeEnabled();
   syncStoredPlayerName();
   syncRunSaveSnapshot();
   const resumed = flushResumeRequest();
@@ -2740,6 +2808,7 @@ function parseShareRequest(raw) {
         deckSize: Math.max(0, Math.round(data.deck_size)),
         seed: data.seed.toUpperCase(),
         version: data.version,
+        challengeName: typeof data.challenge_name === "string" ? data.challenge_name : "",
         shareText: typeof data.share_text === "string" ? data.share_text : GAME_TITLE,
       };
     }
@@ -2768,7 +2837,11 @@ function formatShareFileStamp(date = new Date()) {
 }
 
 function formatShareCaption(payload, pageUrl, dateLabel) {
-  return [payload.shareText, `v${payload.version}`, dateLabel, pageUrl].join(" • ");
+  const parts = [payload.shareText];
+  if (payload.challengeName && !payload.shareText.includes(payload.challengeName)) {
+    parts.push(payload.challengeName);
+  }
+  return [...parts, `v${payload.version}`, dateLabel, pageUrl].filter(Boolean).join(" • ");
 }
 
 function fitCanvasTextSize(context, text, desiredSize, maxWidth, weight = 700) {
@@ -3016,6 +3089,7 @@ function onPointerDown(event) {
     return;
   }
   mixEntropy();
+  syncDailyChallengeDate();
   const point = toCanvasPoint(event);
   if (event.pointerType === "touch") {
     clearHover();
@@ -3164,6 +3238,7 @@ function onKeyDown(event) {
     return;
   }
   mixEntropy();
+  syncDailyChallengeDate();
   wasm.key_down(code);
   drawFrame();
   void flushHostEffects({ allowPrivilegedAction: true });
@@ -3316,6 +3391,10 @@ async function loadWasm() {
     if (typeof wasm.app_set_background_mode === "function") {
       wasm.app_set_background_mode(readStoredBackgroundMode());
     }
+    if (typeof wasm.app_set_daily_challenge_enabled === "function") {
+      wasm.app_set_daily_challenge_enabled(readStoredDailyChallengeEnabled() ? 1 : 0);
+    }
+    syncDailyChallengeDate();
     setAppPlayerName(readStoredPlayerName());
     setAppPlayerNameInputFocused(false);
     if (typeof wasm.app_set_debug_mode === "function") {
@@ -3333,8 +3412,17 @@ async function loadWasm() {
       typeof wasm.app_background_mode_generation === "function"
         ? wasm.app_background_mode_generation()
         : 0;
+    lastDailyChallengeGeneration =
+      typeof wasm.app_daily_challenge_generation === "function"
+        ? wasm.app_daily_challenge_generation()
+        : 0;
     lastPlayerNameGeneration =
       typeof wasm.app_player_name_generation === "function" ? wasm.app_player_name_generation() : 0;
+    dailyChallengeDateTimer = window.setInterval(() => {
+      if (syncDailyChallengeDate()) {
+        drawFrame();
+      }
+    }, 60_000);
     lastRunSaveGeneration = Number.NaN;
     lastPartySnapshotGeneration = Number.NaN;
     syncRunSaveSnapshot();
@@ -3401,12 +3489,15 @@ window
     drawFrame();
   });
 window.addEventListener("pagehide", () => {
+  syncDailyChallengeDate();
   syncStoredLanguage();
   syncStoredBackgroundMode();
+  syncStoredDailyChallengeEnabled();
   syncStoredPlayerName();
   syncRunSaveSnapshot();
 });
 window.addEventListener("pageshow", () => {
+  syncDailyChallengeDate();
   syncInstallCapability();
   syncWaitingServiceWorker();
   if (serviceWorkerRegistration) {
@@ -3416,8 +3507,14 @@ window.addEventListener("pageshow", () => {
 });
 window.addEventListener("beforeunload", () => {
   void multiplayer.destroy();
+  if (dailyChallengeDateTimer) {
+    window.clearInterval(dailyChallengeDateTimer);
+    dailyChallengeDateTimer = null;
+  }
+  syncDailyChallengeDate();
   syncStoredLanguage();
   syncStoredBackgroundMode();
+  syncStoredDailyChallengeEnabled();
   syncStoredPlayerName();
   syncRunSaveSnapshot();
   if (rafId) {

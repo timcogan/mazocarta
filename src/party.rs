@@ -1,12 +1,15 @@
 use crate::combat::{
     CombatAction, CombatEvent, CombatOutcome, CombatState, DeckState, EncounterSetup, EnemyState,
-    PlayerState, TurnPhase,
+    PlayerState, ResolvedEnemyIntent, TurnPhase,
 };
 use crate::content::{CardId, EventId, ModuleId, starter_deck};
 use crate::dungeon::{
     DungeonNode, DungeonProgress, DungeonRun, EventResolution, NodeSelection, RoomKind,
 };
 use crate::run_logic::{PostVictoryModuleEffects, apply_post_victory_modules};
+
+const MULTIPLAYER_ENEMY_DAMAGE_NUMERATOR: i64 = 5;
+const MULTIPLAYER_ENEMY_DAMAGE_DENOMINATOR: i64 = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HeroRunState {
@@ -727,6 +730,7 @@ impl PartyCombatState {
             else {
                 continue;
             };
+            let resolved = scale_enemy_intent_for_party(resolved, self.heroes.len());
             let consumed_on_hit_bleed = resolved.on_hit_bleed > 0
                 && resolved.damage > 0
                 && self.first_active_slot().is_some();
@@ -841,6 +845,36 @@ impl PartyCombatState {
             self.phase = TurnPhase::Ended(CombatOutcome::Defeat);
         }
     }
+}
+
+fn scale_enemy_intent_for_party(
+    mut resolved: ResolvedEnemyIntent,
+    party_size: usize,
+) -> ResolvedEnemyIntent {
+    // Scale per-hit damage only. Leaving hits unchanged preserves the enemy's
+    // attack shape and on-hit effect cadence while total damage still rises via
+    // the scaled damage * hits calculation.
+    resolved.damage = scale_enemy_damage_for_party(resolved.damage, party_size);
+    resolved
+}
+
+fn scale_enemy_damage_for_party(damage: i32, party_size: usize) -> i32 {
+    if damage <= 0 {
+        return damage;
+    }
+
+    let mut numerator = 1i64;
+    let mut denominator = 1i64;
+    for _ in 1..party_size.max(1) {
+        numerator = numerator.saturating_mul(MULTIPLAYER_ENEMY_DAMAGE_NUMERATOR);
+        denominator = denominator.saturating_mul(MULTIPLAYER_ENEMY_DAMAGE_DENOMINATOR);
+    }
+
+    let scaled = i64::from(damage)
+        .saturating_mul(numerator)
+        .saturating_add(denominator / 2)
+        / denominator.max(1);
+    scaled.clamp(0, i64::from(i32::MAX)) as i32
 }
 
 #[cfg(test)]
@@ -1045,6 +1079,18 @@ mod tests {
     }
 
     #[test]
+    fn enemy_damage_scales_by_twenty_five_percent_per_extra_player() {
+        assert_eq!(scale_enemy_damage_for_party(0, 2), 0);
+        assert_eq!(scale_enemy_damage_for_party(-5, 2), -5);
+        assert_eq!(scale_enemy_damage_for_party(10, 0), 10);
+        assert_eq!(scale_enemy_damage_for_party(10, 1), 10);
+        assert_eq!(scale_enemy_damage_for_party(10, 2), 13);
+        assert_eq!(scale_enemy_damage_for_party(10, 3), 16);
+        assert_eq!(scale_enemy_damage_for_party(10, 4), 20);
+        assert_eq!(scale_enemy_damage_for_party(i32::MAX, 2), i32::MAX);
+    }
+
+    #[test]
     fn enemy_round_damages_all_living_heroes_equally() {
         let setup = setup_with_enemy_profile(EnemyProfileId::ScoutDrone, 0);
         let mut combat = PartyCombatState::new(
@@ -1062,8 +1108,8 @@ mod tests {
             .ready_hero_with_events(1)
             .expect("second ready resolves the enemy round");
 
-        assert_eq!(combat.heroes[0].player.fighter.hp, starting_hp - 9);
-        assert_eq!(combat.heroes[1].player.fighter.hp, starting_hp - 9);
+        assert_eq!(combat.heroes[0].player.fighter.hp, starting_hp - 11);
+        assert_eq!(combat.heroes[1].player.fighter.hp, starting_hp - 11);
         assert_eq!(
             combat.heroes[0].player.fighter.hp,
             combat.heroes[1].player.fighter.hp
@@ -1100,7 +1146,7 @@ mod tests {
         assert!(combat.set_hero_inactive(1, true));
         assert!(combat.ready_hero(0));
 
-        assert_eq!(combat.heroes[0].player.fighter.hp, active_starting_hp - 9);
+        assert_eq!(combat.heroes[0].player.fighter.hp, active_starting_hp - 11);
         assert_eq!(combat.heroes[1].player.fighter.hp, inactive_starting_hp);
         assert!(!combat.heroes[0].ready);
         assert!(combat.heroes[1].ready);

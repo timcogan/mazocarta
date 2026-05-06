@@ -104,6 +104,30 @@ pub extern "C" fn app_set_background_mode(code: u32) {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
+pub extern "C" fn app_set_daily_challenge_enabled(enabled: u32) {
+    APP.with(|app| app.borrow_mut().set_daily_challenge_enabled(enabled != 0));
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_daily_challenge_enabled() -> u32 {
+    APP.with(|app| u32::from(app.borrow().daily_challenge_enabled()))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_daily_challenge_generation() -> u32 {
+    APP.with(|app| app.borrow().daily_challenge_generation())
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn app_set_daily_challenge_date(year: u32, month: u32, day: u32) -> u32 {
+    APP.with(|app| u32::from(app.borrow_mut().set_daily_challenge_date(year, month, day)))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
 pub extern "C" fn prepare_pairing_buffer(len: usize) -> *mut u8 {
     PAIRING.with(|pairing| pairing.borrow_mut().prepare_input_buffer(len))
 }

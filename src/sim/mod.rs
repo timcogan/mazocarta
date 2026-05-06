@@ -428,6 +428,7 @@ fn simulate_party_encounter(party: &mut PartyRunState) -> SimulationAdvance {
     loop {
         match party_combat.outcome() {
             Some(CombatOutcome::Victory) => {
+                let reward_context = reward_context_for_party_room(party);
                 let player_hps = party_combat
                     .heroes
                     .iter()
@@ -445,7 +446,7 @@ fn simulate_party_encounter(party: &mut PartyRunState) -> SimulationAdvance {
                     let _ = party.apply_post_victory_modules(slot);
                 }
 
-                if let Some((tier, reward_seed)) = reward_context_for_party_room(party) {
+                if let Some((tier, reward_seed)) = reward_context {
                     if matches!(progress, DungeonProgress::Continue) {
                         resolve_party_reward_phase(party, tier, reward_seed);
                         return SimulationAdvance::Continue;
@@ -1350,5 +1351,23 @@ mod tests {
 
         assert_eq!(stats.players, 2);
         assert_eq!(stats.runs, 1);
+    }
+
+    #[test]
+    fn two_player_simulation_awards_boss_modules() {
+        let stats = run_simulations(&SimulationConfig {
+            runs: 8,
+            seed_start: 1,
+            players: 2,
+            verbose: false,
+        });
+
+        assert!(stats.total_bosses_cleared > 0);
+        assert!(
+            stats
+                .module_picks
+                .keys()
+                .any(|module| *module != "Nanoforge")
+        );
     }
 }
