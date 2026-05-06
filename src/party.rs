@@ -851,6 +851,9 @@ fn scale_enemy_intent_for_party(
     mut resolved: ResolvedEnemyIntent,
     party_size: usize,
 ) -> ResolvedEnemyIntent {
+    // Scale per-hit damage only. Leaving hits unchanged preserves the enemy's
+    // attack shape and on-hit effect cadence while total damage still rises via
+    // the scaled damage * hits calculation.
     resolved.damage = scale_enemy_damage_for_party(resolved.damage, party_size);
     resolved
 }
