@@ -57,6 +57,9 @@ struct ActionAnalysis {
     created_count: i32,
     energy_gain: i32,
     enemy_kills: i32,
+    target_kill: bool,
+    target_remaining_hp: i32,
+    target_starting_hp: i32,
     uncovered_after: i32,
     zero_cost: bool,
 }
@@ -216,6 +219,9 @@ pub(crate) fn choose_combat_action(combat: &CombatState) -> CombatChoice {
             created_count: 0,
             energy_gain: 0,
             enemy_kills: 0,
+            target_kill: false,
+            target_remaining_hp: i32::MAX,
+            target_starting_hp: i32::MAX,
             uncovered_after: 0,
             zero_cost: false,
         });
@@ -738,6 +744,11 @@ fn analyze_action(
     let mut simulated = combat.clone();
     let threat_before = expected_enemy_threat(combat);
     let before = CombatSnapshot::from(combat);
+    let target_starting_hp = candidate
+        .enemy_index
+        .and_then(|enemy_index| combat.enemies.get(enemy_index))
+        .map(|enemy| enemy.fighter.hp.max(0))
+        .unwrap_or(i32::MAX);
     let events = simulated.dispatch(candidate.action);
     let after = CombatSnapshot::from(&simulated);
     let threat_after = expected_enemy_threat(&simulated);
@@ -796,6 +807,13 @@ fn analyze_action(
     let threat_reduction = (threat_before - threat_after).max(0);
     let enemy_kills = before.enemy_alive_count as i32 - after.enemy_alive_count as i32;
     let energy_gain = (after.player_energy as i32 - before.player_energy as i32).max(0);
+    let target_remaining_hp = candidate
+        .enemy_index
+        .and_then(|enemy_index| simulated.enemies.get(enemy_index))
+        .map(|enemy| enemy.fighter.hp.max(0))
+        .unwrap_or(i32::MAX);
+    let target_kill =
+        candidate.enemy_index.is_some() && target_starting_hp > 0 && target_remaining_hp == 0;
 
     score += damage * 9;
     score += (before.enemy_total_block - after.enemy_total_block) * 4;
@@ -870,6 +888,9 @@ fn analyze_action(
         created_count,
         energy_gain,
         enemy_kills,
+        target_kill,
+        target_remaining_hp,
+        target_starting_hp,
         uncovered_after,
         zero_cost,
     }
@@ -1395,7 +1416,16 @@ fn compare_action_analyses(left: ActionAnalysis, right: ActionAnalysis) -> std::
     left.score
         .cmp(&right.score)
         .then(left.state_score.cmp(&right.state_score))
+        .then(focus_fire_priority(left).cmp(&focus_fire_priority(right)))
         .then(compare_action_candidates(right.candidate, left.candidate))
+}
+
+fn focus_fire_priority(analysis: ActionAnalysis) -> (i32, i32, i32) {
+    (
+        i32::from(analysis.target_kill),
+        -analysis.target_remaining_hp,
+        -analysis.target_starting_hp,
+    )
 }
 
 fn actual_heal(dungeon: &DungeonRun, amount: i32) -> i32 {
@@ -1469,6 +1499,50 @@ pub(crate) fn choose_boss_module_reward(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::combat::{DeckState, EnemyState, FighterState, PlayerState, StatusSet, TurnPhase};
+    use crate::content::EnemyProfileId;
+
+    fn autoplay_test_combat(
+        hand: Vec<CardId>,
+        enemy_hps: Vec<i32>,
+        energy: u8,
+        player_block: i32,
+    ) -> CombatState {
+        CombatState::from_persisted_parts(
+            PlayerState {
+                fighter: FighterState {
+                    hp: 20,
+                    max_hp: 20,
+                    block: player_block,
+                    statuses: StatusSet::default(),
+                },
+                energy,
+                max_energy: 3,
+            },
+            enemy_hps
+                .into_iter()
+                .map(|hp| EnemyState {
+                    fighter: FighterState {
+                        hp,
+                        max_hp: hp.max(1),
+                        block: 0,
+                        statuses: StatusSet::default(),
+                    },
+                    profile: EnemyProfileId::ScoutDrone,
+                    intent_index: 0,
+                    on_hit_bleed: 0,
+                })
+                .collect(),
+            DeckState {
+                draw_pile: Vec::new(),
+                hand,
+                discard_pile: Vec::new(),
+            },
+            TurnPhase::PlayerTurn,
+            1,
+            0xA57A_7001,
+        )
+    }
 
     #[test]
     fn card_block_values_include_shield_granting_cards() {
@@ -1520,6 +1594,37 @@ mod tests {
         assert_eq!(
             best_scored_choice_index(&choices, CardAddPolicy::DefensiveFallback, 13),
             Some(0)
+        );
+    }
+
+    #[test]
+    fn combat_heuristic_focuses_low_hp_target_when_attack_scores_tie() {
+        let combat = autoplay_test_combat(vec![CardId::FlareSlash], vec![20, 10], 1, 30);
+
+        assert_eq!(
+            choose_combat_action(&combat),
+            CombatChoice::PlayCard {
+                hand_index: 0,
+                target_enemy: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn combat_heuristic_keeps_defense_ahead_of_focus_fire_when_damage_is_uncovered() {
+        let combat = autoplay_test_combat(
+            vec![CardId::FlareSlash, CardId::GuardStep],
+            vec![20, 10],
+            2,
+            0,
+        );
+
+        assert_eq!(
+            choose_combat_action(&combat),
+            CombatChoice::PlayCard {
+                hand_index: 1,
+                target_enemy: None,
+            }
         );
     }
 }

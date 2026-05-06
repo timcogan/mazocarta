@@ -36,12 +36,13 @@ use crate::run_logic::{
 use crate::save::{
     RunSaveEnvelope, SavedCheckpoint, SavedCombatState, SavedDeckState, SavedDungeonNode,
     SavedDungeonRun, SavedEnemyState, SavedEventState, SavedFighterState, SavedModuleSelectState,
-    SavedPartyState, SavedPlayerState, SavedRestState, SavedRewardState, SavedRunState,
-    SavedShopOffer, SavedShopState, parse_run_save, resolve_card_id, resolve_deck_card_id,
-    resolve_encounter_setup, resolve_enemy_profile, resolve_event_id, resolve_module_id,
-    resolve_reward_tier, resolve_room_kind, resolve_turn_phase, save_encounter_setup,
-    serialize_card_id, serialize_enemy_profile, serialize_envelope, serialize_event_id,
-    serialize_module_id, serialize_reward_tier, serialize_room_kind, serialize_turn_phase,
+    SavedPartyState, SavedPlayerState, SavedRestState, SavedRewardState, SavedRunChallenge,
+    SavedRunState, SavedShopOffer, SavedShopState, parse_run_save, resolve_card_id,
+    resolve_deck_card_id, resolve_encounter_setup, resolve_enemy_profile, resolve_event_id,
+    resolve_module_id, resolve_reward_tier, resolve_room_kind, resolve_turn_phase,
+    save_encounter_setup, serialize_card_id, serialize_enemy_profile, serialize_envelope,
+    serialize_event_id, serialize_module_id, serialize_reward_tier, serialize_room_kind,
+    serialize_turn_phase,
 };
 use crate::session::{HeroRuntimeSummary, PartySessionSnapshot, serialize_party_session};
 
@@ -49,6 +50,7 @@ const LOGICAL_WIDTH: f32 = 1280.0;
 const LOGICAL_HEIGHT: f32 = 720.0;
 const BASE_SEED: u64 = 0xA57A_C47A_2204_0001;
 const RUN_SEED_MASK: u64 = 0xFFFF_FFFF;
+const DAILY_CHALLENGE_KIND: &str = "daily";
 const GAME_TITLE: &str = "Mazocarta";
 const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_APP_CHANNEL: Option<&str> = option_env!("MAZOCARTA_APP_CHANNEL");
@@ -253,6 +255,8 @@ enum HitTarget {
     SettingsLanguageSpanish,
     SettingsBackgroundBinary,
     SettingsBackgroundBlack,
+    SettingsDailyOn,
+    SettingsDailyOff,
     SettingsClose,
     InstallHelpModal,
     InstallHelpClose,
@@ -829,6 +833,8 @@ struct SettingsLayout {
     spanish_button: FittedPrimaryButton,
     binary_button: FittedPrimaryButton,
     black_button: FittedPrimaryButton,
+    daily_on_button: FittedPrimaryButton,
+    daily_off_button: FittedPrimaryButton,
     close_button: FittedPrimaryButton,
     title_lines: Vec<String>,
     title_size: f32,
@@ -840,6 +846,8 @@ struct SettingsLayout {
     language_label_y: f32,
     background_label_size: f32,
     background_label_y: f32,
+    daily_label_size: f32,
+    daily_label_y: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -969,6 +977,88 @@ struct EventState {
     event: EventId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DailyChallengeDate {
+    year: u16,
+    month: u8,
+    day: u8,
+}
+
+impl DailyChallengeDate {
+    fn from_ymd(year: u32, month: u32, day: u32) -> Option<Self> {
+        if !(1970..=9999).contains(&year) || !(1..=12).contains(&month) {
+            return None;
+        }
+        let max_day = days_in_month(year, month);
+        if day == 0 || day > max_day {
+            return None;
+        }
+        Some(Self {
+            year: year as u16,
+            month: month as u8,
+            day: day as u8,
+        })
+    }
+
+    fn parse_iso(raw: &str) -> Option<Self> {
+        let mut parts = raw.split('-');
+        let year = parts.next()?.parse::<u32>().ok()?;
+        let month = parts.next()?.parse::<u32>().ok()?;
+        let day = parts.next()?.parse::<u32>().ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Self::from_ymd(year, month, day)
+    }
+
+    fn iso_label(self) -> String {
+        format!("{:04}-{:02}-{:02}", self.year, self.month, self.day)
+    }
+
+    fn seed(self) -> u64 {
+        let packed_date = (self.year as u64) * 10_000 + (self.month as u64) * 100 + self.day as u64;
+        limit_run_seed(scramble_seed(
+            BASE_SEED ^ 0xDA17_1EAF_C0DE_0001 ^ packed_date.rotate_left(17),
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RunChallenge {
+    date: DailyChallengeDate,
+}
+
+impl RunChallenge {
+    fn daily(date: DailyChallengeDate) -> Self {
+        Self { date }
+    }
+
+    fn seed(self) -> u64 {
+        self.date.seed()
+    }
+
+    fn label(self, language: Language) -> String {
+        match language {
+            Language::English => format!("Daily Challenge {}", self.date.iso_label()),
+            Language::Spanish => format!("Desafío Diario {}", self.date.iso_label()),
+        }
+    }
+
+    fn save(self) -> SavedRunChallenge {
+        SavedRunChallenge {
+            kind: DAILY_CHALLENGE_KIND.to_string(),
+            date: self.date.iso_label(),
+        }
+    }
+
+    fn restore(saved: &SavedRunChallenge) -> Option<Self> {
+        if saved.kind != DAILY_CHALLENGE_KIND {
+            return None;
+        }
+        DailyChallengeDate::parse_iso(&saved.date).map(Self::daily)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct LevelIntroState {
     level: usize,
@@ -990,6 +1080,7 @@ struct FinalVictorySummary {
     player_max_hp: i32,
     deck_count: usize,
     seed: u64,
+    challenge: Option<RunChallenge>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1007,6 +1098,7 @@ struct DefeatSummary {
     player_max_hp: i32,
     deck_count: usize,
     seed: u64,
+    challenge: Option<RunChallenge>,
 }
 
 #[derive(Clone, Debug)]
@@ -1204,6 +1296,10 @@ pub(crate) struct App {
     language_generation: u32,
     background_mode: BackgroundMode,
     background_mode_generation: u32,
+    daily_challenge_enabled: bool,
+    daily_challenge_generation: u32,
+    daily_challenge_date: Option<DailyChallengeDate>,
+    active_run_challenge: Option<RunChallenge>,
     player_name: Option<String>,
     player_name_input_value: String,
     player_name_generation: u32,
@@ -1294,6 +1390,10 @@ impl App {
             language_generation: 0,
             background_mode: BackgroundMode::Binary,
             background_mode_generation: 0,
+            daily_challenge_enabled: false,
+            daily_challenge_generation: 0,
+            daily_challenge_date: None,
+            active_run_challenge: None,
             player_name: None,
             player_name_input_value: String::new(),
             player_name_generation: 0,
@@ -1770,6 +1870,46 @@ impl App {
 
     pub(crate) fn background_mode_generation(&self) -> u32 {
         self.background_mode_generation
+    }
+
+    pub(crate) fn set_daily_challenge_enabled(&mut self, enabled: bool) {
+        if self.daily_challenge_enabled == enabled {
+            return;
+        }
+        self.daily_challenge_enabled = enabled;
+        self.daily_challenge_generation = self.daily_challenge_generation.wrapping_add(1);
+        self.refresh_hover();
+        self.dirty = true;
+        self.rebuild_frame();
+    }
+
+    pub(crate) fn daily_challenge_enabled(&self) -> bool {
+        self.daily_challenge_enabled
+    }
+
+    pub(crate) fn daily_challenge_generation(&self) -> u32 {
+        self.daily_challenge_generation
+    }
+
+    pub(crate) fn set_daily_challenge_date(&mut self, year: u32, month: u32, day: u32) -> bool {
+        let next = DailyChallengeDate::from_ymd(year, month, day);
+        if self.daily_challenge_date == next {
+            return next.is_some();
+        }
+        self.daily_challenge_date = next;
+        self.refresh_hover();
+        self.dirty = true;
+        if self.dirty {
+            self.rebuild_frame();
+        }
+        next.is_some()
+    }
+
+    fn current_daily_challenge(&self) -> Option<RunChallenge> {
+        if !self.daily_challenge_enabled {
+            return None;
+        }
+        self.daily_challenge_date.map(RunChallenge::daily)
     }
 
     fn default_player_name(&self) -> &str {
@@ -3816,6 +3956,8 @@ impl App {
             | HitTarget::SettingsLanguageSpanish
             | HitTarget::SettingsBackgroundBinary
             | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsDailyOn
+            | HitTarget::SettingsDailyOff
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
@@ -3974,6 +4116,8 @@ impl App {
                         50 => self.set_language_from_boot(Language::Spanish),
                         51 => self.set_background_mode_from_boot(BackgroundMode::Binary),
                         52 => self.set_background_mode_from_boot(BackgroundMode::Black),
+                        53 => self.set_daily_challenge_from_boot(true),
+                        54 => self.set_daily_challenge_from_boot(false),
                         _ => {}
                     }
                 } else if self.ui.restart_confirm_open || self.restart_confirm_visible() {
@@ -4312,6 +4456,7 @@ impl App {
         };
 
         self.party_run = Some(party_run);
+        self.active_run_challenge = None;
         self.party_ready = vec![false; slot_count];
         self.party_combat = if matches!(self.screen, AppScreen::Combat) {
             let fallback_view = previous_party_combat
@@ -4856,6 +5001,9 @@ impl App {
         let language_generation = self.language_generation;
         let background_mode = self.background_mode;
         let background_mode_generation = self.background_mode_generation;
+        let daily_challenge_enabled = self.daily_challenge_enabled;
+        let daily_challenge_generation = self.daily_challenge_generation;
+        let daily_challenge_date = self.daily_challenge_date;
         let player_name = self.player_name.clone();
         let player_name_input_value = self.player_name_input_value.clone();
         let player_name_generation = self.player_name_generation;
@@ -4868,6 +5016,9 @@ impl App {
         self.language_generation = language_generation;
         self.background_mode = background_mode;
         self.background_mode_generation = background_mode_generation;
+        self.daily_challenge_enabled = daily_challenge_enabled;
+        self.daily_challenge_generation = daily_challenge_generation;
+        self.daily_challenge_date = daily_challenge_date;
         self.player_name = player_name;
         self.player_name_input_value = player_name_input_value;
         self.player_name_generation = player_name_generation;
@@ -4956,6 +5107,9 @@ impl App {
         let language_generation = self.language_generation;
         let background_mode = self.background_mode;
         let background_mode_generation = self.background_mode_generation;
+        let daily_challenge_enabled = self.daily_challenge_enabled;
+        let daily_challenge_generation = self.daily_challenge_generation;
+        let daily_challenge_date = self.daily_challenge_date;
         let player_name = self.player_name.clone();
         let player_name_input_value = self.player_name_input_value.clone();
         let player_name_generation = self.player_name_generation;
@@ -4968,6 +5122,9 @@ impl App {
         self.language_generation = language_generation;
         self.background_mode = background_mode;
         self.background_mode_generation = background_mode_generation;
+        self.daily_challenge_enabled = daily_challenge_enabled;
+        self.daily_challenge_generation = daily_challenge_generation;
+        self.daily_challenge_date = daily_challenge_date;
         self.player_name = player_name;
         self.player_name_input_value = player_name_input_value;
         self.player_name_generation = player_name_generation;
@@ -5060,6 +5217,9 @@ impl App {
         let language_generation = self.language_generation;
         let background_mode = self.background_mode;
         let background_mode_generation = self.background_mode_generation;
+        let daily_challenge_enabled = self.daily_challenge_enabled;
+        let daily_challenge_generation = self.daily_challenge_generation;
+        let daily_challenge_date = self.daily_challenge_date;
         let player_name = self.player_name.clone();
         let player_name_input_value = self.player_name_input_value.clone();
         let player_name_generation = self.player_name_generation;
@@ -5072,6 +5232,9 @@ impl App {
         self.language_generation = language_generation;
         self.background_mode = background_mode;
         self.background_mode_generation = background_mode_generation;
+        self.daily_challenge_enabled = daily_challenge_enabled;
+        self.daily_challenge_generation = daily_challenge_generation;
+        self.daily_challenge_date = daily_challenge_date;
         self.player_name = player_name;
         self.player_name_input_value = player_name_input_value;
         self.player_name_generation = player_name_generation;
@@ -5631,6 +5794,10 @@ impl App {
         self.set_background_mode(background_mode);
     }
 
+    fn set_daily_challenge_from_boot(&mut self, enabled: bool) {
+        self.set_daily_challenge_enabled(enabled);
+    }
+
     fn open_run_info(&mut self) {
         if self.dungeon.is_none() {
             return;
@@ -5745,6 +5912,8 @@ impl App {
             HitTarget::SettingsBackgroundBlack => {
                 self.set_background_mode_from_boot(BackgroundMode::Black)
             }
+            HitTarget::SettingsDailyOn => self.set_daily_challenge_from_boot(true),
+            HitTarget::SettingsDailyOff => self.set_daily_challenge_from_boot(false),
             HitTarget::SettingsClose => self.close_settings(),
             HitTarget::InstallHelpClose => self.close_install_help(),
             HitTarget::Restart => self.open_restart_confirm(),
@@ -5943,8 +6112,14 @@ impl App {
         let active_state = self.build_active_run_state()?;
         let fallback_checkpoint = self.build_fallback_checkpoint(&active_state)?;
         let log = self.log.iter().cloned().collect();
+        let challenge = if matches!(active_state, SavedRunState::Party { .. }) {
+            None
+        } else {
+            self.active_run_challenge.map(RunChallenge::save)
+        };
         Some(RunSaveEnvelope::new(
             party,
+            challenge,
             active_state,
             fallback_checkpoint,
             log,
@@ -6289,6 +6464,7 @@ impl App {
 
     fn restore_from_save_raw(&mut self, raw: &str) -> Result<(), String> {
         let envelope = parse_run_save(raw)?;
+        let restored_challenge = envelope.challenge.as_ref().and_then(RunChallenge::restore);
         self.party_session = envelope.party.clone().normalize();
         let restore_result = self
             .restore_active_state(&envelope.active_state, &envelope.log)
@@ -6296,6 +6472,11 @@ impl App {
 
         match restore_result {
             Ok(restored_exact) => {
+                self.active_run_challenge = if self.multiplayer_run_active() {
+                    None
+                } else {
+                    restored_challenge
+                };
                 if !restored_exact {
                     self.log.clear();
                     self.push_log("Run resumed from checkpoint.");
@@ -7076,19 +7257,28 @@ impl App {
 
     fn start_run(&mut self) {
         let from_screen = self.screen;
-        let seed = self.next_run_seed_override.take().unwrap_or_else(|| {
-            limit_run_seed(scramble_seed(
-                BASE_SEED
-                    ^ self.seed_entropy
-                    ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                    ^ self.boot_time_ms.to_bits() as u64,
-            ))
+        let seed_override = self.next_run_seed_override.take();
+        let daily_challenge = if seed_override.is_none() && !self.multiplayer_enabled() {
+            self.current_daily_challenge()
+        } else {
+            None
+        };
+        let seed = seed_override.unwrap_or_else(|| {
+            daily_challenge.map(RunChallenge::seed).unwrap_or_else(|| {
+                limit_run_seed(scramble_seed(
+                    BASE_SEED
+                        ^ self.seed_entropy
+                        ^ self.restart_count.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ self.boot_time_ms.to_bits() as u64,
+                ))
+            })
         });
         self.clear_boot_request_flags();
         self.restart_count = self.restart_count.wrapping_add(1);
         self.seed_entropy = scramble_seed(seed ^ 0x94D0_49BB_1331_11EB);
         self.reset_party_screen_state();
         if self.multiplayer_enabled() {
+            self.active_run_challenge = None;
             let slot_count = self.party_slot_count();
             self.party_run = Some(PartyRunState::new(seed, slot_count));
             self.party_ready = vec![false; slot_count];
@@ -7099,6 +7289,7 @@ impl App {
             self.module_select = None;
         } else {
             self.party_run = None;
+            self.active_run_challenge = daily_challenge;
             self.dungeon = Some(DungeonRun::new(seed));
             self.module_select = Some(ModuleSelectState {
                 options: starter_module_choices(),
@@ -7135,6 +7326,7 @@ impl App {
         self.screen = AppScreen::Boot;
         self.dungeon = None;
         self.party_run = None;
+        self.active_run_challenge = None;
         self.reset_party_screen_state();
         self.rest = None;
         self.shop = None;
@@ -7472,6 +7664,8 @@ impl App {
             | HitTarget::SettingsLanguageSpanish
             | HitTarget::SettingsBackgroundBinary
             | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsDailyOn
+            | HitTarget::SettingsDailyOff
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
@@ -9120,6 +9314,8 @@ impl App {
             | HitTarget::SettingsLanguageSpanish
             | HitTarget::SettingsBackgroundBinary
             | HitTarget::SettingsBackgroundBlack
+            | HitTarget::SettingsDailyOn
+            | HitTarget::SettingsDailyOff
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
@@ -9906,6 +10102,7 @@ impl App {
             player_max_hp: dungeon.player_max_hp,
             deck_count: dungeon.deck.len(),
             seed: dungeon.seed,
+            challenge: self.active_run_challenge,
         })
     }
 
@@ -9954,6 +10151,7 @@ impl App {
             player_max_hp: dungeon.player_max_hp,
             deck_count: dungeon.deck.len(),
             seed: dungeon.seed,
+            challenge: self.active_run_challenge,
         })
     }
 
@@ -9981,24 +10179,53 @@ impl App {
             Language::English => format!("Seed {}", display_seed(summary.seed)),
             Language::Spanish => format!("Semilla {}", display_seed(summary.seed)),
         };
+        let challenge_line = summary
+            .challenge
+            .map(|challenge| challenge.label(self.language));
         let version_line = visible_game_version_label();
         let logo_size = (logical_width.min(logical_height) * 0.12).clamp(72.0, 104.0);
         let title_size = fit_text_size(title, 60.0, (logical_width - 48.0).max(120.0)).max(34.0);
+        let challenge_size = challenge_line
+            .as_ref()
+            .map(|line| fit_text_size(line, 17.0, (logical_width - 80.0).max(120.0)).max(11.0));
         let stats_size =
             fit_text_size(&stats_line, 18.0, (logical_width - 80.0).max(120.0)).max(12.0);
         let seed_size =
             fit_text_size(&seed_line, 14.0, (logical_width - 80.0).max(120.0)).max(11.0);
         let version_size =
             fit_text_size(&version_line, 14.0, (logical_width - 80.0).max(120.0)).max(11.0);
+        let logo_y = logical_height * (156.0 / LOGICAL_HEIGHT);
+        let title_y =
+            logo_y + logo_size + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP + title_size * 0.82;
+        let challenge_y = challenge_size.map(|size| {
+            title_y + title_size * 0.2 + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP + size * 0.82
+        });
+        let stats_y = challenge_y
+            .zip(challenge_size)
+            .map(|(y, size)| {
+                y + size * 0.2 + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP + stats_size * 0.82
+            })
+            .unwrap_or_else(|| {
+                title_y
+                    + title_size * 0.2
+                    + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+                    + stats_size * 0.82
+            });
+        let seed_y = stats_y + stats_size * 0.2 + 14.0 + seed_size * 0.82;
+        let version_y = seed_y + seed_size * 0.2 + 12.0 + version_size * 0.82;
         let content_width = logo_size
             .max(text_width(title, title_size))
             .max(text_width(&stats_line, stats_size))
             .max(text_width(&seed_line, seed_size))
             .max(text_width(&version_line, version_size));
+        let content_width = challenge_line
+            .as_ref()
+            .zip(challenge_size)
+            .map(|(line, size)| content_width.max(text_width(line, size)))
+            .unwrap_or(content_width);
         let horizontal_pad = 24.0;
-        let top = (logical_height * (156.0 / LOGICAL_HEIGHT) - 16.0).max(0.0);
-        let bottom = (logical_height * (398.0 / LOGICAL_HEIGHT) + version_size * 0.42 + 16.0)
-            .min(logical_height);
+        let top = (logo_y - 16.0).max(0.0);
+        let bottom = (version_y + version_size * 0.42 + 16.0).min(logical_height);
 
         Some(Rect {
             x: (center_x - content_width * 0.5 - horizontal_pad).max(0.0),
@@ -11900,6 +12127,12 @@ impl App {
                     if settings_layout.black_button.rect.contains(x, y) {
                         return Some(HitTarget::SettingsBackgroundBlack);
                     }
+                    if settings_layout.daily_on_button.rect.contains(x, y) {
+                        return Some(HitTarget::SettingsDailyOn);
+                    }
+                    if settings_layout.daily_off_button.rect.contains(x, y) {
+                        return Some(HitTarget::SettingsDailyOff);
+                    }
                     if settings_layout.close_button.rect.contains(x, y) {
                         return Some(HitTarget::SettingsClose);
                     }
@@ -12776,10 +13009,14 @@ impl App {
         let spanish_selected = self.language == Language::Spanish;
         let binary_selected = self.background_mode == BackgroundMode::Binary;
         let black_selected = self.background_mode == BackgroundMode::Black;
+        let daily_on_selected = self.daily_challenge_enabled;
+        let daily_off_selected = !self.daily_challenge_enabled;
         let english_hovered = self.ui.hover == Some(HitTarget::SettingsLanguageEnglish);
         let spanish_hovered = self.ui.hover == Some(HitTarget::SettingsLanguageSpanish);
         let binary_hovered = self.ui.hover == Some(HitTarget::SettingsBackgroundBinary);
         let black_hovered = self.ui.hover == Some(HitTarget::SettingsBackgroundBlack);
+        let daily_on_hovered = self.ui.hover == Some(HitTarget::SettingsDailyOn);
+        let daily_off_hovered = self.ui.hover == Some(HitTarget::SettingsDailyOff);
         render_primary_button_sized(
             scene,
             layout.english_button.rect,
@@ -12819,6 +13056,31 @@ impl App {
             layout.black_button.font_size,
             black_hovered || black_selected,
             self.tr("Black", "Negro"),
+            self.boot_time_ms,
+        );
+        scene.text(
+            layout.modal_rect.x + layout.modal_rect.w * 0.5,
+            layout.daily_label_y,
+            layout.daily_label_size,
+            "center",
+            TERM_GREEN_TEXT,
+            "body",
+            self.tr("Daily Challenge", "Desafío Diario"),
+        );
+        render_primary_button_sized(
+            scene,
+            layout.daily_on_button.rect,
+            layout.daily_on_button.font_size,
+            daily_on_hovered || daily_on_selected,
+            self.tr("On", "Sí"),
+            self.boot_time_ms,
+        );
+        render_primary_button_sized(
+            scene,
+            layout.daily_off_button.rect,
+            layout.daily_off_button.font_size,
+            daily_off_hovered || daily_off_selected,
+            self.tr("Off", "No"),
             self.boot_time_ms,
         );
         let close_hovered = self.ui.hover == Some(HitTarget::SettingsClose);
@@ -15418,6 +15680,9 @@ impl App {
                 Language::English => format!("Seed {}", display_seed(summary.seed)),
                 Language::Spanish => format!("Semilla {}", display_seed(summary.seed)),
             };
+            let challenge_line = summary
+                .challenge
+                .map(|challenge| challenge.label(self.language));
             let version_line = visible_game_version_label();
             let logo_size =
                 (self.logical_width().min(self.logical_height()) * 0.12).clamp(72.0, 104.0);
@@ -15429,6 +15694,9 @@ impl App {
             };
             let title_size =
                 fit_text_size(title, 60.0, (self.logical_width() - 48.0).max(120.0)).max(34.0);
+            let challenge_size = challenge_line.as_ref().map(|line| {
+                fit_text_size(line, 17.0, (self.logical_width() - 80.0).max(120.0)).max(11.0)
+            });
             let stats_size =
                 fit_text_size(&stats_line, 18.0, (self.logical_width() - 80.0).max(120.0))
                     .max(12.0);
@@ -15440,20 +15708,45 @@ impl App {
                 (self.logical_width() - 80.0).max(120.0),
             )
             .max(11.0);
+            let title_y = logo_rect.y
+                + logo_rect.h
+                + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+                + title_size * 0.82;
+            let challenge_y = challenge_size.map(|size| {
+                title_y + title_size * 0.2 + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP + size * 0.82
+            });
+            let stats_y = challenge_y
+                .zip(challenge_size)
+                .map(|(y, size)| {
+                    y + size * 0.2 + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP + stats_size * 0.82
+                })
+                .unwrap_or_else(|| {
+                    title_y
+                        + title_size * 0.2
+                        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+                        + stats_size * 0.82
+                });
+            let seed_y = stats_y + stats_size * 0.2 + 14.0 + seed_size * 0.82;
+            let version_y = seed_y + seed_size * 0.2 + 12.0 + version_size * 0.82;
 
             scene.image(logo_rect, LOGO_ASSET_PATH, 0.96);
             scene.text(
-                center_x,
-                self.logical_height() * (286.0 / LOGICAL_HEIGHT),
-                title_size,
-                "center",
-                TERM_GREEN,
-                "display",
-                title,
+                center_x, title_y, title_size, "center", TERM_GREEN, "display", title,
             );
+            if let Some((line, size)) = challenge_line.as_ref().zip(challenge_size) {
+                scene.text(
+                    center_x,
+                    challenge_y.unwrap_or(title_y),
+                    size,
+                    "center",
+                    TERM_GREEN_SOFT,
+                    "body",
+                    line,
+                );
+            }
             scene.text(
                 center_x,
-                self.logical_height() * (340.0 / LOGICAL_HEIGHT),
+                stats_y,
                 stats_size,
                 "center",
                 TERM_GREEN_TEXT,
@@ -15462,7 +15755,7 @@ impl App {
             );
             scene.text(
                 center_x,
-                self.logical_height() * (372.0 / LOGICAL_HEIGHT),
+                seed_y,
                 seed_size,
                 "center",
                 TERM_GREEN_DIM,
@@ -15471,7 +15764,7 @@ impl App {
             );
             scene.text(
                 center_x,
-                self.logical_height() * (398.0 / LOGICAL_HEIGHT),
+                version_y,
                 version_size,
                 "center",
                 TERM_GREEN_DIM,
@@ -15496,7 +15789,7 @@ impl App {
             )
             .max(12.0);
             let max_chars = ((block_width / (line_size * 0.62)).floor() as usize).max(16);
-            let rows: [(&str, String); 7] = [
+            let mut rows: Vec<(&str, String)> = vec![
                 (
                     TERM_GREEN_TEXT,
                     count_cleared_label(
@@ -15552,14 +15845,17 @@ impl App {
                     TERM_GREEN_TEXT,
                     card_deck_label(summary.deck_count, self.language),
                 ),
-                (
-                    TERM_GREEN_DIM,
-                    match self.language {
-                        Language::English => format!("Seed {}", display_seed(summary.seed)),
-                        Language::Spanish => format!("Semilla {}", display_seed(summary.seed)),
-                    },
-                ),
             ];
+            if let Some(challenge) = summary.challenge {
+                rows.push((TERM_GREEN_SOFT, challenge.label(self.language)));
+            }
+            rows.push((
+                TERM_GREEN_DIM,
+                match self.language {
+                    Language::English => format!("Seed {}", display_seed(summary.seed)),
+                    Language::Spanish => format!("Semilla {}", display_seed(summary.seed)),
+                },
+            ));
             let wrapped_rows: Vec<(&str, Vec<String>)> = rows
                 .iter()
                 .map(|(color, row)| (*color, wrap_text(row, max_chars)))
@@ -16731,6 +17027,20 @@ fn display_seed(seed: u64) -> String {
     format!("{:08X}", limit_run_seed(seed))
 }
 
+fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
 fn debug_map_label(dungeon: &DungeonRun, language: Language) -> String {
     match language {
         Language::English => format!(
@@ -16796,22 +17106,26 @@ fn build_settings_layout(
     language: Language,
 ) -> SettingsLayout {
     let pad_x = 24.0;
-    let top_pad = 24.0;
-    let bottom_pad = 20.0;
+    let top_pad = 20.0;
+    let bottom_pad = 18.0;
     let title = localized_text(language, "Settings", "Ajustes");
     let name_label = localized_text(language, "Player Name", "Nombre del Jugador");
     let language_label = localized_text(language, "Language", "Idioma");
     let background_label = localized_text(language, "Background", "Fondo");
+    let daily_label = localized_text(language, "Daily Challenge", "Desafío Diario");
     let binary_label = localized_text(language, "Binary", "Binario");
     let black_label = localized_text(language, "Black", "Negro");
+    let on_label = localized_text(language, "On", "Sí");
+    let off_label = localized_text(language, "Off", "No");
     let close_label = localized_text(language, "Close", "Cerrar");
     let title_size = 26.0;
     let section_label_size = 16.0;
     let name_label_size = section_label_size;
     let name_input_font_size = 20.0;
-    let name_input_height = 40.0;
+    let name_input_height = 38.0;
     let language_label_size = section_label_size;
     let background_label_size = section_label_size;
+    let daily_label_size = section_label_size;
     let title_max_w = (logical_width - 96.0).clamp(180.0, 360.0);
     let title_chars = ((title_max_w / (title_size * 0.62)).floor().max(10.0)) as usize;
     let title_lines = wrap_text(title, title_chars);
@@ -16822,9 +17136,10 @@ fn build_settings_layout(
     let name_label_w = text_width(name_label, name_label_size);
     let language_label_w = text_width(language_label, language_label_size);
     let background_label_w = text_width(background_label, background_label_size);
+    let daily_label_w = text_width(daily_label, daily_label_size);
     let title_gap = 8.0;
-    let title_to_name_gap = 40.0;
-    let button_gap = 40.0;
+    let title_to_name_gap = 28.0;
+    let button_gap = 24.0;
     let title_block_h = if title_lines.is_empty() {
         title_size
     } else {
@@ -16836,6 +17151,7 @@ fn build_settings_layout(
             .max(name_label_w)
             .max(language_label_w)
             .max(background_label_w)
+            .max(daily_label_w)
             .max(220.0)
             + pad_x * 2.0,
         logical_width,
@@ -16845,6 +17161,8 @@ fn build_settings_layout(
         fit_overlay_button_metrics(&["English", "Español"], modal_w - pad_x * 2.0);
     let background_button_metrics =
         fit_overlay_button_metrics(&[binary_label, black_label], modal_w - pad_x * 2.0);
+    let daily_button_metrics =
+        fit_overlay_button_metrics(&[on_label, off_label], modal_w - pad_x * 2.0);
     let close_button_metrics = fit_overlay_button_metrics(&[close_label], modal_w - pad_x * 2.0);
     let modal_h = top_pad
         + title_block_h
@@ -16860,6 +17178,10 @@ fn build_settings_layout(
         + background_label_size
         + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
         + background_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + daily_label_size
+        + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP
+        + daily_button_metrics.block_h
         + button_gap
         + close_button_metrics.block_h
         + bottom_pad;
@@ -16900,6 +17222,15 @@ fn build_settings_layout(
         modal_rect,
         background_buttons_bottom_pad,
     );
+    let daily_label_y = background_buttons_top
+        + background_button_metrics.block_h
+        + SETTINGS_SECTION_CONTROL_TO_LABEL_GAP
+        + daily_label_size;
+    let daily_buttons_top = daily_label_y + SETTINGS_SECTION_LABEL_TO_CONTROL_GAP;
+    let daily_buttons_bottom_pad =
+        modal_rect.y + modal_rect.h - daily_buttons_top - daily_button_metrics.block_h;
+    let daily_buttons =
+        place_overlay_buttons(&daily_button_metrics, modal_rect, daily_buttons_bottom_pad);
     let close_buttons = place_overlay_buttons(&close_button_metrics, modal_rect, bottom_pad);
 
     SettingsLayout {
@@ -16908,6 +17239,8 @@ fn build_settings_layout(
         spanish_button: language_buttons[1],
         binary_button: background_buttons[0],
         black_button: background_buttons[1],
+        daily_on_button: daily_buttons[0],
+        daily_off_button: daily_buttons[1],
         close_button: close_buttons[0],
         title_lines,
         title_size,
@@ -16919,6 +17252,8 @@ fn build_settings_layout(
         language_label_y,
         background_label_size,
         background_label_y,
+        daily_label_size,
+        daily_label_y,
     }
 }
 
@@ -17125,23 +17460,55 @@ fn escape_json_string(value: &str) -> String {
 
 fn final_victory_share_payload(summary: &FinalVictorySummary, language: Language) -> String {
     let seed = display_seed(summary.seed);
+    let challenge_name = summary.challenge.map(|challenge| challenge.label(language));
     let share_text = match language {
-        Language::English => format!(
-            "I cleared all {} sectors in {}. {} max HP. {} card deck. Seed {}.",
-            summary.total_levels, GAME_TITLE, summary.player_max_hp, summary.deck_count, seed
-        ),
-        Language::Spanish => format!(
-            "Completé los {} sectores en {}. {} HP máximo. Mazo de {} cartas. Semilla {}.",
-            summary.total_levels, GAME_TITLE, summary.player_max_hp, summary.deck_count, seed
-        ),
+        Language::English => {
+            if let Some(challenge_name) = challenge_name.as_ref() {
+                format!(
+                    "I cleared {} in {}. {} max HP. {} card deck. Seed {}.",
+                    challenge_name, GAME_TITLE, summary.player_max_hp, summary.deck_count, seed
+                )
+            } else {
+                format!(
+                    "I cleared all {} sectors in {}. {} max HP. {} card deck. Seed {}.",
+                    summary.total_levels,
+                    GAME_TITLE,
+                    summary.player_max_hp,
+                    summary.deck_count,
+                    seed
+                )
+            }
+        }
+        Language::Spanish => {
+            if let Some(challenge_name) = challenge_name.as_ref() {
+                format!(
+                    "Completé {} en {}. {} HP máximo. Mazo de {} cartas. Semilla {}.",
+                    challenge_name, GAME_TITLE, summary.player_max_hp, summary.deck_count, seed
+                )
+            } else {
+                format!(
+                    "Completé los {} sectores en {}. {} HP máximo. Mazo de {} cartas. Semilla {}.",
+                    summary.total_levels,
+                    GAME_TITLE,
+                    summary.player_max_hp,
+                    summary.deck_count,
+                    seed
+                )
+            }
+        }
     };
+    let challenge_json = challenge_name
+        .as_ref()
+        .map(|name| format!(r#","challenge_name":"{}""#, escape_json_string(name)))
+        .unwrap_or_default();
     format!(
-        r#"{{"kind":"final_victory_card","title":"{title}","max_hp":{max_hp},"deck_size":{deck_size},"seed":"{seed}","version":"{version}","share_text":"{share_text}"}}"#,
+        r#"{{"kind":"final_victory_card","title":"{title}","max_hp":{max_hp},"deck_size":{deck_size},"seed":"{seed}","version":"{version}"{challenge_json},"share_text":"{share_text}"}}"#,
         title = GAME_TITLE,
         max_hp = summary.player_max_hp,
         deck_size = summary.deck_count,
         seed = seed,
         version = GAME_VERSION,
+        challenge_json = challenge_json,
         share_text = escape_json_string(&share_text),
     )
 }
@@ -20359,6 +20726,14 @@ mod tests {
             ));
             assert!(rect_contains_rect(
                 layout.modal_rect,
+                layout.daily_on_button.rect
+            ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
+                layout.daily_off_button.rect
+            ));
+            assert!(rect_contains_rect(
+                layout.modal_rect,
                 layout.close_button.rect
             ));
             assert!(rect_contains_rect(
@@ -20374,6 +20749,14 @@ mod tests {
             assert!(button_label_fits(
                 layout.black_button,
                 app.tr("Black", "Negro")
+            ));
+            assert!(button_label_fits(
+                layout.daily_on_button,
+                app.tr("On", "Sí")
+            ));
+            assert!(button_label_fits(
+                layout.daily_off_button,
+                app.tr("Off", "No")
             ));
             assert!(button_label_fits(
                 layout.close_button,
@@ -20393,6 +20776,9 @@ mod tests {
             let language_buttons_bottom = (layout.english_button.rect.y
                 + layout.english_button.rect.h)
                 .max(layout.spanish_button.rect.y + layout.spanish_button.rect.h);
+            let background_buttons_bottom = (layout.binary_button.rect.y
+                + layout.binary_button.rect.h)
+                .max(layout.black_button.rect.y + layout.black_button.rect.h);
 
             assert!(
                 (layout.name_input_rect.y
@@ -20415,8 +20801,16 @@ mod tests {
                     .abs()
                     < 0.01
             );
+            assert!(
+                (layout.daily_on_button.rect.y
+                    - layout.daily_label_y
+                    - SETTINGS_SECTION_LABEL_TO_CONTROL_GAP)
+                    .abs()
+                    < 0.01
+            );
             assert!((layout.name_label_size - layout.language_label_size).abs() < 0.01);
             assert!((layout.language_label_size - layout.background_label_size).abs() < 0.01);
+            assert!((layout.background_label_size - layout.daily_label_size).abs() < 0.01);
             assert!(
                 ((layout.language_label_y - layout.language_label_size)
                     - (layout.name_input_rect.y + layout.name_input_rect.h)
@@ -20427,6 +20821,13 @@ mod tests {
             assert!(
                 ((layout.background_label_y - layout.background_label_size)
                     - language_buttons_bottom
+                    - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP)
+                    .abs()
+                    < 0.01
+            );
+            assert!(
+                ((layout.daily_label_y - layout.daily_label_size)
+                    - background_buttons_bottom
                     - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP)
                     .abs()
                     < 0.01
@@ -20488,6 +20889,31 @@ mod tests {
 
         assert!(app.ui.settings_open);
         assert_eq!(app.background_mode, BackgroundMode::Black);
+    }
+
+    #[test]
+    fn changing_daily_challenge_from_boot_keeps_settings_modal_open() {
+        let mut app = App::new();
+
+        app.open_settings();
+        assert!(app.ui.settings_open);
+
+        app.set_daily_challenge_from_boot(true);
+
+        assert!(app.ui.settings_open);
+        assert!(app.daily_challenge_enabled);
+    }
+
+    #[test]
+    fn daily_challenge_date_parses_and_generates_stable_seed() {
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+
+        assert_eq!(date.iso_label(), "2099-12-31");
+        assert_eq!(display_seed(date.seed()), "A97752BE");
+        assert_eq!(DailyChallengeDate::parse_iso("2099-12-31"), Some(date));
+        assert_eq!(DailyChallengeDate::from_ymd(2400, 2, 29).unwrap().day, 29);
+        assert!(DailyChallengeDate::from_ymd(2100, 2, 29).is_none());
+        assert!(DailyChallengeDate::parse_iso("2099-13-31").is_none());
     }
 
     #[test]
@@ -20904,6 +21330,43 @@ mod tests {
         assert!(matches!(restored.screen, AppScreen::Map));
         assert_eq!(restored.dungeon, app.dungeon);
         assert_eq!(restored.log, app.log);
+    }
+
+    #[test]
+    fn daily_challenge_save_round_trip_preserves_challenge_metadata() {
+        let mut app = App::new();
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+        app.set_daily_challenge_date(2099, 12, 31);
+        app.set_daily_challenge_enabled(true);
+        start_run_to_map(&mut app);
+
+        let snapshot = app.serialize_current_run().unwrap();
+        let envelope = parse_run_save(&snapshot).unwrap();
+        let saved_challenge = envelope.challenge.unwrap();
+        let restored = restore_app_from_snapshot(&snapshot);
+
+        assert_eq!(saved_challenge.kind, DAILY_CHALLENGE_KIND);
+        assert_eq!(saved_challenge.date, "2099-12-31");
+        assert_eq!(
+            restored.active_run_challenge,
+            Some(RunChallenge::daily(date))
+        );
+    }
+
+    #[test]
+    fn v4_save_without_daily_challenge_metadata_restores_as_normal_run() {
+        let mut app = App::new();
+        app.set_daily_challenge_date(2099, 12, 31);
+        app.set_daily_challenge_enabled(true);
+        start_run_to_map(&mut app);
+        let mut value: serde_json::Value =
+            serde_json::from_str(&app.serialize_current_run().unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("challenge");
+        let snapshot = serde_json::to_string(&value).unwrap();
+
+        let restored = restore_app_from_snapshot(&snapshot);
+
+        assert!(restored.active_run_challenge.is_none());
     }
 
     #[test]
@@ -26721,6 +27184,51 @@ mod tests {
     }
 
     #[test]
+    fn final_victory_screen_shows_daily_challenge_name() {
+        let mut app = App::new();
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+        let mut dungeon = DungeonRun::new(date.seed());
+        dungeon.current_level = dungeon.total_levels();
+        dungeon.available_nodes.clear();
+        app.active_run_challenge = Some(RunChallenge::daily(date));
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Result(CombatOutcome::Victory);
+
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|center|#8dffad|body|Daily Challenge 2099-12-31"));
+        let entries = frame_text_entries(&frame);
+        let title = entries
+            .iter()
+            .find(|entry| entry.6 == "Run Complete")
+            .expect("final victory title should render");
+        let daily = entries
+            .iter()
+            .find(|entry| entry.6 == "Daily Challenge 2099-12-31")
+            .expect("daily challenge label should render");
+        let logo_rect = frame
+            .lines()
+            .find_map(|line| {
+                let mut parts = line.split('|');
+                if parts.next()? != "IMAGE" {
+                    return None;
+                }
+                Some(Rect {
+                    x: parts.next()?.parse().ok()?,
+                    y: parts.next()?.parse().ok()?,
+                    w: parts.next()?.parse().ok()?,
+                    h: parts.next()?.parse().ok()?,
+                })
+            })
+            .expect("final victory logo should render");
+        let logo_to_title_gap = title.1 - title.2 * 0.82 - (logo_rect.y + logo_rect.h);
+        let title_to_daily_gap = daily.1 - daily.2 * 0.82 - (title.1 + title.2 * 0.2);
+        assert!((logo_to_title_gap - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP).abs() < 0.75);
+        assert!((title_to_daily_gap - SETTINGS_SECTION_CONTROL_TO_LABEL_GAP).abs() < 0.75);
+    }
+
+    #[test]
     fn final_victory_summary_is_absent_for_nonfinal_results() {
         let mut app = App::new();
         app.dungeon = Some(DungeonRun::new(TEST_RUN_SEED));
@@ -26855,6 +27363,38 @@ mod tests {
     }
 
     #[test]
+    fn defeat_screen_shows_daily_challenge_name() {
+        let mut app = App::new();
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+        let mut dungeon = DungeonRun::new(date.seed());
+        dungeon.nodes = vec![
+            crate::dungeon::DungeonNode {
+                id: 0,
+                depth: 0,
+                lane: 3,
+                kind: RoomKind::Start,
+                next: vec![1],
+            },
+            crate::dungeon::DungeonNode {
+                id: 1,
+                depth: 1,
+                lane: 3,
+                kind: RoomKind::Combat,
+                next: vec![],
+            },
+        ];
+        dungeon.current_node = Some(1);
+        app.active_run_challenge = Some(RunChallenge::daily(date));
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Result(CombatOutcome::Defeat);
+
+        app.rebuild_frame();
+
+        let frame = String::from_utf8(app.frame.clone()).unwrap();
+        assert!(frame.contains("|center|#8dffad|body|Daily Challenge 2099-12-31"));
+    }
+
+    #[test]
     fn result_buttons_anchor_main_menu_to_bottom_and_share_above() {
         let buttons = result_button_layout(LOGICAL_WIDTH, LOGICAL_HEIGHT, true, Language::English);
         let share = buttons.share_button.unwrap();
@@ -26883,6 +27423,43 @@ mod tests {
     }
 
     #[test]
+    fn daily_challenge_singleplayer_start_uses_daily_seed_and_metadata() {
+        let mut app = App::new();
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+        app.set_daily_challenge_date(2099, 12, 31);
+        app.set_daily_challenge_enabled(true);
+
+        app.start_run();
+
+        assert_eq!(app.dungeon.as_ref().unwrap().seed, date.seed());
+        assert_eq!(app.active_run_challenge, Some(RunChallenge::daily(date)));
+    }
+
+    #[test]
+    fn daily_challenge_disabled_start_uses_normal_run_metadata() {
+        let mut app = App::new();
+        app.set_daily_challenge_date(2099, 12, 31);
+        app.set_daily_challenge_enabled(false);
+
+        app.start_run();
+
+        assert!(app.active_run_challenge.is_none());
+    }
+
+    #[test]
+    fn daily_challenge_does_not_apply_to_multiplayer_start() {
+        let mut app = App::new();
+        app.set_daily_challenge_date(2099, 12, 31);
+        app.set_daily_challenge_enabled(true);
+        app.set_party_size(2);
+
+        assert!(app.start_multiplayer_run_from_web());
+
+        assert!(app.active_run_challenge.is_none());
+        assert!(app.party_run.is_some());
+    }
+
+    #[test]
     fn queue_share_request_formats_final_victory_payload() {
         let mut app = App::new();
         let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
@@ -26904,5 +27481,23 @@ mod tests {
         assert!(share.contains(&format!(r#""seed":"{}""#, display_seed(TEST_RUN_SEED))));
         assert!(share.contains(&format!(r#""version":"{}""#, GAME_VERSION)));
         assert!(share.contains(r#""share_text":"I cleared all 3 sectors in Mazocarta."#));
+    }
+
+    #[test]
+    fn queue_share_request_includes_daily_challenge_name() {
+        let mut app = App::new();
+        let date = DailyChallengeDate::from_ymd(2099, 12, 31).unwrap();
+        let mut dungeon = DungeonRun::new(date.seed());
+        dungeon.current_level = dungeon.total_levels();
+        dungeon.available_nodes.clear();
+        app.active_run_challenge = Some(RunChallenge::daily(date));
+        app.dungeon = Some(dungeon);
+        app.screen = AppScreen::Result(CombatOutcome::Victory);
+
+        app.queue_share_request();
+
+        let share = app.share_request.as_ref().unwrap();
+        assert!(share.contains(r#""challenge_name":"Daily Challenge 2099-12-31""#));
+        assert!(share.contains("I cleared Daily Challenge 2099-12-31 in Mazocarta."));
     }
 }

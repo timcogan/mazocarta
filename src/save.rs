@@ -19,6 +19,11 @@ pub(crate) struct RunSaveEnvelope {
     pub(crate) save_format_version: u32,
     pub(crate) game_version: String,
     pub(crate) party: PartySessionSnapshot,
+    // MIGRATION(save v4): `challenge` is absent from v4 saves written before
+    // Daily Challenge existed. Fallback: restore those saves as normal
+    // non-daily runs. Remove when minimum supported save format > 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) challenge: Option<SavedRunChallenge>,
     pub(crate) active_state: SavedRunState,
     pub(crate) fallback_checkpoint: SavedCheckpoint,
     pub(crate) log: Vec<String>,
@@ -27,6 +32,7 @@ pub(crate) struct RunSaveEnvelope {
 impl RunSaveEnvelope {
     pub(crate) fn new(
         party: PartySessionSnapshot,
+        challenge: Option<SavedRunChallenge>,
         active_state: SavedRunState,
         fallback_checkpoint: SavedCheckpoint,
         log: Vec<String>,
@@ -35,11 +41,18 @@ impl RunSaveEnvelope {
             save_format_version: SAVE_FORMAT_VERSION,
             game_version: CURRENT_GAME_VERSION.to_string(),
             party,
+            challenge,
             active_state,
             fallback_checkpoint,
             log,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct SavedRunChallenge {
+    pub(crate) kind: String,
+    pub(crate) date: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
