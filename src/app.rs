@@ -34,15 +34,15 @@ use crate::run_logic::{
     combat_seed_for_dungeon as shared_combat_seed_for_dungeon,
 };
 use crate::save::{
-    RunSaveEnvelope, SavedCheckpoint, SavedCombatState, SavedDeckState, SavedDungeonNode,
-    SavedDungeonRun, SavedEnemyState, SavedEventState, SavedFighterState, SavedModuleSelectState,
-    SavedPartyState, SavedPlayerState, SavedRestState, SavedRewardState, SavedRunChallenge,
-    SavedRunState, SavedShopOffer, SavedShopState, parse_run_save, resolve_card_id,
-    resolve_deck_card_id, resolve_encounter_setup, resolve_enemy_profile, resolve_event_id,
-    resolve_module_id, resolve_reward_tier, resolve_room_kind, resolve_turn_phase,
-    save_encounter_setup, serialize_card_id, serialize_enemy_profile, serialize_envelope,
-    serialize_event_id, serialize_module_id, serialize_reward_tier, serialize_room_kind,
-    serialize_turn_phase,
+    ChallengeKind, RunSaveEnvelope, SavedChallengeDate, SavedCheckpoint, SavedCombatState,
+    SavedDeckState, SavedDungeonNode, SavedDungeonRun, SavedEnemyState, SavedEventState,
+    SavedFighterState, SavedModuleSelectState, SavedPartyState, SavedPlayerState, SavedRestState,
+    SavedRewardState, SavedRunChallenge, SavedRunState, SavedShopOffer, SavedShopState,
+    parse_run_save, resolve_card_id, resolve_deck_card_id, resolve_encounter_setup,
+    resolve_enemy_profile, resolve_event_id, resolve_module_id, resolve_reward_tier,
+    resolve_room_kind, resolve_turn_phase, save_encounter_setup, serialize_card_id,
+    serialize_enemy_profile, serialize_envelope, serialize_event_id, serialize_module_id,
+    serialize_reward_tier, serialize_room_kind, serialize_turn_phase,
 };
 use crate::session::{HeroRuntimeSummary, PartySessionSnapshot, serialize_party_session};
 
@@ -50,7 +50,6 @@ const LOGICAL_WIDTH: f32 = 1280.0;
 const LOGICAL_HEIGHT: f32 = 720.0;
 const BASE_SEED: u64 = 0xA57A_C47A_2204_0001;
 const RUN_SEED_MASK: u64 = 0xFFFF_FFFF;
-const DAILY_CHALLENGE_KIND: &str = "daily";
 const GAME_TITLE: &str = "Mazocarta";
 const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
 const BUILD_APP_CHANNEL: Option<&str> = option_env!("MAZOCARTA_APP_CHANNEL");
@@ -1000,6 +999,7 @@ impl DailyChallengeDate {
         })
     }
 
+    #[cfg(test)]
     fn parse_iso(raw: &str) -> Option<Self> {
         let mut parts = raw.split('-');
         let year = parts.next()?.parse::<u32>().ok()?;
@@ -1046,16 +1046,22 @@ impl RunChallenge {
 
     fn save(self) -> SavedRunChallenge {
         SavedRunChallenge {
-            kind: DAILY_CHALLENGE_KIND.to_string(),
-            date: self.date.iso_label(),
+            kind: ChallengeKind::Daily,
+            date: SavedChallengeDate::from_ymd(
+                self.date.year as u32,
+                self.date.month as u32,
+                self.date.day as u32,
+            )
+            .expect("daily challenge dates are validated before save"),
         }
     }
 
     fn restore(saved: &SavedRunChallenge) -> Option<Self> {
-        if saved.kind != DAILY_CHALLENGE_KIND {
+        if saved.kind != ChallengeKind::Daily {
             return None;
         }
-        DailyChallengeDate::parse_iso(&saved.date).map(Self::daily)
+        DailyChallengeDate::from_ymd(saved.date.year(), saved.date.month(), saved.date.day())
+            .map(Self::daily)
     }
 }
 
@@ -1897,6 +1903,7 @@ impl App {
             return next.is_some();
         }
         self.daily_challenge_date = next;
+        self.daily_challenge_generation = self.daily_challenge_generation.wrapping_add(1);
         self.refresh_hover();
         self.dirty = true;
         if self.dirty {
@@ -20917,6 +20924,21 @@ mod tests {
     }
 
     #[test]
+    fn daily_challenge_date_changes_update_generation() {
+        let mut app = App::new();
+
+        assert_eq!(app.daily_challenge_generation(), 0);
+        assert!(app.set_daily_challenge_date(2099, 12, 31));
+        assert_eq!(app.daily_challenge_generation(), 1);
+        assert!(app.set_daily_challenge_date(2099, 12, 31));
+        assert_eq!(app.daily_challenge_generation(), 1);
+        assert!(!app.set_daily_challenge_date(2100, 2, 29));
+        assert_eq!(app.daily_challenge_generation(), 2);
+        assert!(!app.set_daily_challenge_date(2100, 2, 29));
+        assert_eq!(app.daily_challenge_generation(), 2);
+    }
+
+    #[test]
     fn black_background_keeps_the_plain_boot_fill() {
         let mut app = App::new();
         app.set_background_mode(BackgroundMode::Black);
@@ -21345,8 +21367,8 @@ mod tests {
         let saved_challenge = envelope.challenge.unwrap();
         let restored = restore_app_from_snapshot(&snapshot);
 
-        assert_eq!(saved_challenge.kind, DAILY_CHALLENGE_KIND);
-        assert_eq!(saved_challenge.date, "2099-12-31");
+        assert_eq!(saved_challenge.kind, ChallengeKind::Daily);
+        assert_eq!(saved_challenge.date.iso_label(), "2099-12-31");
         assert_eq!(
             restored.active_run_challenge,
             Some(RunChallenge::daily(date))

@@ -807,13 +807,19 @@ fn analyze_action(
     let threat_reduction = (threat_before - threat_after).max(0);
     let enemy_kills = before.enemy_alive_count as i32 - after.enemy_alive_count as i32;
     let energy_gain = (after.player_energy as i32 - before.player_energy as i32).max(0);
+    // legal_actions only targets living enemies. CombatSnapshot::from counts
+    // alive by hp > 0; if future combat removes killed enemies from
+    // simulated.enemies.get, keep target_kill robust by falling back to the
+    // before/after enemy_alive_count delta.
     let target_remaining_hp = candidate
         .enemy_index
         .and_then(|enemy_index| simulated.enemies.get(enemy_index))
         .map(|enemy| enemy.fighter.hp.max(0))
         .unwrap_or(i32::MAX);
-    let target_kill =
-        candidate.enemy_index.is_some() && target_starting_hp > 0 && target_remaining_hp == 0;
+    let target_missing_after = candidate.enemy_index.is_some() && target_remaining_hp == i32::MAX;
+    let target_kill = candidate.enemy_index.is_some()
+        && target_starting_hp > 0
+        && (target_remaining_hp == 0 || (target_missing_after && enemy_kills > 0));
 
     score += damage * 9;
     score += (before.enemy_total_block - after.enemy_total_block) * 4;
@@ -1421,11 +1427,24 @@ fn compare_action_analyses(left: ActionAnalysis, right: ActionAnalysis) -> std::
 }
 
 fn focus_fire_priority(analysis: ActionAnalysis) -> (i32, i32, i32) {
+    if !analysis_has_target(analysis) {
+        return (0, i32::MIN, i32::MIN);
+    }
+
+    let target_remaining_hp = if analysis.target_kill && analysis.target_remaining_hp == i32::MAX {
+        0
+    } else {
+        analysis.target_remaining_hp
+    };
     (
         i32::from(analysis.target_kill),
-        -analysis.target_remaining_hp,
+        -target_remaining_hp,
         -analysis.target_starting_hp,
     )
+}
+
+fn analysis_has_target(analysis: ActionAnalysis) -> bool {
+    analysis.candidate.enemy_index.is_some() && analysis.target_starting_hp != i32::MAX
 }
 
 fn actual_heal(dungeon: &DungeonRun, amount: i32) -> i32 {

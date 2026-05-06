@@ -1075,10 +1075,14 @@ mod tests {
 
     #[test]
     fn enemy_damage_scales_by_twenty_five_percent_per_extra_player() {
+        assert_eq!(scale_enemy_damage_for_party(0, 2), 0);
+        assert_eq!(scale_enemy_damage_for_party(-5, 2), -5);
+        assert_eq!(scale_enemy_damage_for_party(10, 0), 10);
         assert_eq!(scale_enemy_damage_for_party(10, 1), 10);
         assert_eq!(scale_enemy_damage_for_party(10, 2), 13);
         assert_eq!(scale_enemy_damage_for_party(10, 3), 16);
         assert_eq!(scale_enemy_damage_for_party(10, 4), 20);
+        assert_eq!(scale_enemy_damage_for_party(i32::MAX, 2), i32::MAX);
     }
 
     #[test]
