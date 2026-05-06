@@ -1906,9 +1906,7 @@ impl App {
         self.daily_challenge_generation = self.daily_challenge_generation.wrapping_add(1);
         self.refresh_hover();
         self.dirty = true;
-        if self.dirty {
-            self.rebuild_frame();
-        }
+        self.rebuild_frame();
         next.is_some()
     }
 

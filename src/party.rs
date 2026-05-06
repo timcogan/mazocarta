@@ -867,8 +867,10 @@ fn scale_enemy_damage_for_party(damage: i32, party_size: usize) -> i32 {
         denominator = denominator.saturating_mul(MULTIPLAYER_ENEMY_DAMAGE_DENOMINATOR);
     }
 
-    let scaled =
-        (i64::from(damage).saturating_mul(numerator) + denominator / 2) / denominator.max(1);
+    let scaled = i64::from(damage)
+        .saturating_mul(numerator)
+        .saturating_add(denominator / 2)
+        / denominator.max(1);
     scaled.clamp(0, i64::from(i32::MAX)) as i32
 }
 
