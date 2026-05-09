@@ -46,6 +46,13 @@ use crate::save::{
 };
 use crate::session::{HeroRuntimeSummary, PartySessionSnapshot, serialize_party_session};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct BinaryBackgroundPalette {
+    dim: (u8, u8, u8),
+    text: (u8, u8, u8),
+    soft: (u8, u8, u8),
+}
+
 const LOGICAL_WIDTH: f32 = 1280.0;
 const LOGICAL_HEIGHT: f32 = 720.0;
 const BASE_SEED: u64 = 0xA57A_C47A_2204_0001;
@@ -77,6 +84,33 @@ const TERM_GREEN_DIM: &str = "#6f9f7b";
 const TERM_GREEN_SOFT_RGB: (u8, u8, u8) = (141, 255, 173);
 const TERM_GREEN_TEXT_RGB: (u8, u8, u8) = (201, 255, 215);
 const TERM_GREEN_DIM_RGB: (u8, u8, u8) = (111, 159, 123);
+const LEVEL_TWO_BASE: &str = "#c7a7ff";
+const LEVEL_TWO_BASE_RGB: (u8, u8, u8) = (199, 167, 255);
+const LEVEL_TWO_DETAIL_A: &str = "#ff9df3";
+const LEVEL_TWO_DETAIL_A_RGB: (u8, u8, u8) = (255, 157, 243);
+const LEVEL_TWO_DIM: &str = "#7f719b";
+const LEVEL_TWO_DIM_RGB: (u8, u8, u8) = (127, 113, 155);
+const LEVEL_THREE_BASE: &str = "#ffb852";
+const LEVEL_THREE_BASE_RGB: (u8, u8, u8) = (255, 184, 82);
+const LEVEL_THREE_DETAIL_A: &str = "#ffe07a";
+const LEVEL_THREE_DETAIL_A_RGB: (u8, u8, u8) = (255, 224, 122);
+const LEVEL_THREE_DIM: &str = "#9a7657";
+const LEVEL_THREE_DIM_RGB: (u8, u8, u8) = (154, 118, 87);
+const BINARY_BACKGROUND_LEVEL_ONE_PALETTE: BinaryBackgroundPalette = BinaryBackgroundPalette {
+    dim: TERM_GREEN_DIM_RGB,
+    text: TERM_GREEN_TEXT_RGB,
+    soft: TERM_GREEN_SOFT_RGB,
+};
+const BINARY_BACKGROUND_LEVEL_TWO_PALETTE: BinaryBackgroundPalette = BinaryBackgroundPalette {
+    dim: LEVEL_TWO_DIM_RGB,
+    text: LEVEL_TWO_BASE_RGB,
+    soft: LEVEL_TWO_DETAIL_A_RGB,
+};
+const BINARY_BACKGROUND_LEVEL_THREE_PALETTE: BinaryBackgroundPalette = BinaryBackgroundPalette {
+    dim: LEVEL_THREE_DIM_RGB,
+    text: LEVEL_THREE_BASE_RGB,
+    soft: LEVEL_THREE_DETAIL_A_RGB,
+};
 const TERM_CYAN: &str = "#3df5ff";
 const TERM_CYAN_SOFT: &str = "#a8fcff";
 const TERM_CYAN_DIM: &str = "#5aa5ab";
@@ -84,7 +118,8 @@ const TERM_BLUE_SOFT: &str = "#9bb7ff";
 const TERM_BLUE_DIM: &str = "#6f81b3";
 const TERM_PINK: &str = "#ff4fd8";
 const TERM_PINK_SOFT: &str = "#ff9cf0";
-const TERM_ORANGE: &str = "#ffb852";
+const TERM_ORANGE: &str = LEVEL_THREE_BASE;
+const TERM_ORANGE_RGB: (u8, u8, u8) = LEVEL_THREE_BASE_RGB;
 const TERM_LIME_SOFT: &str = "#ebff9a";
 const COLOR_TILE_FILL: &str = "rgba(0, 0, 0, 1.0)";
 const COLOR_GREEN_STROKE_STRONG: &str = "rgba(51, 255, 102, 0.92)";
@@ -12531,6 +12566,17 @@ impl App {
         self.dirty = false;
     }
 
+    fn active_binary_background_level(&self) -> Option<usize> {
+        if matches!(self.screen, AppScreen::Boot | AppScreen::Result(_)) {
+            return None;
+        }
+
+        self.party_run
+            .as_ref()
+            .map(PartyRunState::current_level)
+            .or_else(|| self.dungeon.as_ref().map(DungeonRun::current_level))
+    }
+
     fn render_background(&self, scene: &mut SceneBuilder) {
         scene.clear("#000000");
         scene.rect(
@@ -12553,6 +12599,7 @@ impl App {
     fn render_binary_background(&self, scene: &mut SceneBuilder) {
         let width = self.logical_width();
         let height = self.logical_height();
+        let palette = binary_background_palette_for_level(self.active_binary_background_level());
         let cell_w = (width / BINARY_BACKGROUND_COL_DIV)
             .clamp(BINARY_BACKGROUND_CELL_MIN, BINARY_BACKGROUND_CELL_MAX);
         let cell_h = (cell_w * BINARY_BACKGROUND_CELL_H_RATIO)
@@ -12619,13 +12666,9 @@ impl App {
                 let glyph = if noise01(glyph_seed) < 0.5 { "0" } else { "1" };
 
                 let (rgb, max_alpha) = match noise01(hi ^ 0x00C0_FFEE) {
-                    tone if tone < 0.65 => {
-                        (TERM_GREEN_DIM_RGB, 0.12 + noise01(lo ^ 0x00A5_A5A5) * 0.03)
-                    }
-                    tone if tone < 0.93 => {
-                        (TERM_GREEN_TEXT_RGB, 0.15 + noise01(hi ^ 0x005A_5A5A) * 0.04)
-                    }
-                    _ => (TERM_GREEN_SOFT_RGB, 0.19 + noise01(lo ^ 0xBADC_0FFE) * 0.05),
+                    tone if tone < 0.65 => (palette.dim, 0.12 + noise01(lo ^ 0x00A5_A5A5) * 0.03),
+                    tone if tone < 0.93 => (palette.text, 0.15 + noise01(hi ^ 0x005A_5A5A) * 0.04),
+                    _ => (palette.soft, 0.19 + noise01(lo ^ 0xBADC_0FFE) * 0.05),
                 };
                 let alpha = max_alpha * phase_alpha.clamp(0.0, 1.0);
                 let x = (col as f32 + 0.5) * cell_w;
@@ -12990,7 +13033,7 @@ impl App {
         );
         if caret_visible {
             let pulse = (self.boot_time_ms * 0.008).sin() * 0.5 + 0.5;
-            let caret_color = rgba((255, 184, 82), 0.28 + pulse * 0.52);
+            let caret_color = rgba(TERM_ORANGE_RGB, 0.28 + pulse * 0.52);
             scene.text(
                 text_x + player_name_width,
                 text_y,
@@ -16123,7 +16166,7 @@ fn card_banner_rgb(card: CardId) -> (u8, u8, u8) {
         CardArchetype::Pressure => (51, 255, 102),
         CardArchetype::Bulwark => (155, 183, 255),
         CardArchetype::Momentum => (61, 245, 255),
-        CardArchetype::Fabricate => (255, 184, 82),
+        CardArchetype::Fabricate => TERM_ORANGE_RGB,
         CardArchetype::Sweep => (235, 255, 154),
         CardArchetype::Burst => (255, 156, 240),
     }
@@ -16135,7 +16178,7 @@ fn module_accent_rgb(module: ModuleId) -> (u8, u8, u8) {
         ModuleId::TargetingRelay => (216, 255, 61),
         ModuleId::Nanoforge => (126, 255, 166),
         ModuleId::CapacitorBank => (255, 156, 240),
-        ModuleId::PrismScope => (255, 184, 82),
+        ModuleId::PrismScope => TERM_ORANGE_RGB,
         ModuleId::SalvageLedger => (255, 210, 120),
         ModuleId::OverclockCore => (255, 79, 216),
         ModuleId::SuppressionField => (155, 183, 255),
@@ -16832,7 +16875,7 @@ fn room_rgb(kind: RoomKind) -> (u8, u8, u8) {
         RoomKind::Combat => (51, 255, 102),
         RoomKind::Elite => (216, 255, 61),
         RoomKind::Rest => (61, 245, 255),
-        RoomKind::Shop => (255, 184, 82),
+        RoomKind::Shop => TERM_ORANGE_RGB,
         RoomKind::Event => (155, 183, 255),
         RoomKind::Boss => (255, 79, 216),
     }
@@ -16870,7 +16913,7 @@ fn room_hover_stroke(kind: RoomKind) -> String {
         RoomKind::Combat => String::from(COLOR_GREEN_STROKE_STRONG),
         RoomKind::Elite => rgba((216, 255, 61), 0.92),
         RoomKind::Rest => rgba((61, 245, 255), 0.92),
-        RoomKind::Shop => rgba((255, 184, 82), 0.92),
+        RoomKind::Shop => rgba(TERM_ORANGE_RGB, 0.92),
         RoomKind::Event => rgba((155, 183, 255), 0.92),
         RoomKind::Boss => rgba((255, 79, 216), 0.92),
     }
@@ -18039,23 +18082,23 @@ const ENEMY_LEVEL_ONE_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
 };
 
 const ENEMY_LEVEL_TWO_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
-    base: "#c7a7ff",
-    detail_a: "#ff9df3",
+    base: LEVEL_TWO_BASE,
+    detail_a: LEVEL_TWO_DETAIL_A,
     detail_b: "#7f89ff",
     detail_c: "#79e7ff",
     detail_d: "#b65cff",
     detail_e: "#ffe9b8",
-    dim: "#7f719b",
+    dim: LEVEL_TWO_DIM,
 };
 
 const ENEMY_LEVEL_THREE_SPRITE_PALETTE: EnemySpritePalette = EnemySpritePalette {
-    base: TERM_ORANGE,
-    detail_a: "#ffe07a",
+    base: LEVEL_THREE_BASE,
+    detail_a: LEVEL_THREE_DETAIL_A,
     detail_b: "#ff6438",
     detail_c: "#ff4f8a",
     detail_d: "#fff27a",
     detail_e: "#9fe7ff",
-    dim: "#9a7657",
+    dim: LEVEL_THREE_DIM,
 };
 
 fn enemy_sprite_palette(profile: EnemyProfileId) -> EnemySpritePalette {
@@ -18820,6 +18863,14 @@ fn is_energy_term(token: &str) -> bool {
 
 fn rgba((r, g, b): (u8, u8, u8), alpha: f32) -> String {
     format!("rgba({r}, {g}, {b}, {:.3})", alpha.clamp(0.0, 1.0))
+}
+
+fn binary_background_palette_for_level(level: Option<usize>) -> BinaryBackgroundPalette {
+    match level {
+        Some(2) => BINARY_BACKGROUND_LEVEL_TWO_PALETTE,
+        Some(level) if level >= 3 => BINARY_BACKGROUND_LEVEL_THREE_PALETTE,
+        _ => BINARY_BACKGROUND_LEVEL_ONE_PALETTE,
+    }
 }
 
 fn ui_tile_fill_from_rgb(rgb: (u8, u8, u8), alpha_scale: f32) -> String {
@@ -19719,16 +19770,34 @@ mod tests {
             .collect()
     }
 
-    fn is_binary_background_color(color: &str) -> bool {
+    fn render_binary_background_entries(app: &App) -> Vec<FrameTextEntry> {
+        let mut scene = SceneBuilder::new();
+        app.render_background(&mut scene);
+        let frame = scene.finish();
+        let entries = frame_text_entries(&frame);
+        binary_background_entries(&entries)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    fn is_binary_background_color(color: &str, palette: BinaryBackgroundPalette) -> bool {
         parse_rgba(color)
             .map(|(rgb, alpha)| {
-                matches!(
-                    rgb,
-                    TERM_GREEN_DIM_RGB | TERM_GREEN_TEXT_RGB | TERM_GREEN_SOFT_RGB
-                ) && alpha > 0.0
+                (rgb == palette.dim || rgb == palette.text || rgb == palette.soft)
+                    && alpha > 0.0
                     && alpha <= 0.34
             })
             .unwrap_or(false)
+    }
+
+    fn binary_background_uses_palette(
+        entries: &[FrameTextEntry],
+        palette: BinaryBackgroundPalette,
+    ) -> bool {
+        entries
+            .iter()
+            .all(|(_, _, _, _, color, _, _)| is_binary_background_color(color, palette))
     }
 
     fn binary_background_entry_alpha(entry: &FrameTextEntry) -> f32 {
@@ -20968,16 +21037,12 @@ mod tests {
     }
 
     #[test]
-    fn binary_background_renders_only_zeroes_and_ones_with_green_palette() {
+    fn binary_background_renders_only_zeroes_and_ones_with_level_one_palette() {
         let mut app = App::new();
         app.resize(1280.0, 720.0);
         app.set_background_mode(BackgroundMode::Binary);
 
-        let mut scene = SceneBuilder::new();
-        app.render_background(&mut scene);
-        let frame = scene.finish();
-        let entries = frame_text_entries(&frame);
-        let binary_entries = binary_background_entries(&entries);
+        let binary_entries = render_binary_background_entries(&app);
 
         assert!(!binary_entries.is_empty());
         assert!(
@@ -20986,9 +21051,69 @@ mod tests {
                 .all(|(_, _, _, align, color, _, text)| {
                     align == "center"
                         && matches!(text.as_str(), "0" | "1")
-                        && is_binary_background_color(color)
+                        && is_binary_background_color(color, BINARY_BACKGROUND_LEVEL_ONE_PALETTE)
                 })
         );
+    }
+
+    #[test]
+    fn binary_background_uses_level_two_palette_during_active_run() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+        app.boot_time_ms = 900.0;
+        app.screen = AppScreen::Map;
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.current_level = 2;
+        app.dungeon = Some(dungeon);
+
+        let binary_entries = render_binary_background_entries(&app);
+
+        assert!(!binary_entries.is_empty());
+        assert!(binary_background_uses_palette(
+            &binary_entries,
+            BINARY_BACKGROUND_LEVEL_TWO_PALETTE
+        ));
+    }
+
+    #[test]
+    fn binary_background_uses_level_three_palette_during_active_run() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+        app.boot_time_ms = 900.0;
+        app.screen = AppScreen::LevelIntro;
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.current_level = 3;
+        app.dungeon = Some(dungeon);
+
+        let binary_entries = render_binary_background_entries(&app);
+
+        assert!(!binary_entries.is_empty());
+        assert!(binary_background_uses_palette(
+            &binary_entries,
+            BINARY_BACKGROUND_LEVEL_THREE_PALETTE
+        ));
+    }
+
+    #[test]
+    fn binary_background_result_screen_keeps_level_one_palette() {
+        let mut app = App::new();
+        app.resize(1280.0, 720.0);
+        app.set_background_mode(BackgroundMode::Binary);
+        app.boot_time_ms = 900.0;
+        app.screen = AppScreen::Result(CombatOutcome::Victory);
+        let mut dungeon = DungeonRun::new(TEST_RUN_SEED);
+        dungeon.current_level = 3;
+        app.dungeon = Some(dungeon);
+
+        let binary_entries = render_binary_background_entries(&app);
+
+        assert!(!binary_entries.is_empty());
+        assert!(binary_background_uses_palette(
+            &binary_entries,
+            BINARY_BACKGROUND_LEVEL_ONE_PALETTE
+        ));
     }
 
     #[test]
