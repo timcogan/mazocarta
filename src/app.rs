@@ -2328,10 +2328,10 @@ impl App {
                         removed_index,
                     );
                 }
+                Some(MultiplayerCombatLayoutTransition::RevealHand)
+                    if playback_started && playback_kind == CombatPlaybackKind::EnemyTurn => {}
                 Some(MultiplayerCombatLayoutTransition::RevealHand) => {
-                    if !(playback_started && playback_kind == CombatPlaybackKind::EnemyTurn) {
-                        self.begin_hand_reveal_transition(previous.layout.clone());
-                    }
+                    self.begin_hand_reveal_transition(previous.layout.clone());
                 }
                 None => {}
             }
