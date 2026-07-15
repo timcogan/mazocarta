@@ -117,6 +117,7 @@ const GAME_BUTTON_MIN_PAD_X = 8;
 const GAME_BUTTON_MIN_PAD_Y = 6;
 const DEFAULT_GAME_TITLE = "Mazocarta";
 const PREVIEW_GAME_TITLE = "Mazocarta Preview";
+const CREDITS_URL = "https://tim.cogan.dev";
 const LOGO_ASSET_PATH = "./mazocarta.svg";
 const COMBAT_ICON_ASSET_PATHS = [
   "./icons/combat/heart.png",
@@ -1272,15 +1273,54 @@ function mixEntropy() {
   wasm.app_mix_entropy(low, high);
 }
 
+function runSaveMetadata(raw) {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return { isParty: false, isGuestParty: false };
+  }
+  try {
+    const payload = JSON.parse(raw);
+    const party = payload?.party;
+    const activeScreen = payload?.active_state?.screen;
+    const checkpointKind = payload?.fallback_checkpoint?.kind;
+    const isParty = activeScreen === "party" || checkpointKind === "party";
+    const localSlot = Number.isInteger(party?.local_slot) ? party.local_slot : 0;
+    const captainSlot = Number.isInteger(party?.captain_slot) ? party.captain_slot : 0;
+    return {
+      isParty,
+      isGuestParty: isParty && localSlot !== captainSlot,
+    };
+  } catch {
+    return { isParty: false, isGuestParty: false };
+  }
+}
+
+function clearStoredPartyRun() {
+  try {
+    const raw = window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
+    if (runSaveMetadata(raw).isParty) {
+      window.localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+    }
+  } catch {}
+}
+
 function readStoredRun() {
   try {
-    return window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
+    const raw = window.localStorage.getItem(ACTIVE_RUN_STORAGE_KEY);
+    if (runSaveMetadata(raw).isGuestParty) {
+      window.localStorage.removeItem(ACTIVE_RUN_STORAGE_KEY);
+      return null;
+    }
+    return raw;
   } catch {
     return null;
   }
 }
 
 function writeStoredRun(raw) {
+  if (runSaveMetadata(raw).isGuestParty) {
+    clearStoredPartyRun();
+    return true;
+  }
   try {
     window.localStorage.setItem(ACTIVE_RUN_STORAGE_KEY, raw);
     return true;
@@ -2201,7 +2241,11 @@ function syncRunSaveSnapshot() {
   const len = wasm.run_save_len();
   if (!len) {
     lastRunSaveRaw = null;
-    clearStoredRun();
+    if (multiplayer?.isGuest?.()) {
+      clearStoredPartyRun();
+    } else {
+      clearStoredRun();
+    }
     syncStoredRunAvailability();
     return true;
   }
@@ -2210,6 +2254,17 @@ function syncRunSaveSnapshot() {
   const bytes = new Uint8Array(wasm.memory.buffer, ptr, len);
   const raw = decoder.decode(bytes.slice());
   lastRunSaveRaw = raw;
+  if (multiplayer?.isGuest?.() && runSaveMetadata(raw).isParty) {
+    clearStoredPartyRun();
+    syncStoredRunAvailability();
+    if (
+      multiplayer &&
+      typeof multiplayer.notifyLocalRunSnapshotChanged === "function"
+    ) {
+      multiplayer.notifyLocalRunSnapshotChanged();
+    }
+    return true;
+  }
   if (!writeStoredRun(raw)) {
     lastRunSaveRaw = null;
     clearStoredRun();
@@ -2697,6 +2752,33 @@ async function flushUpdateRequest({ allowPrivilegedAction = false } = {}) {
   return true;
 }
 
+function flushCreditsLinkRequest({ allowPrivilegedAction = false } = {}) {
+  if (
+    !wasm ||
+    typeof wasm.credits_link_request_pending !== "function" ||
+    typeof wasm.clear_credits_link_request !== "function"
+  ) {
+    return false;
+  }
+
+  if (!wasm.credits_link_request_pending()) {
+    return false;
+  }
+
+  if (!allowPrivilegedAction) {
+    return false;
+  }
+
+  wasm.clear_credits_link_request();
+  const opened = window.open(CREDITS_URL, "_blank");
+  if (opened) {
+    opened.opener = null;
+  } else {
+    window.location.href = CREDITS_URL;
+  }
+  return true;
+}
+
 function flushResumeRequest() {
   if (
     !wasm ||
@@ -2754,6 +2836,7 @@ async function flushMultiplayerRequest() {
 }
 
 async function flushHostEffects(options = { allowPrivilegedAction: false }) {
+  const creditsOpened = flushCreditsLinkRequest(options);
   const installHandled = await flushInstallRequest(options);
   const updateHandled = await flushUpdateRequest(options);
   syncDailyChallengeDate();
@@ -2764,7 +2847,7 @@ async function flushHostEffects(options = { allowPrivilegedAction: false }) {
   syncRunSaveSnapshot();
   const resumed = flushResumeRequest();
   const multiplayerOpened = await flushMultiplayerRequest();
-  if (installHandled || updateHandled || resumed || multiplayerOpened) {
+  if (creditsOpened || installHandled || updateHandled || resumed || multiplayerOpened) {
     drawFrame();
   }
   await flushShareRequest();

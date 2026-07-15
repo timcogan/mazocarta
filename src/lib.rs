@@ -881,6 +881,18 @@ pub extern "C" fn clear_install_request() {
 
 #[cfg(target_arch = "wasm32")]
 #[unsafe(no_mangle)]
+pub extern "C" fn credits_link_request_pending() -> u32 {
+    APP.with(|app| u32::from(app.borrow().credits_link_request_pending()))
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn clear_credits_link_request() {
+    APP.with(|app| app.borrow_mut().clear_credits_link_request());
+}
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
 pub extern "C" fn update_request_pending() -> u32 {
     APP.with(|app| u32::from(app.borrow().update_request_pending()))
 }

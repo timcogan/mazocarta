@@ -22,6 +22,78 @@ async function captureFixtureSnapshot(browser, fixtureName) {
   }
 }
 
+async function getStoredRun(page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem("mazocarta.active_run");
+    const metadata = {
+      raw,
+      screen: null,
+      localSlot: null,
+      captainSlot: null,
+      partySize: null,
+    };
+    if (raw) {
+      try {
+        const payload = JSON.parse(raw);
+        metadata.screen = payload?.active_state?.screen ?? null;
+        metadata.localSlot = Number.isInteger(payload?.party?.local_slot)
+          ? payload.party.local_slot
+          : null;
+        metadata.captainSlot = Number.isInteger(payload?.party?.captain_slot)
+          ? payload.party.captain_slot
+          : null;
+        metadata.partySize = Number.isFinite(payload?.party?.configured_party_size)
+          ? payload.party.configured_party_size
+          : null;
+      } catch {
+        metadata.screen = null;
+      }
+    }
+    return metadata;
+  });
+}
+
+function cloneJson(value) {
+  return structuredClone(value);
+}
+
+function expandPartyStateToSize(partyState, partySize) {
+  if (!partyState || !Array.isArray(partyState.dungeons) || partyState.dungeons.length === 0) {
+    return;
+  }
+  while (partyState.dungeons.length < partySize) {
+    partyState.dungeons.push(cloneJson(partyState.dungeons[partyState.dungeons.length - 1]));
+  }
+  if (Array.isArray(partyState.ready)) {
+    while (partyState.ready.length < partySize) {
+      partyState.ready.push(false);
+    }
+  }
+}
+
+function expandMultiplayerSnapshotPartySize(raw, partySize) {
+  const payload = JSON.parse(raw);
+  payload.party.configured_party_size = partySize;
+  if (Array.isArray(payload.party.slots)) {
+    const templateSlot = payload.party.slots[1] ?? payload.party.slots[0];
+    for (let index = 0; index < partySize; index += 1) {
+      if (!payload.party.slots[index]) {
+        payload.party.slots[index] = cloneJson(templateSlot);
+      }
+      payload.party.slots[index].slot = index;
+      if (index >= 2) {
+        payload.party.slots[index].name = `Missing Player ${index + 1}`;
+        payload.party.slots[index].claim = "remote";
+        payload.party.slots[index].connected = false;
+        payload.party.slots[index].ready = false;
+      }
+    }
+  }
+  expandPartyStateToSize(payload.active_state?.party_state, partySize);
+  expandPartyStateToSize(payload.fallback_checkpoint?.party_state, partySize);
+  return JSON.stringify(payload);
+}
+
 async function getCombatState(page) {
   return page.evaluate(() => ({
     frameCounter: window.__MAZOCARTA_E2E__.getFrameCounter(),
@@ -153,6 +225,32 @@ async function scanAnimatedQrWithFakeCamera(
   return { frames, fullCode };
 }
 
+async function exchangePairCodes(hostPage, guestPage) {
+  await expect
+    .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+    .toBeGreaterThan(0);
+
+  const hostOffer = await hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode());
+  await guestPage.evaluate((code) => window.__MAZOCARTA_E2E__.applyPairCode(code), hostOffer);
+
+  await expect
+    .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
+    .toBe("guest-confirm");
+  await expect
+    .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+    .toBeGreaterThan(0);
+
+  const guestAnswer = await guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode());
+  await hostPage.evaluate((code) => window.__MAZOCARTA_E2E__.applyPairCode(code), guestAnswer);
+
+  await expect
+    .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
+    .toBe("guest-waiting");
+  await expect
+    .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getParticipants().length))
+    .toBe(2);
+}
+
 async function pairAndStartLanSession(
   browser,
   { hostContextOptions = {}, guestContextOptions = {} } = {},
@@ -177,29 +275,7 @@ async function pairAndStartLanSession(
       )
       .toMatchObject({ mode: "host-room" });
 
-    await expect
-      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
-      .toBeGreaterThan(0);
-
-    const hostOffer = await hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode());
-    await guestPage.evaluate((code) => window.__MAZOCARTA_E2E__.applyPairCode(code), hostOffer);
-
-    await expect
-      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
-      .toBe("guest-confirm");
-    await expect
-      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
-      .toBeGreaterThan(0);
-
-    const guestAnswer = await guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode());
-    await hostPage.evaluate((code) => window.__MAZOCARTA_E2E__.applyPairCode(code), guestAnswer);
-
-    await expect
-      .poll(() => guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getRoomMode()))
-      .toBe("guest-waiting");
-    await expect
-      .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.getParticipants().length))
-      .toBe(2);
+    await exchangePairCodes(hostPage, guestPage);
 
     await expect
       .poll(() => hostPage.evaluate(() => window.__MAZOCARTA_E2E__.startHostRun()))
@@ -217,6 +293,26 @@ async function pairAndStartLanSession(
     await guestContext.close();
     throw error;
   }
+}
+
+async function captureStartedMultiplayerSnapshot(browser) {
+  const session = await pairAndStartLanSession(browser);
+  try {
+    const snapshot = await session.hostPage.evaluate(() =>
+      window.__MAZOCARTA_E2E__.getRunSnapshotRaw(),
+    );
+    expect(typeof snapshot).toBe("string");
+    expect(snapshot.length).toBeGreaterThan(0);
+    return snapshot;
+  } finally {
+    await session.hostContext.close();
+    await session.guestContext.close();
+  }
+}
+
+async function pairGuestWithOpenHostRoom(hostPage, guestPage) {
+  await guestPage.evaluate(() => window.__MAZOCARTA_E2E__.openGuestRoom());
+  await exchangePairCodes(hostPage, guestPage);
 }
 
 async function pairAndStartLanSessionByFakeCamera(browser) {
@@ -341,6 +437,12 @@ test("host and guest can pair and start a LAN session by code", async ({ browser
     await expect
       .poll(() => session.guestPage.evaluate(() => window.__MAZOCARTA_E2E__.getPartyScreen()))
       .toBe("opening_intro");
+    const hostStorage = await getStoredRun(session.hostPage);
+    const guestStorage = await getStoredRun(session.guestPage);
+    expect(hostStorage.screen).toBe("party");
+    expect(hostStorage.localSlot).toBe(0);
+    expect(hostStorage.captainSlot).toBe(0);
+    expect(guestStorage.raw).toBeNull();
   } finally {
     await session.hostContext.close();
     await session.guestContext.close();
@@ -511,6 +613,7 @@ test("host disconnected main menu action uses in-canvas game button layout on mo
         timeout: 5_000,
       })
       .toBe(true);
+    expect((await getStoredRun(session.guestPage)).raw).toBeNull();
   } finally {
     if (session.hostContext) {
       await session.hostContext.close();
@@ -705,11 +808,15 @@ test("entry Back ignores immediate accidental tap after opening", async ({ page 
 });
 
 test("host offers resume or new run when a save exists", async ({ browser, page }) => {
-  const snapshot = await captureFixtureSnapshot(browser, "multiplayer-map");
+  const snapshot = await captureStartedMultiplayerSnapshot(browser);
   await openE2EPage(page);
   expect(
     await page.evaluate((raw) => window.__MAZOCARTA_E2E__.storeRunSnapshot(raw), snapshot),
   ).toBe(true);
+  const storage = await getStoredRun(page);
+  expect(storage.screen).toBe("party");
+  expect(storage.localSlot).toBe(0);
+  expect(storage.captainSlot).toBe(0);
 
   await page.evaluate(() => window.__MAZOCARTA_E2E__.openMultiplayerEntry());
   await page.getByRole("button", { name: "Host" }).click();
@@ -724,6 +831,45 @@ test("host offers resume or new run when a save exists", async ({ browser, page 
   await expect
     .poll(() => page.evaluate(() => window.__MAZOCARTA_E2E__.getRoomError()))
     .toBe("");
+});
+
+test("resumed multiplayer host room trims missing saved players", async ({ browser, page }) => {
+  const snapshot = expandMultiplayerSnapshotPartySize(
+    await captureStartedMultiplayerSnapshot(browser),
+    3,
+  );
+  const guestContext = await browser.newContext();
+  const guestPage = await guestContext.newPage();
+  try {
+    await Promise.all([openE2EPage(page), openE2EPage(guestPage)]);
+    expect(
+      await page.evaluate((raw) => window.__MAZOCARTA_E2E__.storeRunSnapshot(raw), snapshot),
+    ).toBe(true);
+    expect((await getStoredRun(page)).partySize).toBe(3);
+
+    await page.evaluate(() => window.__MAZOCARTA_E2E__.openMultiplayerEntry());
+    await page.getByRole("button", { name: "Host" }).click();
+    await page.getByRole("button", { name: "Resume Saved Run" }).click();
+
+    await expect.poll(() => page.evaluate(() => window.__MAZOCARTA_E2E__.startHostRun())).toBe(
+      false,
+    );
+    await pairGuestWithOpenHostRoom(page, guestPage);
+    await expect
+      .poll(() => page.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+      .toBeGreaterThan(0);
+    await expect.poll(() => page.evaluate(() => window.__MAZOCARTA_E2E__.startHostRun())).toBe(
+      true,
+    );
+    await expect
+      .poll(() => page.evaluate(() => window.__MAZOCARTA_E2E__.getPairCode().length))
+      .toBe(0);
+    const party = await page.evaluate(() => window.__MAZOCARTA_E2E__.getPartySnapshot());
+    expect(party.configured_party_size).toBe(2);
+    expect((await getStoredRun(page)).partySize).toBe(2);
+  } finally {
+    await guestContext.close();
+  }
 });
 
 test("guest scanner ignores noisy QR frames without resetting progress", async ({ browser }) => {

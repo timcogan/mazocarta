@@ -552,11 +552,24 @@ export function createMultiplayerController(options) {
   }
 
   function hostCanStart() {
-    return state.role === "host" && !state.sessionStarted && currentJoinedCount() >= 2;
+    if (state.role !== "host" || state.sessionStarted) {
+      return false;
+    }
+    if (state.room.hostRunMode === "resume") {
+      return currentJoinedCount() >= MIN_MULTIPLAYER_PARTY_SIZE;
+    }
+    return currentJoinedCount() >= 2;
   }
 
   function canKeepInviting() {
-    return state.role === "host" && !state.sessionStarted && currentJoinedCount() < MAX_PARTY_SIZE;
+    if (state.role !== "host" || state.sessionStarted) {
+      return false;
+    }
+    const capacity =
+      state.room.hostRunMode === "resume"
+        ? Math.max(partySizeNow(), MIN_MULTIPLAYER_PARTY_SIZE)
+        : MAX_PARTY_SIZE;
+    return currentJoinedCount() < capacity;
   }
 
   function partySizeNow() {
@@ -2108,6 +2121,23 @@ export function createMultiplayerController(options) {
         sdp: pc.localDescription?.sdp || "",
       },
     });
+    if (
+      state.role !== "host" ||
+      state.sessionStarted ||
+      !canKeepInviting() ||
+      state.peers.get(fallbackPeerId) !== peer
+    ) {
+      if (state.peers.get(fallbackPeerId) === peer) {
+        state.peers.delete(fallbackPeerId);
+      }
+      try {
+        dc.close();
+      } catch {}
+      try {
+        pc.close();
+      } catch {}
+      return;
+    }
     options.resetPairTransportAssembly?.();
     beginLocalPairTransport(encodedOffer, invitationId);
     state.room.invitationId = invitationId;
@@ -2450,14 +2480,19 @@ export function createMultiplayerController(options) {
 
   async function startHostRun() {
     if (!hostCanStart()) {
+      if (
+        state.role === "host" &&
+        !state.sessionStarted &&
+        state.room.hostRunMode === "resume"
+      ) {
+        state.room.error = `This saved run needs ${MIN_MULTIPLAYER_PARTY_SIZE} connected players.`;
+        await renderRoom();
+      }
       return;
     }
     const peers = connectedPeers();
     const joinedCount = peers.length + 1;
-    const targetPartySize =
-      state.room.hostRunMode === "resume"
-        ? clampPartySize(Math.max(partySizeNow(), joinedCount), 1)
-        : clampPartySize(joinedCount, 1);
+    const targetPartySize = clampPartySize(joinedCount, 1);
     state.partySize = targetPartySize;
     options.setConfiguredPartySize?.(targetPartySize);
     for (let slot = targetPartySize; slot < MAX_PARTY_SIZE; slot += 1) {
@@ -3130,6 +3165,9 @@ export function createMultiplayerController(options) {
     activateBlockingAction(action) {
       void handleBlockingAction(action);
       return action === "main_menu";
+    },
+    isGuest() {
+      return state.role === "guest";
     },
     async debugOpenHostRoom() {
       await openHostRoom({ transportMode: "direct", inputMode: "paste" });
