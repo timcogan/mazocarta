@@ -556,7 +556,7 @@ export function createMultiplayerController(options) {
       return false;
     }
     if (state.room.hostRunMode === "resume") {
-      return currentJoinedCount() === partySizeNow();
+      return currentJoinedCount() >= MIN_MULTIPLAYER_PARTY_SIZE;
     }
     return currentJoinedCount() >= 2;
   }
@@ -565,7 +565,10 @@ export function createMultiplayerController(options) {
     if (state.role !== "host" || state.sessionStarted) {
       return false;
     }
-    const capacity = state.room.hostRunMode === "resume" ? partySizeNow() : MAX_PARTY_SIZE;
+    const capacity =
+      state.room.hostRunMode === "resume"
+        ? Math.max(partySizeNow(), MIN_MULTIPLAYER_PARTY_SIZE)
+        : MAX_PARTY_SIZE;
     return currentJoinedCount() < capacity;
   }
 
@@ -2118,6 +2121,21 @@ export function createMultiplayerController(options) {
         sdp: pc.localDescription?.sdp || "",
       },
     });
+    if (
+      state.role !== "host" ||
+      state.sessionStarted ||
+      !canKeepInviting() ||
+      state.peers.get(fallbackPeerId) !== peer
+    ) {
+      state.peers.delete(fallbackPeerId);
+      try {
+        dc.close();
+      } catch {}
+      try {
+        pc.close();
+      } catch {}
+      return;
+    }
     options.resetPairTransportAssembly?.();
     beginLocalPairTransport(encodedOffer, invitationId);
     state.room.invitationId = invitationId;
@@ -2465,19 +2483,14 @@ export function createMultiplayerController(options) {
         !state.sessionStarted &&
         state.room.hostRunMode === "resume"
       ) {
-        const expectedPlayers = partySizeNow();
-        const label = expectedPlayers === 1 ? "player" : "players";
-        state.room.error = `This saved run needs ${expectedPlayers} connected ${label}.`;
+        state.room.error = `This saved run needs ${MIN_MULTIPLAYER_PARTY_SIZE} connected players.`;
         await renderRoom();
       }
       return;
     }
     const peers = connectedPeers();
     const joinedCount = peers.length + 1;
-    const targetPartySize =
-      state.room.hostRunMode === "resume"
-        ? partySizeNow()
-        : clampPartySize(joinedCount, 1);
+    const targetPartySize = clampPartySize(joinedCount, 1);
     state.partySize = targetPartySize;
     options.setConfiguredPartySize?.(targetPartySize);
     for (let slot = targetPartySize; slot < MAX_PARTY_SIZE; slot += 1) {
