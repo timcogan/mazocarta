@@ -54,7 +54,7 @@ async function getStoredRun(page) {
 }
 
 function cloneJson(value) {
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 function expandPartyStateToSize(partyState, partySize) {

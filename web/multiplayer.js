@@ -2127,7 +2127,9 @@ export function createMultiplayerController(options) {
       !canKeepInviting() ||
       state.peers.get(fallbackPeerId) !== peer
     ) {
-      state.peers.delete(fallbackPeerId);
+      if (state.peers.get(fallbackPeerId) === peer) {
+        state.peers.delete(fallbackPeerId);
+      }
       try {
         dc.close();
       } catch {}

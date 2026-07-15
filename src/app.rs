@@ -21604,13 +21604,14 @@ mod tests {
     }
 
     #[test]
-    fn v4_save_without_daily_challenge_metadata_restores_as_normal_run() {
+    fn v4_save_from_0_4_0_without_daily_challenge_metadata_restores_as_normal_run() {
         let mut app = App::new();
         app.set_daily_challenge_date(2099, 12, 31);
         app.set_daily_challenge_enabled(true);
         start_run_to_map(&mut app);
         let mut value: serde_json::Value =
             serde_json::from_str(&app.serialize_current_run().unwrap()).unwrap();
+        value["game_version"] = serde_json::Value::from("0.4.0");
         value.as_object_mut().unwrap().remove("challenge");
         let snapshot = serde_json::to_string(&value).unwrap();
 
