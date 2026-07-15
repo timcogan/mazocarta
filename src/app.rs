@@ -59,6 +59,7 @@ const BASE_SEED: u64 = 0xA57A_C47A_2204_0001;
 const RUN_SEED_MASK: u64 = 0xFFFF_FFFF;
 const GAME_TITLE: &str = "Mazocarta";
 const GAME_VERSION: &str = env!("CARGO_PKG_VERSION");
+const COPYRIGHT_HOLDER: &str = "Tim Cogan";
 const BUILD_APP_CHANNEL: Option<&str> = option_env!("MAZOCARTA_APP_CHANNEL");
 const APP_BUILD_TIMESTAMP_UTC: Option<&str> = option_env!("MAZOCARTA_APP_BUILD_TIMESTAMP_UTC");
 const APP_GIT_SHA_SHORT: Option<&str> = option_env!("MAZOCARTA_APP_GIT_SHA_SHORT");
@@ -284,6 +285,7 @@ enum HitTarget {
     Settings,
     Install,
     Update,
+    CreditsLink,
     SettingsModal,
     SettingsLanguageEnglish,
     SettingsLanguageSpanish,
@@ -1362,6 +1364,7 @@ pub(crate) struct App {
     resume_request_pending: bool,
     multiplayer_request_pending: bool,
     install_request_pending: bool,
+    credits_link_request_pending: bool,
     update_available: bool,
     update_request_pending: bool,
     player_name_buffer: Vec<u8>,
@@ -1456,6 +1459,7 @@ impl App {
             resume_request_pending: false,
             multiplayer_request_pending: false,
             install_request_pending: false,
+            credits_link_request_pending: false,
             update_available: false,
             update_request_pending: false,
             player_name_buffer: Vec::new(),
@@ -2064,6 +2068,14 @@ impl App {
 
     pub(crate) fn clear_install_request(&mut self) {
         self.install_request_pending = false;
+    }
+
+    pub(crate) fn credits_link_request_pending(&self) -> bool {
+        self.credits_link_request_pending
+    }
+
+    pub(crate) fn clear_credits_link_request(&mut self) {
+        self.credits_link_request_pending = false;
     }
 
     pub(crate) fn update_request_pending(&self) -> bool {
@@ -4001,6 +4013,7 @@ impl App {
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
+            | HitTarget::CreditsLink
             | HitTarget::InstallHelpModal
             | HitTarget::InstallHelpClose
             | HitTarget::DebugClearSave => {}
@@ -5696,6 +5709,7 @@ impl App {
         self.resume_request_pending = false;
         self.multiplayer_request_pending = false;
         self.install_request_pending = false;
+        self.credits_link_request_pending = false;
         self.update_request_pending = false;
     }
 
@@ -5783,6 +5797,20 @@ impl App {
         self.ui.install_help_open = false;
         self.clear_boot_request_flags();
         self.install_request_pending = true;
+        self.refresh_hover();
+        self.dirty = true;
+    }
+
+    fn request_credits_link(&mut self) {
+        if !matches!(self.screen, AppScreen::Boot) {
+            return;
+        }
+
+        self.ui.restart_confirm_open = false;
+        self.ui.settings_open = false;
+        self.ui.install_help_open = false;
+        self.clear_boot_request_flags();
+        self.credits_link_request_pending = true;
         self.refresh_hover();
         self.dirty = true;
     }
@@ -5944,6 +5972,7 @@ impl App {
             HitTarget::Settings => self.open_settings(),
             HitTarget::Install => self.activate_boot_install_action(),
             HitTarget::Update => self.request_update(),
+            HitTarget::CreditsLink => self.request_credits_link(),
             HitTarget::SettingsLanguageEnglish => self.set_language_from_boot(Language::English),
             HitTarget::SettingsLanguageSpanish => self.set_language_from_boot(Language::Spanish),
             HitTarget::SettingsBackgroundBinary => {
@@ -7709,6 +7738,7 @@ impl App {
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
+            | HitTarget::CreditsLink
             | HitTarget::InstallHelpModal
             | HitTarget::InstallHelpClose
             | HitTarget::DebugClearSave => {}
@@ -9359,6 +9389,7 @@ impl App {
             | HitTarget::SettingsClose
             | HitTarget::Install
             | HitTarget::Update
+            | HitTarget::CreditsLink
             | HitTarget::InstallHelpModal
             | HitTarget::InstallHelpClose
             | HitTarget::DebugClearSave => {}
@@ -12230,6 +12261,12 @@ impl App {
                 {
                     return Some(HitTarget::DebugClearSave);
                 }
+                if boot_version_credit_layout(self.logical_width(), self.logical_height())
+                    .holder_hit_rect
+                    .contains(x, y)
+                {
+                    return Some(HitTarget::CreditsLink);
+                }
                 None
             }
             AppScreen::OpeningIntro => {
@@ -12755,7 +12792,8 @@ impl App {
     fn render_boot(&self, scene: &mut SceneBuilder, has_saved_run: bool) {
         let buttons = self.boot_buttons_layout(has_saved_run);
         let hero = boot_hero_layout(self.logical_width(), self.logical_height());
-        let version_line = visible_game_version_label();
+        let version_credit =
+            boot_version_credit_layout(self.logical_width(), self.logical_height());
         scene.image(hero.logo_rect, LOGO_ASSET_PATH, 0.96);
         scene.text(
             self.logical_center_x(),
@@ -12838,14 +12876,39 @@ impl App {
         }
 
         scene.text(
-            self.logical_center_x(),
-            boot_version_baseline_y(self.logical_height()),
-            boot_version_font_size(self.logical_width()),
-            "center",
+            version_credit.prefix_x,
+            version_credit.baseline_y,
+            version_credit.font_size,
+            "left",
             TERM_GREEN_DIM,
             "body",
-            &version_line,
+            &version_credit.prefix_text,
         );
+        let credits_hovered = self.ui.hover == Some(HitTarget::CreditsLink);
+        let credits_color = if credits_hovered {
+            TERM_GREEN_TEXT
+        } else {
+            TERM_GREEN_DIM
+        };
+        scene.text(
+            version_credit.holder_x,
+            version_credit.baseline_y,
+            version_credit.font_size,
+            "left",
+            credits_color,
+            "body",
+            COPYRIGHT_HOLDER,
+        );
+        if credits_hovered {
+            scene.line(
+                version_credit.holder_x,
+                version_credit.baseline_y + version_credit.font_size * 0.18,
+                version_credit.holder_x + version_credit.holder_width,
+                version_credit.baseline_y + version_credit.font_size * 0.18,
+                TERM_GREEN_TEXT,
+                1.0,
+            );
+        }
 
         self.render_settings_modal(scene);
         self.render_install_help_modal(scene);
@@ -17638,8 +17701,50 @@ fn visible_game_version_label() -> String {
     )
 }
 
+struct BootVersionCreditLayout {
+    prefix_text: String,
+    prefix_x: f32,
+    holder_x: f32,
+    holder_width: f32,
+    baseline_y: f32,
+    font_size: f32,
+    holder_hit_rect: Rect,
+}
+
+fn boot_version_credit_label() -> String {
+    format!("{} © {}", visible_game_version_label(), COPYRIGHT_HOLDER)
+}
+
+fn boot_version_credit_layout(logical_width: f32, logical_height: f32) -> BootVersionCreditLayout {
+    let version_label = visible_game_version_label();
+    let prefix_text = format!("{version_label} © ");
+    let full_text = format!("{prefix_text}{COPYRIGHT_HOLDER}");
+    let font_size = boot_version_font_size(logical_width);
+    let full_width = text_width(&full_text, font_size);
+    let prefix_width = text_width(&prefix_text, font_size);
+    let holder_width = text_width(COPYRIGHT_HOLDER, font_size);
+    let prefix_x = logical_width * 0.5 - full_width * 0.5;
+    let holder_x = prefix_x + prefix_width;
+    let baseline_y = boot_version_baseline_y(logical_height);
+
+    BootVersionCreditLayout {
+        prefix_text,
+        prefix_x,
+        holder_x,
+        holder_width,
+        baseline_y,
+        font_size,
+        holder_hit_rect: Rect {
+            x: holder_x - 4.0,
+            y: baseline_y - font_size * 0.9,
+            w: holder_width + 8.0,
+            h: font_size * 1.25,
+        },
+    }
+}
+
 fn boot_version_font_size(logical_width: f32) -> f32 {
-    let version_line = visible_game_version_label();
+    let version_line = boot_version_credit_label();
     fit_text_size(&version_line, 14.0, (logical_width - 48.0).max(120.0)).max(11.0)
 }
 
@@ -26654,18 +26759,41 @@ mod tests {
         app.rebuild_frame();
 
         let frame = String::from_utf8(app.frame.clone()).unwrap();
-        let version_line = visible_game_version_label();
-        let version_y = boot_version_baseline_y(app.logical_height());
-        let version_size = boot_version_font_size(app.logical_width());
+        let version_credit = boot_version_credit_layout(app.logical_width(), app.logical_height());
 
         assert!(frame.contains(&format!(
-            "TEXT|{:.2}|{:.2}|{:.2}|center|{}|body|{}",
-            app.logical_center_x(),
-            version_y,
-            version_size,
+            "TEXT|{:.2}|{:.2}|{:.2}|left|{}|body|{}",
+            version_credit.prefix_x,
+            version_credit.baseline_y,
+            version_credit.font_size,
             TERM_GREEN_DIM,
-            version_line
+            version_credit.prefix_text
         )));
+        assert!(frame.contains(&format!(
+            "TEXT|{:.2}|{:.2}|{:.2}|left|{}|body|{}",
+            version_credit.holder_x,
+            version_credit.baseline_y,
+            version_credit.font_size,
+            TERM_GREEN_DIM,
+            COPYRIGHT_HOLDER
+        )));
+    }
+
+    #[test]
+    fn boot_credit_link_queues_request() {
+        let mut app = App::new();
+        let link_rect =
+            boot_version_credit_layout(app.logical_width(), app.logical_height()).holder_hit_rect;
+
+        app.handle_boot_pointer(
+            link_rect.x + link_rect.w * 0.5,
+            link_rect.y + link_rect.h * 0.5,
+        );
+
+        assert!(app.credits_link_request_pending());
+        assert!(!app.install_request_pending());
+        assert!(!app.multiplayer_request_pending());
+        assert!(!app.resume_request_pending());
     }
 
     #[test]

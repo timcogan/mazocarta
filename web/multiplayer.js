@@ -552,11 +552,21 @@ export function createMultiplayerController(options) {
   }
 
   function hostCanStart() {
-    return state.role === "host" && !state.sessionStarted && currentJoinedCount() >= 2;
+    if (state.role !== "host" || state.sessionStarted) {
+      return false;
+    }
+    if (state.room.hostRunMode === "resume") {
+      return currentJoinedCount() === partySizeNow();
+    }
+    return currentJoinedCount() >= 2;
   }
 
   function canKeepInviting() {
-    return state.role === "host" && !state.sessionStarted && currentJoinedCount() < MAX_PARTY_SIZE;
+    if (state.role !== "host" || state.sessionStarted) {
+      return false;
+    }
+    const capacity = state.room.hostRunMode === "resume" ? partySizeNow() : MAX_PARTY_SIZE;
+    return currentJoinedCount() < capacity;
   }
 
   function partySizeNow() {
@@ -2450,13 +2460,23 @@ export function createMultiplayerController(options) {
 
   async function startHostRun() {
     if (!hostCanStart()) {
+      if (
+        state.role === "host" &&
+        !state.sessionStarted &&
+        state.room.hostRunMode === "resume"
+      ) {
+        const expectedPlayers = partySizeNow();
+        const label = expectedPlayers === 1 ? "player" : "players";
+        state.room.error = `This saved run needs ${expectedPlayers} connected ${label}.`;
+        await renderRoom();
+      }
       return;
     }
     const peers = connectedPeers();
     const joinedCount = peers.length + 1;
     const targetPartySize =
       state.room.hostRunMode === "resume"
-        ? clampPartySize(Math.max(partySizeNow(), joinedCount), 1)
+        ? partySizeNow()
         : clampPartySize(joinedCount, 1);
     state.partySize = targetPartySize;
     options.setConfiguredPartySize?.(targetPartySize);
@@ -3130,6 +3150,9 @@ export function createMultiplayerController(options) {
     activateBlockingAction(action) {
       void handleBlockingAction(action);
       return action === "main_menu";
+    },
+    isGuest() {
+      return state.role === "guest";
     },
     async debugOpenHostRoom() {
       await openHostRoom({ transportMode: "direct", inputMode: "paste" });
