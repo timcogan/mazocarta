@@ -1566,7 +1566,7 @@ impl CombatState {
     fn end_turn(&mut self, actor: Actor, events: &mut Vec<CombatEvent>) {
         match actor {
             Actor::Player => {
-                let discarded: Vec<_> = self.deck.hand.drain(..).collect();
+                let discarded = std::mem::take(&mut self.deck.hand);
                 let discard_count = discarded.len();
                 self.deck.discard_pile.extend(discarded);
                 events.push(CombatEvent::TurnEnded { actor });
